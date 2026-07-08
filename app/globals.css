@@ -1,26 +1,103 @@
 @import "tailwindcss";
 
+@theme {
+  /* Paleta Helo — inspirada na home da ElevenLabs: claro, quente, calmo */
+  --color-cream: #f2f1ed;
+  --color-card: #fdfdfb;
+  --color-ink: #141414;
+  --color-ink-soft: #8a8983;
+  --color-ink-mute: #b5b4ae;
+  --color-line: #e5e3dd;
+  --color-sim: #2f9e6e;
+  --color-sim-soft: #e3f3ec;
+  --color-nao: #c25b4e;
+  --color-nao-soft: #f8e9e6;
+  --color-talvez: #b9822f;
+  --color-talvez-soft: #f7efdd;
+
+  --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
+
+  --shadow-soft: 0 1px 2px rgba(20, 20, 20, 0.04), 0 8px 24px rgba(20, 20, 20, 0.06);
+  --shadow-lift: 0 2px 4px rgba(20, 20, 20, 0.06), 0 16px 40px rgba(20, 20, 20, 0.1);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Foco visível e generoso — acessibilidade primeiro */
+:focus-visible {
+  outline: 3px solid rgba(20, 20, 20, 0.55);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+::selection {
+  background: rgba(242, 163, 94, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Orbes — formas orgânicas circulares com granulado suave */
+.orb {
+  border-radius: 9999px;
+  position: relative;
+  overflow: hidden;
+}
+.orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  opacity: 0.5;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+}
+
+.orb-breathe {
+  animation: orb-breathe 6s ease-in-out infinite;
+}
+@keyframes orb-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
+/* Impressão — dashboard vira relatório PDF limpo */
+@media print {
+  body {
+    background: #fff;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-block {
+    break-inside: avoid;
+  }
+  main {
+    padding: 0 !important;
+  }
 }
