@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Gesture } from "@/lib/types";
 import { GESTURES } from "@/lib/types";
+import { APP_VERSION, APP_COMMIT } from "@/lib/version";
 
 // ——— Orbe: forma orgânica circular em gradiente, marca visual do Helo ———
 
@@ -129,6 +130,12 @@ export function TopBar({ right }: { right?: React.ReactNode }) {
       <Link href="/" className="flex items-center gap-2.5" aria-label="Helo — página inicial">
         <Orb palette="coral" className="h-6 w-6" />
         <span className="text-xl font-semibold tracking-tight">Helo</span>
+        <span
+          className="self-center rounded-full border border-line px-1.5 py-0.5 text-[10px] font-medium leading-none tracking-wide text-ink-mute tabular-nums"
+          title={APP_COMMIT ? `build ${APP_COMMIT}` : undefined}
+        >
+          v{APP_VERSION}
+        </span>
       </Link>
       <nav className="flex items-center gap-2">{right}</nav>
     </header>
