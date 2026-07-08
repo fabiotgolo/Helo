@@ -23,7 +23,7 @@ type Stats = {
   porHora: { hora: string; n: number }[];
   relatosDor: { ts: string; text: string }[];
   mensagens: {
-    id: number;
+    id: string;
     ts: string;
     text: string;
     category: string | null;

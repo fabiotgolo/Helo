@@ -1,0 +1,26 @@
+# Configuração do Firebase App Hosting para a Helo.
+# As credenciais do Firestore vêm automaticamente da conta de serviço do
+# runtime (ADC) — não é preciso configurar chave de banco aqui.
+
+runConfig:
+  # Escala a zero quando ocioso, mantendo o custo em R$ 0 no uso da Helo.
+  minInstances: 0
+  maxInstances: 1
+  cpu: 1
+  memoryMiB: 512
+
+# Segredos guardados no Cloud Secret Manager (criados via
+# `firebase apphosting:secrets:set`). Nunca colocar valores reais aqui.
+env:
+  - variable: ELEVENLABS_API_KEY
+    secret: ELEVENLABS_API_KEY
+    availability:
+      - RUNTIME
+  - variable: ELEVENLABS_VOICE_ID
+    secret: ELEVENLABS_VOICE_ID
+    availability:
+      - RUNTIME
+  - variable: ANTHROPIC_API_KEY
+    secret: ANTHROPIC_API_KEY
+    availability:
+      - RUNTIME

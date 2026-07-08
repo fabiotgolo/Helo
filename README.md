@@ -16,14 +16,19 @@ Quando a árvore de opções curadas se esgota, o Helo pode sugerir até 3 novas
 opções por IA — sempre sinalizadas como sugestão, nunca apresentadas como se
 fossem a vontade do paciente.
 
-## Rodar
+## Rodar (desenvolvimento)
+
+A persistência usa **Firestore**. Em dev, rode contra o **emulador** — nenhum
+dado de produção é tocado. Em dois terminais:
 
 ```bash
 npm install
-npm run dev
+npm run emu    # emulador do Firestore em 127.0.0.1:8080 (UI em :4000)
+npm run dev    # Next.js em http://localhost:3000
 ```
 
-Abra http://localhost:3000.
+O `.env.local` (não versionado) já aponta o app para o emulador
+(`FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`, `GCLOUD_PROJECT=helo-app-7fbf8`).
 
 ## Configuração (.env)
 
@@ -33,6 +38,27 @@ Copie `.env.example` para `.env` e preencha:
   app usa a voz local do navegador em pt-BR.
 - `ANTHROPIC_API_KEY` — habilita as sugestões dinâmicas de opções por IA. Sem
   chave, o app funciona apenas com a árvore de conversa curada.
+
+Em produção essas chaves não vão em arquivo: são **secrets** do App Hosting
+(ver seção Deploy).
+
+## Deploy (Firebase App Hosting)
+
+Hospedado no **Firebase App Hosting** (projeto `helo-app-7fbf8`, plano Blaze),
+com Firestore em modo nativo (região `southamerica-east1`). O backend observa a
+branch `dev`: **cada push dispara um rollout** e gera/atualiza a URL `*.web.app`.
+
+Segredos (uma vez):
+
+```bash
+firebase apphosting:secrets:set ELEVENLABS_API_KEY --project helo-app-7fbf8
+firebase apphosting:secrets:set ELEVENLABS_VOICE_ID --project helo-app-7fbf8
+firebase apphosting:secrets:set ANTHROPIC_API_KEY --project helo-app-7fbf8
+```
+
+Se um rollout falhar por acesso a secret:
+`firebase apphosting:secrets:grantaccess <NOME> --project helo-app-7fbf8`.
+As credenciais do Firestore vêm automaticamente da conta de serviço do runtime.
 
 ## Estrutura
 
@@ -48,8 +74,11 @@ Copie `.env.example` para `.env` e preencha:
 - `app/dashboard` — relatórios observacionais por período + Gerar PDF (imprimir).
 - `lib/flow.ts` — árvore de conversa curada (máx. 3 opções por lote, temas
   sensíveis marcados para confirmação reforçada).
-- `lib/db.ts` — SQLite em `data/helo.db`: sessões, eventos (autoria protegida),
-  mensagens, rede de pessoas e configurações.
+- `lib/firestore.ts` — init do Firebase Admin SDK (emulador em dev, conta de
+  serviço do runtime em produção).
+- `lib/store.ts` — acesso a dados sobre o Firestore: sessões, eventos (autoria
+  protegida), mensagens, rede de pessoas e configurações. As agregações do
+  dashboard são feitas em JS no fuso de São Paulo.
 - `app/api/tts` — síntese ElevenLabs com fallback para voz local.
 - `app/api/suggest` — sugestões dinâmicas de opções via Claude, limitadas a 3.
 
