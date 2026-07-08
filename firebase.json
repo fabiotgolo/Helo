@@ -1,4 +1,18 @@
 {
+  "hosting": {
+    "site": "heloapp",
+    "public": "firebase-hosting-empty",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "heloapp",
+          "region": "us-central1"
+        }
+      }
+    ]
+  },
   "emulators": {
     "firestore": {
       "port": 8080
