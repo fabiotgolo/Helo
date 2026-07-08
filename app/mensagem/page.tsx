@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MENSAGEM_POOL, type Frase } from "@/lib/frases";
-import { GESTURES, type Gesture } from "@/lib/types";
+import { type Gesture } from "@/lib/types";
+import { useGestures } from "@/lib/gestures";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useSpeech } from "@/lib/useSpeech";
 import { Orb, GestureTriplet, TopBar } from "@/components/ui";
@@ -19,6 +20,7 @@ type Phase = "intro" | "escolha" | "confirma_frase" | "continuar" | "final" | "d
 
 export default function MensagemPage() {
   const { speak, engine } = useSpeech();
+  const gestures = useGestures();
 
   const [phase, setPhase] = useState<Phase>("intro");
   const [sessionId, setSessionId] = useState<number | null>(null);
@@ -336,7 +338,7 @@ export default function MensagemPage() {
                     </div>
                     {marked ? (
                       <span className="text-lg">
-                        {GESTURES[marked].emoji} {GESTURES[marked].label}
+                        {gestures[marked].emoji} {gestures[marked].label}
                       </span>
                     ) : (
                       <GestureTriplet

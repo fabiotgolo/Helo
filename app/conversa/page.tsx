@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { flow, compose, START_NODE, type FlowNode, type Option } from "@/lib/flow";
 import { GESTURES, type Gesture } from "@/lib/types";
+import { useGestures } from "@/lib/gestures";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useSpeech } from "@/lib/useSpeech";
 import { Orb, GestureTriplet, TopBar } from "@/components/ui";
@@ -28,6 +29,7 @@ type Person = { id: number; name: string; relation: string | null };
 export default function ConversaPage() {
   const { speak, speaking, engine } = useSpeech();
 
+  const gestures = useGestures();
   const [phase, setPhase] = useState<Phase>("intro");
   const [paused, setPaused] = useState(false);
   const [operator, setOperator] = useState("");
@@ -526,8 +528,8 @@ export default function ConversaPage() {
                       )}
                     </div>
                     {marked ? (
-                      <span className="text-lg" aria-label={`Resposta: ${GESTURES[marked].label}`}>
-                        {GESTURES[marked].emoji} {GESTURES[marked].label}
+                      <span className="text-lg" aria-label={`Resposta: ${gestures[marked].label}`}>
+                        {gestures[marked].emoji} {gestures[marked].label}
                       </span>
                     ) : (
                       <GestureTriplet

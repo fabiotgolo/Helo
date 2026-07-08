@@ -1,6 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import type { Gesture } from "@/lib/types";
-import { GESTURES } from "@/lib/types";
+import { useGestures } from "@/lib/gestures";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
 
 // ——— Orbe: forma orgânica circular em gradiente, marca visual do Helo ———
@@ -86,6 +88,7 @@ export function GestureTriplet({
   idPrefix?: string;
 }) {
   const grande = size === "grande";
+  const gestures = useGestures();
   return (
     <div
       role="group"
@@ -93,7 +96,7 @@ export function GestureTriplet({
       className={`flex items-center justify-center ${grande ? "gap-6" : "gap-3"}`}
     >
       {GESTURE_ORDER.map((g) => {
-        const info = GESTURES[g];
+        const info = gestures[g];
         const s = GESTURE_STYLES[g];
         return (
           <button
@@ -166,12 +169,13 @@ export function PillLink({
 }
 
 export function GestureLegend() {
+  const gestures = useGestures();
   return (
     <div className="flex items-center justify-center gap-5 text-sm text-ink-soft">
       {GESTURE_ORDER.map((g) => (
         <span key={g} className="flex items-center gap-1.5">
-          <span aria-hidden="true">{GESTURES[g].emoji}</span>
-          {GESTURES[g].label}
+          <span aria-hidden="true">{gestures[g].emoji}</span>
+          {gestures[g].label}
         </span>
       ))}
     </div>

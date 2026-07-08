@@ -2,15 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
+import { GESTURES, type Gesture } from "@/lib/types";
+import { GESTURE_EMOJI_KEYS, GESTURES_UPDATED_EVENT } from "@/lib/gestures";
 
 type Voice = { id: string; name: string; labels: Record<string, string> };
 type Person = { id: number; name: string; relation: string | null };
+
+const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
 export default function AjustesPage() {
   const [voices, setVoices] = useState<Voice[] | null>(null);
   const [voicesError, setVoicesError] = useState(false);
   const [voiceId, setVoiceId] = useState("");
   const [patientName, setPatientName] = useState("");
+  const [gestureEmojis, setGestureEmojis] = useState<Record<Gesture, string>>({
+    sim: "",
+    talvez: "",
+    nao: "",
+  });
   const [people, setPeople] = useState<Person[]>([]);
   const [newName, setNewName] = useState("");
   const [newRelation, setNewRelation] = useState("");
@@ -24,6 +33,11 @@ export default function AjustesPage() {
       .then((s: Record<string, string>) => {
         setVoiceId(s.voice_id ?? "");
         setPatientName(s.patient_name ?? "");
+        setGestureEmojis({
+          sim: s[GESTURE_EMOJI_KEYS.sim] ?? "",
+          talvez: s[GESTURE_EMOJI_KEYS.talvez] ?? "",
+          nao: s[GESTURE_EMOJI_KEYS.nao] ?? "",
+        });
       })
       .catch(() => {});
     void fetch("/api/voices")
@@ -47,11 +61,19 @@ export default function AjustesPage() {
     await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ voice_id: voiceId, patient_name: patientName }),
+      body: JSON.stringify({
+        voice_id: voiceId,
+        patient_name: patientName,
+        [GESTURE_EMOJI_KEYS.sim]: gestureEmojis.sim.trim(),
+        [GESTURE_EMOJI_KEYS.talvez]: gestureEmojis.talvez.trim(),
+        [GESTURE_EMOJI_KEYS.nao]: gestureEmojis.nao.trim(),
+      }),
     });
+    // Avisa o provider de gestos para recarregar os emojis na hora.
+    window.dispatchEvent(new Event(GESTURES_UPDATED_EVENT));
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
-  }, [voiceId, patientName]);
+  }, [voiceId, patientName, gestureEmojis]);
 
   const preview = useCallback(
     async (id: string) => {
@@ -107,7 +129,7 @@ export default function AjustesPage() {
         <div>
           <h1 className="text-4xl font-medium tracking-tight">Ajustes</h1>
           <p className="mt-2 text-lg text-ink-soft">
-            Voz, identidade do paciente e rede de pessoas.
+            Identidade do paciente, gestos, voz e rede de pessoas.
           </p>
         </div>
 
@@ -124,6 +146,49 @@ export default function AjustesPage() {
             placeholder="Nome ou tratamento (ex.: Dr. Fábio)"
             className="mt-4 w-full rounded-2xl border border-line bg-cream px-5 py-3.5 text-lg outline-none focus:border-ink-mute"
           />
+        </section>
+
+        {/* ——— Gestos ——— */}
+        <section className="rounded-3xl border border-line bg-card p-6">
+          <h2 className="font-semibold tracking-tight">Gestos</h2>
+          <p className="text-sm text-ink-soft">
+            O emoji de cada gesto. Adapte ao que o paciente consegue fazer — o
+            significado (Sim, Talvez, Não) não muda. Em branco = usa o padrão.
+          </p>
+          <div className="mt-4 flex flex-col gap-3">
+            {GESTURE_ORDER.map((g) => (
+              <div key={g} className="flex items-center gap-3">
+                <span className="w-16 shrink-0 text-sm font-medium">
+                  {GESTURES[g].label}
+                </span>
+                <input
+                  type="text"
+                  value={gestureEmojis[g]}
+                  onChange={(e) =>
+                    setGestureEmojis((prev) => ({ ...prev, [g]: e.target.value }))
+                  }
+                  placeholder={GESTURES[g].emoji}
+                  maxLength={8}
+                  aria-label={`Emoji para ${GESTURES[g].label}`}
+                  className="w-20 rounded-2xl border border-line bg-cream px-3 py-3 text-center text-2xl outline-none focus:border-ink-mute"
+                />
+                <span className="text-3xl" aria-hidden="true">
+                  {gestureEmojis[g].trim() || GESTURES[g].emoji}
+                </span>
+                {gestureEmojis[g].trim() && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setGestureEmojis((prev) => ({ ...prev, [g]: "" }))
+                    }
+                    className="rounded-full px-3 py-1 text-xs text-ink-soft hover:text-ink"
+                  >
+                    usar padrão ({GESTURES[g].emoji})
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
         </section>
 
         {/* ——— Voz ——— */}

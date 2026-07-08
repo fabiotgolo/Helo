@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
-import { GESTURES, type Gesture } from "@/lib/types";
+import { type Gesture } from "@/lib/types";
+import { useGestures } from "@/lib/gestures";
 
 type Stats = {
   period: string;
@@ -297,6 +298,7 @@ function DailyBars({ data }: { data: { dia: string; gestos: number }[] }) {
 
 /** Barras horizontais por gesto — cor semântica + emoji + rótulo + valor (nunca só cor). */
 function GestureBars({ data, total }: { data: { gesture: Gesture; n: number }[]; total: number }) {
+  const gestures = useGestures();
   if (total === 0) return <Empty />;
   const order: Gesture[] = ["sim", "talvez", "nao"];
   const max = Math.max(...data.map((d) => d.n), 1);
@@ -308,13 +310,13 @@ function GestureBars({ data, total }: { data: { gesture: Gesture; n: number }[];
         return (
           <li key={g} className="flex items-center gap-3">
             <span className="w-24 shrink-0 text-sm">
-              {GESTURES[g].emoji} {GESTURES[g].label}
+              {gestures[g].emoji} {gestures[g].label}
             </span>
             <div className="h-4 flex-1 overflow-hidden rounded bg-cream">
               <div
                 className="h-full rounded"
                 style={{ width: `${(n / max) * 100}%`, background: GESTURE_COLORS[g] }}
-                title={`${GESTURES[g].label}: ${n} (${pct}%)`}
+                title={`${gestures[g].label}: ${n} (${pct}%)`}
               />
             </div>
             <span className="w-20 shrink-0 text-right text-sm tabular-nums text-ink-soft">
