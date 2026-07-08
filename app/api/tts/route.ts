@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { getSetting } from "@/lib/store";
 
 // Síntese de voz via ElevenLabs. Sem ELEVENLABS_API_KEY configurada,
 // responde 503 e o cliente usa a voz local do navegador (pt-BR).
@@ -18,12 +18,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "sem chave ElevenLabs" }, { status: 503 });
   }
 
-  const saved = db
-    .prepare("SELECT value FROM settings WHERE key = 'voice_id'")
-    .get() as { value: string } | undefined;
+  const saved = await getSetting("voice_id");
 
   const voice =
-    voiceId || saved?.value || process.env.ELEVENLABS_VOICE_ID || "onwK4e9ZLuTAKqWW03F9";
+    voiceId || saved || process.env.ELEVENLABS_VOICE_ID || "onwK4e9ZLuTAKqWW03F9";
 
   const res = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_128`,

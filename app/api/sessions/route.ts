@@ -1,21 +1,17 @@
-import { db } from "@/lib/db";
+import { createSession, endSession } from "@/lib/store";
 
 export async function POST(request: Request) {
   const { operator, mode } = (await request.json()) as {
     operator?: string;
     mode?: string;
   };
-  const result = db
-    .prepare("INSERT INTO sessions (operator, mode) VALUES (?, ?)")
-    .run(operator ?? null, mode ?? "conversa");
-  return Response.json({ id: Number(result.lastInsertRowid) });
+  const id = await createSession(mode ?? "conversa", operator);
+  return Response.json({ id });
 }
 
 export async function PATCH(request: Request) {
   const { id } = (await request.json()) as { id?: number };
   if (!id) return Response.json({ error: "id obrigatório" }, { status: 400 });
-  db.prepare(
-    "UPDATE sessions SET ended_at = datetime('now','localtime') WHERE id = ?"
-  ).run(id);
+  await endSession(id);
   return Response.json({ ok: true });
 }
