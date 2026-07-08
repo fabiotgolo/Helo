@@ -11,11 +11,7 @@ type Person = { id: number; name: string; relation: string | null };
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
 // Painel de emojis SÓ com as mãos, para representar os gestos.
-const HAND_EMOJIS = [
-  "👍", "👎", "✊", "✋", "🤚", "🖐️", "👊", "✌️",
-  "👌", "🤙", "🤟", "☝️", "👆", "👇", "👈", "👉",
-  "👋", "🖖",
-];
+const HAND_EMOJIS = ["👍", "👎", "✊", "✋", "🤚", "🖐️", "👊", "✌️", "👌"];
 
 export default function AjustesPage() {
   const [voices, setVoices] = useState<Voice[] | null>(null);
