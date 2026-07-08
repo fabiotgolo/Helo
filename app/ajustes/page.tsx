@@ -10,6 +10,13 @@ type Person = { id: number; name: string; relation: string | null };
 
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
+// Painel de emojis SÓ com as mãos, para representar os gestos.
+const HAND_EMOJIS = [
+  "👍", "👎", "✊", "✋", "🤚", "🖐️", "👊", "✌️",
+  "👌", "🤙", "🤟", "☝️", "👆", "👇", "👈", "👉",
+  "👋", "🖖",
+];
+
 export default function AjustesPage() {
   const [voices, setVoices] = useState<Voice[] | null>(null);
   const [voicesError, setVoicesError] = useState(false);
@@ -152,42 +159,50 @@ export default function AjustesPage() {
         <section className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Gestos</h2>
           <p className="text-sm text-ink-soft">
-            O emoji de cada gesto. Adapte ao que o paciente consegue fazer — o
-            significado (Sim, Talvez, Não) não muda. Em branco = usa o padrão.
+            Escolha a mão que representa cada gesto — adapte ao que o paciente
+            consegue fazer. O significado (Sim, Talvez, Não) não muda.
           </p>
-          <div className="mt-4 flex flex-col gap-3">
-            {GESTURE_ORDER.map((g) => (
-              <div key={g} className="flex items-center gap-3">
-                <span className="w-16 shrink-0 text-sm font-medium">
-                  {GESTURES[g].label}
-                </span>
-                <input
-                  type="text"
-                  value={gestureEmojis[g]}
-                  onChange={(e) =>
-                    setGestureEmojis((prev) => ({ ...prev, [g]: e.target.value }))
-                  }
-                  placeholder={GESTURES[g].emoji}
-                  maxLength={8}
-                  aria-label={`Emoji para ${GESTURES[g].label}`}
-                  className="w-20 rounded-2xl border border-line bg-cream px-3 py-3 text-center text-2xl outline-none focus:border-ink-mute"
-                />
-                <span className="text-3xl" aria-hidden="true">
-                  {gestureEmojis[g].trim() || GESTURES[g].emoji}
-                </span>
-                {gestureEmojis[g].trim() && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setGestureEmojis((prev) => ({ ...prev, [g]: "" }))
-                    }
-                    className="rounded-full px-3 py-1 text-xs text-ink-soft hover:text-ink"
+          <div className="mt-4 flex flex-col gap-5">
+            {GESTURE_ORDER.map((g) => {
+              const selected = gestureEmojis[g].trim() || GESTURES[g].emoji;
+              return (
+                <div
+                  key={g}
+                  className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4"
+                >
+                  <div className="flex w-24 shrink-0 items-center gap-2 sm:pt-1">
+                    <span className="text-3xl" aria-hidden="true">
+                      {selected}
+                    </span>
+                    <span className="text-sm font-medium">{GESTURES[g].label}</span>
+                  </div>
+                  <div
+                    role="group"
+                    aria-label={`Emoji para ${GESTURES[g].label}`}
+                    className="flex flex-wrap gap-1.5"
                   >
-                    usar padrão ({GESTURES[g].emoji})
-                  </button>
-                )}
-              </div>
-            ))}
+                    {HAND_EMOJIS.map((e) => (
+                      <button
+                        key={e}
+                        type="button"
+                        onClick={() =>
+                          setGestureEmojis((prev) => ({ ...prev, [g]: e }))
+                        }
+                        aria-pressed={selected === e}
+                        aria-label={`Usar ${e} para ${GESTURES[g].label}`}
+                        className={`flex h-10 w-10 items-center justify-center rounded-xl border text-xl transition-colors ${
+                          selected === e
+                            ? "border-ink bg-cream"
+                            : "border-line hover:border-ink-mute"
+                        }`}
+                      >
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 
