@@ -46,5 +46,8 @@ ui-debug*.log
 *.tsbuildinfo
 next-env.d.ts
 
+# versão gerada no build (scripts/gen-version.mjs)
+/lib/version.ts
+
 # dados do paciente — nunca versionar
 /data
