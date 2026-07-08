@@ -6,17 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "emu": "firebase emulators:start --only firestore --project helo-app-7fbf8"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1",
+    "@anthropic-ai/sdk": "^0.110.0",
+    "firebase-admin": "^14.1.0",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
