@@ -364,7 +364,9 @@ export default function MensagemPage() {
               “{pending.phrase}”
             </blockquote>
             <GestureTriplet onGesture={onConfirmFrase} />
-            <p className="text-sm text-ink-mute">👍 acrescentar · ✋ outra frase · ✊ não</p>
+            <p className="text-sm text-ink-mute">
+              {gestures.sim.emoji} acrescentar · {gestures.talvez.emoji} outra frase · {gestures.nao.emoji} não
+            </p>
           </section>
         )}
 
@@ -374,7 +376,9 @@ export default function MensagemPage() {
               Quer acrescentar mais uma frase?
             </h1>
             <GestureTriplet onGesture={onContinuar} />
-            <p className="text-sm text-ink-mute">👍 sim · ✋ reler a mensagem · ✊ concluir</p>
+            <p className="text-sm text-ink-mute">
+              {gestures.sim.emoji} sim · {gestures.talvez.emoji} reler a mensagem · {gestures.nao.emoji} concluir
+            </p>
           </section>
         )}
 
@@ -388,7 +392,7 @@ export default function MensagemPage() {
             </blockquote>
             <GestureTriplet onGesture={onFinal} />
             <p className="text-sm text-ink-mute">
-              👍 comunicar e registrar · ✋ remover última frase · ✊ descartar tudo
+              {gestures.sim.emoji} comunicar e registrar · {gestures.talvez.emoji} remover última frase · {gestures.nao.emoji} descartar tudo
             </p>
           </section>
         )}
