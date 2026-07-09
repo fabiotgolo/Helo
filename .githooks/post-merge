@@ -1,8 +1,9 @@
 #!/bin/sh
-# Auto-incrementa o patch da versão (package.json) a cada merge na main —
-# ou seja, a cada deploy. Instalado com: git config core.hooksPath .githooks
-# Roda local (histórico completo), então é confiável, diferente da contagem
-# de git no build do App Hosting (clone raso).
+# Auto-incrementa a versão (package.json) a cada merge na main = deploy.
+# Cada segmento vai de 0 a 9 e "vira" no 9: 0.9.9 → 1.0.0, 1.0.9 → 1.1.0,
+# 1.9.9 → 2.0.0. Roda local (histórico completo), confiável — diferente da
+# contagem de git no build do App Hosting (clone raso).
+# Instalar em nova máquina: git config core.hooksPath .githooks
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 [ "$branch" = "main" ] || exit 0
 
@@ -12,7 +13,11 @@ const p = "package.json";
 const s = fs.readFileSync(p, "utf8");
 const m = s.match(/"version":\s*"(\d+)\.(\d+)\.(\d+)"/);
 if (!m) process.exit(0);
-const next = `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
+let [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
+pat += 1;
+if (pat > 9) { pat = 0; min += 1; }
+if (min > 9) { min = 0; maj += 1; }
+const next = `${maj}.${min}.${pat}`;
 fs.writeFileSync(p, s.replace(/("version":\s*")\d+\.\d+\.\d+(")/, `$1${next}$2`));
 console.log("[version] auto-bump →", next);
 ' || exit 0
