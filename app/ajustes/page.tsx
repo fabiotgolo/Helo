@@ -10,8 +10,14 @@ type Person = { id: number; name: string; relation: string | null };
 
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
-// Painel de emojis SÓ com as mãos, para representar os gestos.
-const HAND_EMOJIS = ["👍", "👎", "✊", "✋", "🤚", "🖐️", "👊", "✌️", "👌"];
+// Paleta de mãos por gesto — cada gesto oferece só as mãos coerentes com ele
+// (ex.: o "Sim" não oferece 👎). Mãos neutras servem a qualquer gesto, pois o
+// que importa é o que o paciente consegue formar.
+const GESTURE_PALETTES: Record<Gesture, string[]> = {
+  sim: ["👍", "✊", "✋", "🤚", "🖐️", "👊", "✌️", "👌"],
+  talvez: ["✊", "✋", "🤚", "🖐️", "👊", "✌️"],
+  nao: ["👎", "✊", "✋", "🤚", "🖐️", "👊"],
+};
 
 export default function AjustesPage() {
   const [voices, setVoices] = useState<Voice[] | null>(null);
@@ -177,7 +183,7 @@ export default function AjustesPage() {
                     aria-label={`Emoji para ${GESTURES[g].label}`}
                     className="flex flex-wrap gap-1.5"
                   >
-                    {HAND_EMOJIS.map((e) => (
+                    {GESTURE_PALETTES[g].map((e) => (
                       <button
                         key={e}
                         type="button"
