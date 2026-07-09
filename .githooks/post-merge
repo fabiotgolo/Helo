@@ -1,0 +1,21 @@
+#!/bin/sh
+# Auto-incrementa o patch da versão (package.json) a cada merge na main —
+# ou seja, a cada deploy. Instalado com: git config core.hooksPath .githooks
+# Roda local (histórico completo), então é confiável, diferente da contagem
+# de git no build do App Hosting (clone raso).
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+[ "$branch" = "main" ] || exit 0
+
+node -e '
+const fs = require("fs");
+const p = "package.json";
+const s = fs.readFileSync(p, "utf8");
+const m = s.match(/"version":\s*"(\d+)\.(\d+)\.(\d+)"/);
+if (!m) process.exit(0);
+const next = `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
+fs.writeFileSync(p, s.replace(/("version":\s*")\d+\.\d+\.\d+(")/, `$1${next}$2`));
+console.log("[version] auto-bump →", next);
+' || exit 0
+
+git add package.json
+git commit -m "chore: auto-bump versão (deploy)" --no-verify >/dev/null 2>&1 || true
