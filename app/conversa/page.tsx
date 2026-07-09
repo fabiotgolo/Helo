@@ -568,7 +568,7 @@ export default function ConversaPage() {
             </p>
             <GestureTriplet onGesture={onConfirmGesture} disabled={paused} />
             <p className="text-sm text-ink-mute">
-              👍 confirmar · ✋ reformular · ✊ descartar
+              {gestures.sim.emoji} confirmar · {gestures.talvez.emoji} reformular · {gestures.nao.emoji} descartar
             </p>
           </section>
         )}
@@ -663,6 +663,7 @@ function Intro({
   setOperator: (v: string) => void;
   onBegin: () => void;
 }) {
+  const gestures = useGestures();
   return (
     <section className="flex w-full max-w-xl flex-col items-center gap-8 text-center">
       <Orb palette="coral" breathe className="h-32 w-32" />
@@ -674,9 +675,9 @@ function Intro({
         </p>
       </div>
       <div className="flex items-center gap-6 text-lg">
-        <span>👍 Sim</span>
-        <span>✋ Talvez</span>
-        <span>✊ Não</span>
+        <span>{gestures.sim.emoji} Sim</span>
+        <span>{gestures.talvez.emoji} Talvez</span>
+        <span>{gestures.nao.emoji} Não</span>
       </div>
       <label className="flex w-full flex-col gap-2 text-left">
         <span className="text-sm font-medium text-ink-soft">Quem está operando o Helo?</span>

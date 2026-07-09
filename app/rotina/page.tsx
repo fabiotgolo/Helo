@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ROTINA } from "@/lib/flow";
 import type { Gesture } from "@/lib/types";
+import { useGestures } from "@/lib/gestures";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useSpeech } from "@/lib/useSpeech";
 import { GestureTriplet, TopBar, PillLink } from "@/components/ui";
@@ -11,6 +12,7 @@ type Pending = { label: string; phrase: string; category: string };
 
 export default function RotinaPage() {
   const { speak } = useSpeech();
+  const gestures = useGestures();
   const [pending, setPending] = useState<Pending | null>(null);
   const sessionRef = useRef<number | null>(null);
   const shownAt = useRef(Date.now());
@@ -123,7 +125,9 @@ export default function RotinaPage() {
             “{pending.phrase}”
           </blockquote>
           <GestureTriplet onGesture={onGesture} />
-          <p className="text-sm text-ink-mute">👍 falar e registrar · ✋ não é bem isso · ✊ descartar</p>
+          <p className="text-sm text-ink-mute">
+            {gestures.sim.emoji} falar e registrar · {gestures.talvez.emoji} não é bem isso · {gestures.nao.emoji} descartar
+          </p>
         </div>
       )}
     </div>
