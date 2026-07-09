@@ -1,0 +1,320 @@
+"use client";
+
+// ——— OrbStage: palco persistente dos três modos do Helo ———
+// Um único canvas WebGL com as três esferas na mesma cena (contextos WebGL
+// são recurso escasso). O orbe do modo ativo fica no centro, maior; os
+// inativos ficam menores — nas laterais (desktop/tablet) ou abaixo (mobile).
+// Trocar de modo interpola posição, escala e profundidade — nada remonta.
+//
+// Acessibilidade: o canvas é decorativo (aria-hidden); a interação real são
+// três <button> circulares sobrepostos aos orbes, operáveis por mouse,
+// teclado e toque, que acompanham o layout com transições CSS.
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import { useHelo, HELO_MODES, MODE_ORDER, type HeloMode } from "@/lib/helo-state";
+import { Orb } from "@/components/ui";
+import { ORB_VERTEX, ORB_FRAGMENT, makeOrbUniforms } from "@/components/orb-shader";
+
+type Rect = { x: number; y: number; d: number };
+type Layout = Record<HeloMode, Rect>;
+
+// Composição própria por formato — mobile não é desktop encolhido:
+//   ≥640px (sm):  [ menor ]  [ MAIOR ]  [ menor ]
+//   <640px:            [ MAIOR ]
+//                 [ menor ]  [ menor ]
+// Compacto (experiência aberta): trio horizontal pequeno, o ativo segue
+// protagonista e todos permanecem visíveis e clicáveis sobre o overlay.
+function computeLayout(w: number, h: number, active: HeloMode, compact: boolean): Layout {
+  const inactive = MODE_ORDER.filter((m) => m !== active);
+  const mobile = w < 640;
+
+  if (compact) {
+    const D = Math.min(h * 0.72, mobile ? 112 : 150);
+    const d = D * 0.45;
+    const offset = D / 2 + d / 2 + (mobile ? 18 : 28);
+    return {
+      [active]: { x: w * 0.5, y: h * 0.5, d: D },
+      [inactive[0]]: { x: w * 0.5 - offset, y: h * 0.56, d },
+      [inactive[1]]: { x: w * 0.5 + offset, y: h * 0.56, d },
+    } as Layout;
+  }
+
+  if (mobile) {
+    const D = Math.min(w * 0.6, h * 0.46, 280);
+    const d = Math.min(D * 0.5, w * 0.28 * 2 - 16);
+    return {
+      [active]: { x: w * 0.5, y: h * 0.3, d: D },
+      [inactive[0]]: { x: w * 0.28, y: h * 0.76, d },
+      [inactive[1]]: { x: w * 0.72, y: h * 0.76, d },
+    } as Layout;
+  }
+
+  const D = Math.min(w * 0.34, h * 0.72, 340);
+  const d = D * 0.48;
+  const gap = Math.max(28, w * 0.03);
+  const offset = D / 2 + d / 2 + gap;
+  return {
+    [active]: { x: w * 0.5, y: h * 0.46, d: D },
+    [inactive[0]]: { x: Math.max(d / 2 + 12, w * 0.5 - offset), y: h * 0.58, d },
+    [inactive[1]]: { x: Math.min(w - d / 2 - 12, w * 0.5 + offset), y: h * 0.58, d },
+  } as Layout;
+}
+
+export default function OrbStage({
+  className = "",
+  compact = false,
+}: {
+  className?: string;
+  /** Experiência aberta: trio pequeno no topo, overlay de conteúdo abaixo. */
+  compact?: boolean;
+}) {
+  const { activeMode, setActiveMode, enterMode, modes, getAmplitude } = useHelo();
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  // Este componente só monta no cliente (dynamic ssr:false) — detecção direta
+  const [webglOk] = useState(() => {
+    try {
+      const probe = document.createElement("canvas");
+      return Boolean(probe.getContext("webgl2") || probe.getContext("webgl"));
+    } catch {
+      return false;
+    }
+  });
+
+  // Refs lidas pelo loop de animação (nunca estado React, para não re-renderizar)
+  const layoutRef = useRef<Layout | null>(null);
+  const activeRef = useRef<HeloMode>(activeMode);
+  const amplitudeRef = useRef(getAmplitude);
+  const meshesRef = useRef<Record<HeloMode, THREE.Mesh> | null>(null);
+
+  const layout = size ? computeLayout(size.w, size.h, activeMode, compact) : null;
+
+  // Espelha os valores do render nas refs do loop — após cada render
+  useEffect(() => {
+    activeRef.current = activeMode;
+    amplitudeRef.current = getAmplitude;
+    layoutRef.current = layout;
+  });
+
+  // Medição do contêiner — dirige o canvas e os botões com a mesma geometria
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () =>
+      setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Cena Three.js — montada uma única vez; posições/escala animam por lerp
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !webglOk) return;
+
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    } catch {
+      return; // detecção acima já cobre; sem renderer, o canvas fica vazio
+    }
+    THREE.ColorManagement.enabled = false;
+    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -400, 400);
+    const geometry = new THREE.SphereGeometry(0.5, 96, 96);
+
+    const meshes = {} as Record<HeloMode, THREE.Mesh>;
+    for (const mode of MODE_ORDER) {
+      const material = new THREE.ShaderMaterial({
+        vertexShader: ORB_VERTEX,
+        fragmentShader: ORB_FRAGMENT,
+        uniforms: makeOrbUniforms(HELO_MODES[mode].palette),
+        transparent: true,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      // Fases de tempo distintas — cada orbe flui diferente, como três presenças
+      mesh.userData.timeOffset = mode.length * 37.7;
+      scene.add(mesh);
+      meshes[mode] = mesh;
+    }
+    meshesRef.current = meshes;
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const start = performance.now();
+    let last = start;
+    let raf = 0;
+    let smoothAmp = 0;
+    let placed = false;
+
+    const frame = () => {
+      raf = requestAnimationFrame(frame);
+      const now = performance.now();
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+
+      const lay = layoutRef.current;
+      if (!lay) return;
+
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      if (w === 0 || h === 0) return;
+      if (canvas.width !== w * Math.min(devicePixelRatio, 2)) {
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+        renderer.setSize(w, h, false);
+      }
+      camera.left = -w / 2;
+      camera.right = w / 2;
+      camera.top = h / 2;
+      camera.bottom = -h / 2;
+      camera.updateProjectionMatrix();
+
+      // Suavização exponencial — calma, sem molas nem exageros
+      const f = reducedMotion || !placed ? 1 : 1 - Math.exp(-4.5 * dt);
+      const t = reducedMotion ? 12 : (now - start) / 1000;
+
+      const rawAmp = amplitudeRef.current();
+      smoothAmp += (rawAmp - smoothAmp) * 0.18;
+
+      for (const mode of MODE_ORDER) {
+        const mesh = meshes[mode];
+        const material = mesh.material as THREE.ShaderMaterial;
+        const target = lay[mode];
+        const isActive = mode === activeRef.current;
+        // Tela (y para baixo) → mundo (y para cima); ativo à frente
+        const tx = target.x - w / 2;
+        const ty = h / 2 - target.y;
+        const tz = isActive ? 60 : -60;
+        mesh.position.x += (tx - mesh.position.x) * f;
+        mesh.position.y += (ty - mesh.position.y) * f;
+        mesh.position.z += (tz - mesh.position.z) * f;
+        const s = mesh.scale.x + (target.d - mesh.scale.x) * f;
+        mesh.scale.setScalar(s);
+        material.uniforms.uTime.value = t + (mesh.userData.timeOffset as number);
+        material.uniforms.uAudio.value = isActive ? (reducedMotion ? 0 : smoothAmp) : 0;
+        // Inativos repousam: levemente esmaecidos em direção ao fundo
+        const dimTarget = isActive ? 0 : 0.3;
+        const u = material.uniforms.uDim;
+        u.value += (dimTarget - u.value) * f;
+      }
+      placed = true;
+      renderer.render(scene, camera);
+    };
+    frame();
+
+    // Aba oculta: nada anima, nada gasta
+    const onVisibility = () => {
+      cancelAnimationFrame(raf);
+      if (!document.hidden) {
+        last = performance.now();
+        frame();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
+      geometry.dispose();
+      for (const mode of MODE_ORDER) (meshes[mode].material as THREE.Material).dispose();
+      renderer.dispose();
+      meshesRef.current = null;
+    };
+  }, [webglOk]);
+
+  const onOrbClick = useCallback(
+    (mode: HeloMode) => {
+      if (compact) {
+        // Overlay aberto: trocar de modo troca a experiência, sem fechar nada
+        if (mode !== activeMode) enterMode(mode);
+      } else if (mode === activeMode) {
+        enterMode(mode); // entrar na experiência do orbe central
+      } else {
+        setActiveMode(mode); // trazer o orbe ao centro, ainda na home
+      }
+    },
+    [compact, activeMode, setActiveMode, enterMode]
+  );
+
+  return (
+    <div
+      ref={containerRef}
+      // Posicionamento (relative/absolute) vem de quem monta o palco
+      className={`w-full ${className}`}
+      role="group"
+      aria-label="Modos do Helo: Conversar, Rotina e Emergência"
+    >
+      {/* Fallback sem WebGL: os mesmos orbes, em gradiente CSS */}
+      {!webglOk && layout && (
+        <div aria-hidden="true" className="absolute inset-0">
+          {MODE_ORDER.map((mode) => {
+            const r = layout[mode];
+            return (
+              <div
+                key={mode}
+                className="absolute transition-all duration-700 ease-out motion-reduce:transition-none"
+                style={{ left: r.x - r.d / 2, top: r.y - r.d / 2, width: r.d, height: r.d }}
+              >
+                <Orb palette={modes[mode].palette} className="h-full w-full" />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 h-full w-full"
+      />
+
+      {/* Botões reais sobre os orbes — mouse, teclado e toque */}
+      {layout &&
+        MODE_ORDER.map((mode) => {
+          const r = layout[mode];
+          const info = modes[mode];
+          const isActive = mode === activeMode;
+          const idle = compact && isActive; // presença, não botão — nada a acionar
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => onOrbClick(mode)}
+              disabled={idle}
+              aria-pressed={isActive}
+              aria-label={
+                idle
+                  ? `${info.title} — modo ativo`
+                  : isActive
+                    ? `${info.title} — modo ativo. Entrar`
+                    : compact
+                      ? `Mudar para ${info.title}`
+                      : `Ativar modo ${info.title}`
+              }
+              className="absolute rounded-full transition-all duration-700 ease-out
+                focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-4
+                motion-reduce:transition-none"
+              style={{ left: r.x - r.d / 2, top: r.y - r.d / 2, width: r.d, height: r.d }}
+            >
+              <span
+                className={`pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap font-medium tracking-tight transition-all duration-500 motion-reduce:transition-none ${
+                  compact
+                    ? "sr-only"
+                    : isActive
+                      ? "text-xl text-ink sm:text-2xl"
+                      : "text-sm text-ink-soft"
+                }`}
+              >
+                {info.title}
+              </span>
+            </button>
+          );
+        })}
+    </div>
+  );
+}

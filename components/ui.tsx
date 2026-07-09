@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import type { Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
+
+// Carregado sob demanda: Three.js só entra no bundle quando há um orbe animado na tela
+const Orb3D = dynamic(() => import("./orb-3d"), { ssr: false });
 
 // ——— Orbe: forma orgânica circular em gradiente, marca visual do Helo ———
 
@@ -57,7 +61,9 @@ export function Orb({
       className={`orb ${breathe ? "orb-breathe" : ""} flex items-center justify-center ${className}`}
       style={{ background: PALETTES[palette] }}
     >
-      {children}
+      {/* Orbes "vivos" ganham a versão 3D; o gradiente CSS fica por baixo como fallback */}
+      {breathe && <Orb3D palette={palette} />}
+      {children && <span className="relative z-[1]">{children}</span>}
     </div>
   );
 }

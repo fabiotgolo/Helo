@@ -5,13 +5,14 @@ import { ROTINA } from "@/lib/flow";
 import type { Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
-import { useSpeech } from "@/lib/useSpeech";
-import { GestureTriplet, TopBar, PillLink } from "@/components/ui";
+import { useHelo } from "@/lib/helo-state";
+import { GestureTriplet } from "@/components/ui";
+import { OverlayPanel } from "@/components/overlay-panel";
 
 type Pending = { label: string; phrase: string; category: string };
 
 export default function RotinaPage() {
-  const { speak } = useSpeech();
+  const { speak } = useHelo();
   const gestures = useGestures();
   const [pending, setPending] = useState<Pending | null>(null);
   const sessionRef = useRef<number | null>(null);
@@ -87,36 +88,37 @@ export default function RotinaPage() {
   );
 
   return (
-    <div className="flex min-h-dvh flex-col">
-      <TopBar right={<PillLink href="/conversa">Conversa guiada</PillLink>} />
+    <div className="relative flex flex-1 flex-col">
+      <main className="flex w-full flex-1 flex-col px-4 pb-6 sm:px-6">
+        <OverlayPanel label="Rotina" className="flex max-w-4xl flex-col gap-8">
+          <div className="text-center">
+            <h1 className="text-3xl font-medium tracking-tight sm:text-4xl">Rotina</h1>
+            <p className="mt-2 text-lg text-ink-soft">
+              Toque na frase que o paciente indicou. Ele confirma com um gesto antes de o Helo falar.
+            </p>
+          </div>
 
-      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-8">
-        <div className="text-center">
-          <h1 className="text-4xl font-medium tracking-tight">Rotina</h1>
-          <p className="mt-2 text-lg text-ink-soft">
-            Toque na frase que o paciente indicou. Ele confirma com um gesto antes de o Helo falar.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          {ROTINA.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              onClick={() => void propose(item)}
-              className="rounded-3xl border border-line bg-card px-5 py-8 text-xl font-medium tracking-tight shadow-[var(--shadow-soft)] transition-transform hover:scale-[1.03] active:scale-[0.98]"
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            {ROTINA.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => void propose(item)}
+                className="rounded-3xl border border-line bg-card px-5 py-8 text-xl font-medium tracking-tight shadow-[var(--shadow-soft)] transition-transform hover:scale-[1.03] active:scale-[0.98]"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </OverlayPanel>
       </main>
 
+      {/* Confirmação cobre só o conteúdo — o orbe da Rotina segue visível acima */}
       {pending && (
         <div
           role="dialog"
           aria-label="Confirmar frase"
-          className="fixed inset-0 z-20 flex flex-col items-center justify-center gap-10 bg-cream/95 px-6 backdrop-blur-sm"
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-10 rounded-3xl bg-cream/75 px-6 backdrop-blur-md"
         >
           <p className="text-sm font-semibold uppercase tracking-widest text-ink-soft">
             Confirmar mensagem

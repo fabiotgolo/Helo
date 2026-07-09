@@ -6,8 +6,9 @@ import { flow, compose, START_NODE, type FlowNode, type Option } from "@/lib/flo
 import { GESTURES, type Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
-import { useSpeech } from "@/lib/useSpeech";
-import { Orb, GestureTriplet, TopBar } from "@/components/ui";
+import { useHelo } from "@/lib/helo-state";
+import { GestureTriplet } from "@/components/ui";
+import { OverlayPanel } from "@/components/overlay-panel";
 
 const LOTE = 3; // nunca mais de 3 opções na tela
 
@@ -27,7 +28,8 @@ type Phase = "intro" | "node" | "confirm" | "done";
 type Person = { id: number; name: string; relation: string | null };
 
 export default function ConversaPage() {
-  const { speak, speaking, engine } = useSpeech();
+  // Voz global da Helo — a mesma do palco; o orbe reage a esta fala
+  const { speak, speaking } = useHelo();
 
   const gestures = useGestures();
   const [phase, setPhase] = useState<Phase>("intro");
@@ -468,23 +470,14 @@ export default function ConversaPage() {
     : batchOptions.map((o) => ({ label: o.label, ai: false }));
 
   return (
-    <div className="relative flex min-h-dvh flex-col overflow-hidden">
-      <Backdrop />
-
-      <TopBar
-        right={
-          <span className="rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft">
-            voz: {engine === "elevenlabs" ? "ElevenLabs" : "navegador"}
-          </span>
-        }
-      />
-
-      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-8">
+    <div className="relative flex flex-1 flex-col">
+      <main className="flex w-full flex-1 flex-col items-center px-4 pb-4 sm:px-6">
+        <OverlayPanel label="Conversa guiada" className="flex flex-1 flex-col justify-center">
         {phase === "intro" && <Intro operator={operator} setOperator={setOperator} onBegin={begin} />}
 
         {phase === "node" && node.kind === "pergunta" && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-12">
-            <h1 className="text-center text-5xl font-medium tracking-tight sm:text-6xl">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-12">
+            <h1 className="text-center text-4xl font-medium tracking-tight sm:text-5xl">
               {node.question}
             </h1>
             <GestureTriplet onGesture={onQuestionGesture} disabled={paused} />
@@ -492,7 +485,7 @@ export default function ConversaPage() {
         )}
 
         {phase === "node" && node.kind === "opcoes" && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-8">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-8">
             <h1 className="text-center text-3xl font-medium tracking-tight text-ink-soft sm:text-4xl">
               {node.question}
             </h1>
@@ -553,7 +546,7 @@ export default function ConversaPage() {
         )}
 
         {phase === "confirm" && confirm && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-10">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-10">
             <p className="text-sm font-semibold uppercase tracking-widest text-ink-soft">
               {confirm.step === 2 ? "Confirmação reforçada — assunto importante" : "Confirmar mensagem"}
               {confirm.fromAI && " · frase sugerida por IA"}
@@ -574,8 +567,7 @@ export default function ConversaPage() {
         )}
 
         {phase === "done" && confirm && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-8">
-            <Orb palette="coral" breathe className="h-28 w-28" />
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-8">
             <blockquote className="text-center text-4xl font-medium leading-snug tracking-tight sm:text-5xl">
               “{confirm.phrase}”
             </blockquote>
@@ -608,10 +600,10 @@ export default function ConversaPage() {
             </div>
           </section>
         )}
-      </main>
+        </OverlayPanel>
 
       {phase !== "intro" && phase !== "done" && (
-        <footer className="no-print relative z-10 flex flex-wrap items-center justify-center gap-2 px-6 pb-6">
+        <footer className="no-print flex flex-wrap items-center justify-center gap-2 px-6 py-4">
           <Control onClick={repeat} disabled={speaking}>
             🔊 Repetir
           </Control>
@@ -629,14 +621,15 @@ export default function ConversaPage() {
           </Link>
         </footer>
       )}
+      </main>
 
+      {/* Pausa cobre só a área de conteúdo — os orbes seguem visíveis acima */}
       {paused && (
         <div
           role="dialog"
           aria-label="Conversa pausada"
-          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 bg-cream/90 backdrop-blur-sm"
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 rounded-3xl bg-cream/70 backdrop-blur-md"
         >
-          <Orb palette="ceu" breathe className="h-32 w-32" />
           <p className="text-3xl font-medium">Conversa pausada</p>
           <p className="max-w-md text-center text-ink-soft">
             O silêncio também é uma resposta. Retome quando o paciente quiser.
@@ -665,8 +658,7 @@ function Intro({
 }) {
   const gestures = useGestures();
   return (
-    <section className="flex w-full max-w-xl flex-col items-center gap-8 text-center">
-      <Orb palette="coral" breathe className="h-32 w-32" />
+    <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-8 text-center">
       <div>
         <h1 className="text-4xl font-medium tracking-tight">Iniciar conversa</h1>
         <p className="mt-3 text-lg text-ink-soft">
@@ -721,15 +713,5 @@ function Control({
     >
       {children}
     </button>
-  );
-}
-
-function Backdrop() {
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-[0.14]">
-      <Orb palette="lilas" className="absolute left-[8%] top-[22%] h-72 w-72 blur-[2px]" />
-      <Orb palette="coral" className="absolute left-1/2 top-[16%] h-96 w-96 -translate-x-1/2 blur-[2px]" />
-      <Orb palette="oliva" className="absolute right-[6%] top-[24%] h-72 w-72 blur-[2px]" />
-    </div>
   );
 }
