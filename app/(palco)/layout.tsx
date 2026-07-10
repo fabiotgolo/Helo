@@ -28,10 +28,10 @@ export default function PalcoLayout({ children }: { children: React.ReactNode })
   const { setActiveMode, engine } = useHelo();
   const routeMode = PATH_TO_MODE[pathname];
   const isHome = !routeMode;
-  // Conversar é imersivo (Fase 5): o orbe segue grande e central, e o
-  // conteúdo aparece como camada translúcida sobre ele. Rotina e emergência
-  // mantêm a faixa compacta — são telas densas de opções.
-  const variant = isHome ? "aberto" : routeMode === "conversar" ? "imersivo" : "compacto";
+  // Conversar (Fase 5) e Rotina (Fase 7) são imersivos: o orbe do modo segue
+  // grande e central, e o conteúdo aparece como camada translúcida sobre ele.
+  // Emergência mantém a faixa compacta — tela densa de ações, socorro primeiro.
+  const variant = isHome ? "aberto" : routeMode === "emergencia" ? "compacto" : "imersivo";
 
   // Deep link e botão voltar: a rota é reflexo do estado — aqui o estado
   // acompanha a rota, para o orbe certo assumir o centro em qualquer entrada.
