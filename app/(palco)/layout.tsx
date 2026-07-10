@@ -28,6 +28,10 @@ export default function PalcoLayout({ children }: { children: React.ReactNode })
   const { setActiveMode, engine } = useHelo();
   const routeMode = PATH_TO_MODE[pathname];
   const isHome = !routeMode;
+  // Conversar é imersivo (Fase 5): o orbe segue grande e central, e o
+  // conteúdo aparece como camada translúcida sobre ele. Rotina e emergência
+  // mantêm a faixa compacta — são telas densas de opções.
+  const variant = isHome ? "aberto" : routeMode === "conversar" ? "imersivo" : "compacto";
 
   // Deep link e botão voltar: a rota é reflexo do estado — aqui o estado
   // acompanha a rota, para o orbe certo assumir o centro em qualquer entrada.
@@ -51,16 +55,28 @@ export default function PalcoLayout({ children }: { children: React.ReactNode })
 
       <div className="relative flex flex-1 flex-col">
         <OrbStage
-          compact={!isHome}
+          variant={variant}
           className={`absolute inset-x-0 top-0 z-0 transition-[height] duration-700 ease-out motion-reduce:transition-none ${
-            isHome ? "h-[min(44vh,380px)]" : "h-32 sm:h-40"
+            variant === "aberto"
+              ? "h-[min(44vh,380px)]"
+              : variant === "imersivo"
+                ? "h-full"
+                : "h-32 sm:h-40"
           }`}
         />
         {/* O conteúdo desliza sob a faixa dos orbes; cliques atravessam as
-            áreas vazias até os botões do palco */}
+            áreas vazias até os botões do palco. No imersivo, o conteúdo
+            flutua SOBRE o orbe: cada elemento interativo religa seus
+            próprios pointer-events, para o palco continuar clicável. */}
         <div
-          className={`pointer-events-none relative z-10 flex flex-1 flex-col *:pointer-events-auto ${
-            isHome ? "pt-[min(46vh,400px)]" : "pt-32 sm:pt-40"
+          className={`pointer-events-none relative z-10 flex flex-1 flex-col ${
+            variant === "imersivo" ? "" : "*:pointer-events-auto"
+          } ${
+            variant === "aberto"
+              ? "pt-[min(46vh,400px)]"
+              : variant === "imersivo"
+                ? "pt-20 sm:pt-24"
+                : "pt-32 sm:pt-40"
           }`}
         >
           {children}

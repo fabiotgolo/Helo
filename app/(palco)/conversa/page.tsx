@@ -471,8 +471,12 @@ export default function ConversaPage() {
 
   return (
     <div className="relative flex flex-1 flex-col">
-      <main className="flex w-full flex-1 flex-col items-center px-4 pb-4 sm:px-6">
-        <OverlayPanel label="Conversa guiada" className="flex flex-1 flex-col justify-center">
+      <main className="flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-6">
+        {/* Camada contextual sobre o orbe: o painel é translúcido e o orbe
+            Conversar segue animando atrás dele. Só o conteúdo interno troca
+            (com fade) — o palco nunca desmonta. */}
+        <OverlayPanel label="Conversa guiada" variant="imersivo">
+        <div key={`${phase}-${nodeId}-${batch}-${aiOptions ? "ai" : "curadas"}`} className="fade-rise">
         {phase === "intro" && <Intro operator={operator} setOperator={setOperator} onBegin={begin} />}
 
         {phase === "node" && node.kind === "pergunta" && (
@@ -600,10 +604,11 @@ export default function ConversaPage() {
             </div>
           </section>
         )}
+        </div>
         </OverlayPanel>
 
       {phase !== "intro" && phase !== "done" && (
-        <footer className="no-print flex flex-wrap items-center justify-center gap-2 px-6 py-4">
+        <footer className="no-print pointer-events-auto flex flex-wrap items-center justify-center gap-2 px-6 py-4">
           <Control onClick={repeat} disabled={speaking}>
             🔊 Repetir
           </Control>
@@ -628,7 +633,7 @@ export default function ConversaPage() {
         <div
           role="dialog"
           aria-label="Conversa pausada"
-          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 rounded-3xl bg-cream/70 backdrop-blur-md"
+          className="pointer-events-auto absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 rounded-3xl bg-cream/70 backdrop-blur-md"
         >
           <p className="text-3xl font-medium">Conversa pausada</p>
           <p className="max-w-md text-center text-ink-soft">
@@ -672,12 +677,12 @@ function Intro({
         <span>{gestures.nao.emoji} Não</span>
       </div>
       <label className="flex w-full flex-col gap-2 text-left">
-        <span className="text-sm font-medium text-ink-soft">Quem está operando o Helo?</span>
+        <span className="text-sm font-medium text-ink-soft">Quem está acompanhando ou operando o Helo?</span>
         <input
           type="text"
           value={operator}
           onChange={(e) => setOperator(e.target.value)}
-          placeholder="Nome do assistente ou familiar"
+          placeholder="Enfermeiro, cuidador, familiar ou acompanhante"
           className="w-full rounded-2xl border border-line bg-card px-5 py-4 text-lg outline-none focus:border-ink-mute"
         />
       </label>

@@ -19,17 +19,41 @@ import { ORB_VERTEX, ORB_FRAGMENT, makeOrbUniforms } from "@/components/orb-shad
 type Rect = { x: number; y: number; d: number };
 type Layout = Record<HeloMode, Rect>;
 
+/**
+ * Variantes do palco:
+ *   aberto   — home: trio protagonista, orbes são botões de entrada.
+ *   compacto — experiência aberta: trio pequeno no topo, conteúdo abaixo.
+ *   imersivo — experiência aberta: o ativo permanece GRANDE e central,
+ *              presença viva atrás do overlay translúcido de conteúdo.
+ */
+export type StageVariant = "aberto" | "compacto" | "imersivo";
+
 // Composição própria por formato — mobile não é desktop encolhido:
 //   ≥640px (sm):  [ menor ]  [ MAIOR ]  [ menor ]
 //   <640px:            [ MAIOR ]
 //                 [ menor ]  [ menor ]
 // Compacto (experiência aberta): trio horizontal pequeno, o ativo segue
 // protagonista e todos permanecem visíveis e clicáveis sobre o overlay.
-function computeLayout(w: number, h: number, active: HeloMode, compact: boolean): Layout {
+function computeLayout(w: number, h: number, active: HeloMode, variant: StageVariant): Layout {
   const inactive = MODE_ORDER.filter((m) => m !== active);
   const mobile = w < 640;
 
-  if (compact) {
+  if (variant === "imersivo") {
+    // O ativo ocupa o centro do palco, atrás do overlay de conteúdo; os
+    // inativos repousam pequenos no topo, ainda alcançáveis para trocar
+    // de experiência sem fechar nada.
+    const D = Math.min(w * (mobile ? 0.82 : 0.52), h * 0.68, 480);
+    const d = mobile ? 52 : 68;
+    const y = mobile ? 44 : 54;
+    const offset = d / 2 + (mobile ? 32 : 44);
+    return {
+      [active]: { x: w * 0.5, y: h * 0.46, d: D },
+      [inactive[0]]: { x: w * 0.5 - offset, y, d },
+      [inactive[1]]: { x: w * 0.5 + offset, y, d },
+    } as Layout;
+  }
+
+  if (variant === "compacto") {
     const D = Math.min(h * 0.72, mobile ? 112 : 150);
     const d = D * 0.45;
     const offset = D / 2 + d / 2 + (mobile ? 18 : 28);
@@ -63,11 +87,11 @@ function computeLayout(w: number, h: number, active: HeloMode, compact: boolean)
 
 export default function OrbStage({
   className = "",
-  compact = false,
+  variant = "aberto",
 }: {
   className?: string;
-  /** Experiência aberta: trio pequeno no topo, overlay de conteúdo abaixo. */
-  compact?: boolean;
+  /** Composição do palco — ver StageVariant. */
+  variant?: StageVariant;
 }) {
   const { activeMode, setActiveMode, enterMode, modes, getAmplitude } = useHelo();
 
@@ -90,7 +114,7 @@ export default function OrbStage({
   const amplitudeRef = useRef(getAmplitude);
   const meshesRef = useRef<Record<HeloMode, THREE.Mesh> | null>(null);
 
-  const layout = size ? computeLayout(size.w, size.h, activeMode, compact) : null;
+  const layout = size ? computeLayout(size.w, size.h, activeMode, variant) : null;
 
   // Espelha os valores do render nas refs do loop — após cada render
   useEffect(() => {
@@ -229,7 +253,7 @@ export default function OrbStage({
 
   const onOrbClick = useCallback(
     (mode: HeloMode) => {
-      if (compact) {
+      if (variant !== "aberto") {
         // Overlay aberto: trocar de modo troca a experiência, sem fechar nada
         if (mode !== activeMode) enterMode(mode);
       } else if (mode === activeMode) {
@@ -238,7 +262,7 @@ export default function OrbStage({
         setActiveMode(mode); // trazer o orbe ao centro, ainda na home
       }
     },
-    [compact, activeMode, setActiveMode, enterMode]
+    [variant, activeMode, setActiveMode, enterMode]
   );
 
   return (
@@ -279,7 +303,7 @@ export default function OrbStage({
           const r = layout[mode];
           const info = modes[mode];
           const isActive = mode === activeMode;
-          const idle = compact && isActive; // presença, não botão — nada a acionar
+          const idle = variant !== "aberto" && isActive; // presença, não botão — nada a acionar
           return (
             <button
               key={mode}
@@ -292,7 +316,7 @@ export default function OrbStage({
                   ? `${info.title} — modo ativo`
                   : isActive
                     ? `${info.title} — modo ativo. Entrar`
-                    : compact
+                    : variant !== "aberto"
                       ? `Mudar para ${info.title}`
                       : `Ativar modo ${info.title}`
               }
@@ -303,7 +327,7 @@ export default function OrbStage({
             >
               <span
                 className={`pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap font-medium tracking-tight transition-all duration-500 motion-reduce:transition-none ${
-                  compact
+                  variant !== "aberto"
                     ? "sr-only"
                     : isActive
                       ? "text-xl text-ink sm:text-2xl"
