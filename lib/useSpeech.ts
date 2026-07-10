@@ -79,12 +79,21 @@ export function useSpeech() {
       const synth = window.speechSynthesis;
       if (!synth) return resolve("erro");
       let settled = false;
+      let watchdog = 0;
       const settle = (r: SpeakResult) => {
         if (settled) return; // eventos duplicados são ignorados
         settled = true;
+        window.clearTimeout(watchdog);
         if (settleRef.current === settle) settleRef.current = null;
         resolve(r);
       };
+      // A síntese também pode nunca começar (aba oculta, voz indisponível):
+      // sem início em 3s, resolve como erro — a interface mostra o aviso.
+      watchdog = window.setTimeout(() => {
+        console.error("[EMERGENCY ERROR] speechSynthesis não iniciou em 3s — abortando");
+        settle("erro");
+        synth.cancel();
+      }, 3000);
       settleRef.current = settle;
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "pt-BR";
@@ -93,12 +102,22 @@ export function useSpeech() {
         .getVoices()
         .find((v) => v.lang.startsWith("pt-BR") || v.lang.startsWith("pt"));
       if (voice) u.voice = voice;
-      u.onend = () => settle("concluida");
+      console.log("[EMERGENCY] voz do navegador — voz selecionada:", voice?.name ?? "(padrão do sistema)");
+      u.onstart = () => {
+        console.log("[EMERGENCY] playback started (navegador)");
+        window.clearTimeout(watchdog);
+      };
+      u.onend = () => {
+        console.log("[EMERGENCY] playback ended (navegador)");
+        settle("concluida");
+      };
       u.onerror = (e) => {
+        console.error("[EMERGENCY ERROR] speechSynthesis:", e.error);
         if (e.error === "not-allowed") settle("bloqueada");
         else if (e.error === "interrupted" || e.error === "canceled") settle("interrompida");
         else settle("erro");
       };
+      console.log("[EMERGENCY] speechSynthesis.speak chamado");
       synth.speak(u);
     });
   }, []);
@@ -111,50 +130,108 @@ export function useSpeech() {
       setSpeakingBoth(true);
       try {
         let url = cache.current.get(text);
+        console.log("[EMERGENCY] cache lookup:", url ? "HIT" : "MISS");
         if (!url && elevenAvailable.current !== false) {
-          const res = await fetch("/api/tts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text }),
-          });
-          if (res.ok) {
-            elevenAvailable.current = true;
-            const blob = await res.blob();
-            url = URL.createObjectURL(blob);
-            cache.current.set(text, url);
-          } else if (res.status === 503) {
-            elevenAvailable.current = false;
+          try {
+            console.log("[EMERGENCY] TTS request started");
+            const res = await fetch("/api/tts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text }),
+            });
+            console.log("[EMERGENCY] TTS response received:", res.status);
+            if (res.ok) {
+              elevenAvailable.current = true;
+              const blob = await res.blob();
+              url = URL.createObjectURL(blob);
+              cache.current.set(text, url);
+            } else if (res.status === 503) {
+              elevenAvailable.current = false;
+            }
+          } catch (err) {
+            // Rede indisponível: a fala não pode falhar — segue para a
+            // voz local do navegador, que funciona offline.
+            console.error("[EMERGENCY ERROR] TTS fetch:", (err as Error)?.message ?? err);
           }
         }
         // stop() chegou enquanto o áudio ainda era preparado — não toca
-        if (genRef.current !== gen) return "interrompida";
+        if (genRef.current !== gen) {
+          console.warn("[EMERGENCY] interrompida antes de tocar (stop durante preparação)");
+          return "interrompida";
+        }
         if (url) {
           setEngine("elevenlabs");
-          return await new Promise<SpeakResult>((resolve) => {
-            const audio = ensureAudio();
+          const audio = ensureAudio();
+          console.log("[EMERGENCY] audio object created; AudioContext:", audioCtxRef.current?.state ?? "sem Web Audio");
+          // AudioContext suspenso = play() "funciona" mas SEM som — o áudio
+          // é roteado por ele. Retomar antes de tocar; num toque real há
+          // gesto do usuário, então o resume é permitido.
+          if (audioCtxRef.current && audioCtxRef.current.state !== "running") {
+            try {
+              await audioCtxRef.current.resume();
+              console.log("[EMERGENCY] AudioContext retomado:", audioCtxRef.current.state);
+            } catch (err) {
+              console.error("[EMERGENCY ERROR] AudioContext resume:", (err as Error)?.message ?? err);
+            }
+          }
+          if (genRef.current !== gen) {
+            console.warn("[EMERGENCY] interrompida durante resume do AudioContext");
+            return "interrompida";
+          }
+          const r = await new Promise<SpeakResult>((resolve) => {
             let settled = false;
+            let watchdog = 0;
             const settle = (r: SpeakResult) => {
               if (settled) return; // eventos duplicados são ignorados
               settled = true;
+              window.clearTimeout(watchdog);
               if (settleRef.current === settle) settleRef.current = null;
               resolve(r);
             };
+            // Watchdog: play() pode ficar PENDENTE para sempre sem erro
+            // (ex.: aba oculta — o Chrome adia o carregamento de mídia).
+            // Se a reprodução não COMEÇAR em 2,5s, aborta e cai no fallback.
+            watchdog = window.setTimeout(() => {
+              console.error("[EMERGENCY ERROR] playback não iniciou em 2.5s (readyState:", audio.readyState + ") — abortando");
+              settle("erro");
+              audio.pause();
+            }, 2500);
             settleRef.current = settle;
             audio.src = url;
-            audio.onended = () => settle("concluida");
+            audio.muted = false;
+            audio.volume = 1;
+            audio.onplaying = () => {
+              console.log("[EMERGENCY] playback started");
+              window.clearTimeout(watchdog);
+            };
+            audio.onended = () => {
+              console.log("[EMERGENCY] playback ended");
+              settle("concluida");
+            };
             audio.onpause = () => {
               // Evento de pausa atrasado de uma fala anterior: ignora
               if (!audio.paused) return;
               settle(audio.ended ? "concluida" : "interrompida");
             };
-            audio.onerror = () => settle("erro");
+            audio.onerror = () => {
+              console.error("[EMERGENCY ERROR] elemento de áudio:", audio.error?.code, audio.error?.message);
+              settle("erro");
+            };
+            console.log("[EMERGENCY] play called");
             audio.play().catch((err: unknown) => {
               // Autoplay negado pelo navegador — não é falha, é política
               const name = err instanceof DOMException ? err.name : "";
+              console.error("[EMERGENCY ERROR] play() rejeitou:", name, (err as Error)?.message ?? err);
               settle(name === "NotAllowedError" ? "bloqueada" : "erro");
             });
           });
+          // Falha de reprodução (não interrupção/autoplay): a fala não pode
+          // morrer em silêncio — tenta a voz local do navegador.
+          if (r !== "erro") return r;
+          if (genRef.current !== gen) return "interrompida";
+          console.warn("[EMERGENCY] áudio ElevenLabs falhou — tentando voz do navegador");
         }
+        console.log("[EMERGENCY] fallback: voz local do navegador");
         setEngine("navegador");
         return await speakBrowser(text);
       } finally {
@@ -165,6 +242,33 @@ export function useSpeech() {
     },
     [stop, speakBrowser, ensureAudio, setSpeakingBoth]
   );
+
+  // Pré-aquece o cache de áudio para frases conhecidas (ex.: as ações de
+  // emergência ao entrar no modo): o toque reproduz na hora, com a voz
+  // clonada, e as frases seguem faladas mesmo se a rede cair depois.
+  // Sequencial de propósito — sem rajada na API de TTS; qualquer falha
+  // apenas interrompe o aquecimento (o toque cai no fallback normal).
+  const prime = useCallback(async (texts: string[]): Promise<void> => {
+    for (const text of texts) {
+      if (elevenAvailable.current === false) return;
+      if (!text.trim() || cache.current.has(text)) continue;
+      try {
+        const res = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (res.ok) {
+          elevenAvailable.current = true;
+          cache.current.set(text, URL.createObjectURL(await res.blob()));
+        } else if (res.status === 503) {
+          elevenAvailable.current = false;
+        }
+      } catch {
+        return; // rede indisponível agora — o toque decide na hora
+      }
+    }
+  }, []);
 
   // Chamado a cada frame pelo orbe — usa refs, nunca estado React.
   const getAmplitude = useCallback((): number => {
@@ -184,5 +288,5 @@ export function useSpeech() {
     return 0.3 + 0.2 * Math.sin(performance.now() / 180);
   }, []);
 
-  return { speak, stop, speaking, engine, getAmplitude };
+  return { speak, stop, speaking, engine, getAmplitude, prime };
 }

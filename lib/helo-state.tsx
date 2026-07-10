@@ -77,6 +77,8 @@ interface HeloContextValue {
   modes: typeof HELO_MODES;
   // Voz global da Helo
   speak: (text: string) => Promise<SpeakResult>;
+  /** Pré-aquece o cache de áudio (voz clonada) para frases conhecidas. */
+  prime: (texts: string[]) => Promise<void>;
   stop: () => void;
   speaking: boolean;
   engine: "elevenlabs" | "navegador";
@@ -87,15 +89,21 @@ const HeloContext = createContext<HeloContextValue | null>(null);
 
 export function HeloProvider({ children }: { children: ReactNode }) {
   const [activeMode, setActiveModeState] = useState<HeloMode>("conversar");
-  const { speak, stop, speaking, engine, getAmplitude } = useSpeech();
+  const { speak, stop, speaking, engine, getAmplitude, prime } = useSpeech();
   const router = useRouter();
+
+  // Espelho do modo ativo fora do estado React: o stop() precisa acontecer
+  // exatamente uma vez por troca, e updaters de setState devem ser puros —
+  // o React pode re-executá-los (StrictMode/render concorrente), e um stop()
+  // repetido dentro do updater interrompia a fala recém-iniciada do modo novo.
+  const activeModeRef = useRef<HeloMode>("conversar");
 
   const setActiveMode = useCallback(
     (mode: HeloMode) => {
-      setActiveModeState((current) => {
-        if (current !== mode) stop(); // a fala do modo anterior não vaza para o novo
-        return mode;
-      });
+      if (activeModeRef.current === mode) return;
+      activeModeRef.current = mode;
+      stop(); // a fala do modo anterior não vaza para o novo
+      setActiveModeState(mode);
     },
     [stop]
   );
@@ -144,12 +152,13 @@ export function HeloProvider({ children }: { children: ReactNode }) {
       playIntro,
       modes: HELO_MODES,
       speak,
+      prime,
       stop,
       speaking,
       engine,
       getAmplitude,
     }),
-    [activeMode, setActiveMode, enterMode, playIntro, speak, stop, speaking, engine, getAmplitude]
+    [activeMode, setActiveMode, enterMode, playIntro, speak, prime, stop, speaking, engine, getAmplitude]
   );
 
   return <HeloContext.Provider value={value}>{children}</HeloContext.Provider>;

@@ -256,8 +256,11 @@ export default function OrbStage({
       if (variant !== "aberto") {
         // Overlay aberto: trocar de modo troca a experiência, sem fechar nada
         if (mode !== activeMode) enterMode(mode);
-      } else if (mode === activeMode) {
-        enterMode(mode); // entrar na experiência do orbe central
+      } else if (mode === activeMode || mode === "emergencia") {
+        // Entrar na experiência do orbe central. Emergência abre com UM
+        // toque mesmo da lateral: o orbe vai ao centro e as ações aparecem
+        // juntas — socorro não espera um segundo clique.
+        enterMode(mode);
       } else {
         setActiveMode(mode); // trazer o orbe ao centro, ainda na home
       }
