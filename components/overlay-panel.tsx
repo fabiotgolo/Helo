@@ -2,6 +2,19 @@
 // Painel semi-transparente que aparece SOBRE o palco dos orbes — o orbe
 // ativo permanece perceptível acima e através dele (backdrop-blur).
 
+// Véu translúcido de palco (Fase 6): cobre a área de conteúdo com uma lâmina
+// leve, e o conteúdo flutua DIRETO sobre o orbe — sem cartão. O orbe segue
+// central, visível e animado através da camada. Puramente visual: cliques
+// atravessam até o palco; cada elemento interativo religa seus pointer-events.
+export function OverlayVeil() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 bg-cream/55 backdrop-blur-[2px] [mask-image:linear-gradient(to_bottom,transparent,black_56px)]"
+    />
+  );
+}
+
 export function OverlayPanel({
   label,
   variant = "padrao",

@@ -8,7 +8,7 @@ import { useGestures } from "@/lib/gestures";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { GestureTriplet } from "@/components/ui";
-import { OverlayPanel } from "@/components/overlay-panel";
+import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 
 const LOTE = 3; // nunca mais de 3 opções na tela
 
@@ -471,14 +471,22 @@ export default function ConversaPage() {
 
   return (
     <div className="relative flex flex-1 flex-col">
-      <main className="flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-6">
-        {/* Camada contextual sobre o orbe: o painel é translúcido e o orbe
-            Conversar segue animando atrás dele. Só o conteúdo interno troca
-            (com fade) — o palco nunca desmonta. */}
-        <OverlayPanel label="Conversa guiada" variant="imersivo">
-        <div key={`${phase}-${nodeId}-${batch}-${aiOptions ? "ai" : "curadas"}`} className="fade-rise">
-        {phase === "intro" && <Intro operator={operator} setOperator={setOperator} onBegin={begin} />}
-
+      {/* Fase 6 — conversa ativa: um véu leve cobre o palco e a pergunta
+          flutua DIRETO sobre o orbe Conversar, que segue central, visível e
+          animado através da camada. Só o conteúdo troca (com fade) — o palco
+          nunca desmonta. A intro mantém o painel translúcido da Fase 5. */}
+      {phase !== "intro" && <OverlayVeil />}
+      <main className="relative flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-6">
+        {phase === "intro" ? (
+          <OverlayPanel label="Conversa guiada" variant="imersivo">
+            <Intro operator={operator} setOperator={setOperator} onBegin={begin} />
+          </OverlayPanel>
+        ) : (
+        <section
+          key={`${phase}-${nodeId}-${batch}-${aiOptions ? "ai" : "curadas"}`}
+          aria-label="Conversa guiada"
+          className="fade-rise pointer-events-auto mx-auto w-full max-w-3xl py-8"
+        >
         {phase === "node" && node.kind === "pergunta" && (
           <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-12">
             <h1 className="text-center text-4xl font-medium tracking-tight sm:text-5xl">
@@ -604,8 +612,8 @@ export default function ConversaPage() {
             </div>
           </section>
         )}
-        </div>
-        </OverlayPanel>
+        </section>
+        )}
 
       {phase !== "intro" && phase !== "done" && (
         <footer className="no-print pointer-events-auto flex flex-wrap items-center justify-center gap-2 px-6 py-4">
