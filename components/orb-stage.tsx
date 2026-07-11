@@ -74,14 +74,16 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
     } as Layout;
   }
 
+  // Composição da referência visual (Fase 10): central grande ao centro,
+  // laterais menores quase na mesma linha, muito espaço negativo.
   const D = Math.min(w * 0.34, h * 0.72, 340);
   const d = D * 0.48;
   const gap = Math.max(28, w * 0.03);
   const offset = D / 2 + d / 2 + gap;
   return {
     [active]: { x: w * 0.5, y: h * 0.46, d: D },
-    [inactive[0]]: { x: Math.max(d / 2 + 12, w * 0.5 - offset), y: h * 0.58, d },
-    [inactive[1]]: { x: Math.min(w - d / 2 - 12, w * 0.5 + offset), y: h * 0.58, d },
+    [inactive[0]]: { x: Math.max(d / 2 + 12, w * 0.5 - offset), y: h * 0.55, d },
+    [inactive[1]]: { x: Math.min(w - d / 2 - 12, w * 0.5 + offset), y: h * 0.55, d },
   } as Layout;
 }
 
@@ -115,6 +117,21 @@ export default function OrbStage({
   const meshesRef = useRef<Record<HeloMode, THREE.Mesh> | null>(null);
 
   const layout = size ? computeLayout(size.w, size.h, activeMode, variant) : null;
+
+  // Botões viajam com transição apenas quando o MODO troca (a coreografia).
+  // Montagem e mudanças de TAMANHO (resize, medição tardia do contêiner)
+  // reposicionam na hora — como o `placed` dos meshes — sem deslize fantasma.
+  const sizeKey = size ? `${size.w}x${size.h}` : "";
+  const [stableSize, setStableSize] = useState("");
+  useEffect(() => {
+    if (!sizeKey) return;
+    const raf = requestAnimationFrame(() => setStableSize(sizeKey));
+    return () => cancelAnimationFrame(raf);
+  }, [sizeKey]);
+  const travel =
+    stableSize === sizeKey
+      ? "transition-all duration-700 ease-out motion-reduce:transition-none"
+      : "transition-none";
 
   // Espelha os valores do render nas refs do loop — após cada render
   useEffect(() => {
@@ -176,6 +193,20 @@ export default function OrbStage({
     let smoothAmp = 0;
     let placed = false;
 
+    // ——— Coreografia da troca (Fase 10) ———
+    // Quando um orbe lateral assume o centro, ele e o antigo protagonista
+    // percorrem o MESMO segmento em sentidos opostos — sem correção, eles se
+    // atravessam no meio do caminho. A troca ganha:
+    //   1. um arco vertical suave e oposto (o que chega passa por cima,
+    //      o que sai mergulha de leve) — eles se contornam, não se cruzam;
+    //   2. profundidade resolvida mais rápido que a posição — o que chega
+    //      fica à frente desde o início da viagem.
+    const SWAP_MS = 850;
+    let swapStart = -1;
+    let swapIn: HeloMode | null = null;
+    let swapOut: HeloMode | null = null;
+    let prevActive: HeloMode = activeRef.current;
+
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const now = performance.now();
@@ -205,6 +236,27 @@ export default function OrbStage({
       const rawAmp = amplitudeRef.current();
       smoothAmp += (rawAmp - smoothAmp) * 0.18;
 
+      // Detecta a troca de protagonista e arma a coreografia do par.
+      // A profundidade é cravada NA HORA: com câmera ortográfica, z não
+      // muda a aparência — só a ordem de desenho — então o salto é
+      // invisível e quem chega cobre quem sai desde o primeiro frame.
+      if (activeRef.current !== prevActive) {
+        swapIn = activeRef.current;
+        swapOut = prevActive;
+        swapStart = now;
+        prevActive = activeRef.current;
+        meshes[swapIn].position.z = 60;
+        meshes[swapOut].position.z = -60;
+      }
+      // Progresso do arco: 0→1 em SWAP_MS; sin(π·p) sobe e volta a zero,
+      // então o desvio nunca deixa resíduo na posição final.
+      const swapP =
+        swapStart >= 0 ? Math.min(1, (now - swapStart) / SWAP_MS) : 1;
+      const arc =
+        reducedMotion || !placed || swapP >= 1
+          ? 0
+          : Math.sin(Math.PI * swapP) * Math.min(48, h * 0.09);
+
       for (const mode of MODE_ORDER) {
         const mesh = meshes[mode];
         const material = mesh.material as THREE.ShaderMaterial;
@@ -212,11 +264,16 @@ export default function OrbStage({
         const isActive = mode === activeRef.current;
         // Tela (y para baixo) → mundo (y para cima); ativo à frente
         const tx = target.x - w / 2;
-        const ty = h / 2 - target.y;
+        // O que chega ao centro arqueia por cima; o que sai mergulha de leve
+        const arcY = mode === swapIn ? arc : mode === swapOut ? -arc * 0.6 : 0;
+        const ty = h / 2 - target.y + arcY;
         const tz = isActive ? 60 : -60;
         mesh.position.x += (tx - mesh.position.x) * f;
         mesh.position.y += (ty - mesh.position.y) * f;
-        mesh.position.z += (tz - mesh.position.z) * f;
+        // Profundidade converge ~3× mais rápido que a posição: quem chega
+        // assume a frente logo no início — nunca há interseção ambígua.
+        const fz = reducedMotion || !placed ? 1 : 1 - Math.exp(-14 * dt);
+        mesh.position.z += (tz - mesh.position.z) * fz;
         const s = mesh.scale.x + (target.d - mesh.scale.x) * f;
         mesh.scale.setScalar(s);
         material.uniforms.uTime.value = t + (mesh.userData.timeOffset as number);
@@ -284,8 +341,16 @@ export default function OrbStage({
             return (
               <div
                 key={mode}
-                className="absolute transition-all duration-700 ease-out motion-reduce:transition-none"
-                style={{ left: r.x - r.d / 2, top: r.y - r.d / 2, width: r.d, height: r.d }}
+                className={`absolute ${travel}`}
+                style={{
+                  left: r.x - r.d / 2,
+                  top: r.y - r.d / 2,
+                  width: r.d,
+                  height: r.d,
+                  // O protagonista cobre o par durante a viagem — mesmo sem
+                  // WebGL a troca nunca mostra sobreposição invertida.
+                  zIndex: mode === activeMode ? 2 : 1,
+                }}
               >
                 <Orb palette={modes[mode].palette} className="h-full w-full" />
               </div>
@@ -323,9 +388,8 @@ export default function OrbStage({
                       ? `Mudar para ${info.title}`
                       : `Ativar modo ${info.title}`
               }
-              className="absolute rounded-full transition-all duration-700 ease-out
-                focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-4
-                motion-reduce:transition-none"
+              className={`absolute rounded-full ${travel}
+                focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-4`}
               style={{ left: r.x - r.d / 2, top: r.y - r.d / 2, width: r.d, height: r.d }}
             >
               <span
