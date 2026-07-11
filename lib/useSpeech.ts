@@ -1,6 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ACTIVE_PATIENT_KEY } from "@/lib/patient";
+
+// A voz configurada é a do paciente ativo. Lida do espelho local (e não do
+// contexto React) para a fala funcionar em qualquer camada, inclusive offline.
+function activePatientId(): number | null {
+  try {
+    const v = Number(localStorage.getItem(ACTIVE_PATIENT_KEY));
+    return v || null;
+  } catch {
+    return null;
+  }
+}
 
 // Desfecho real de uma fala, derivado dos eventos de reprodução — nunca de
 // timers estimados. "bloqueada" = política de autoplay do navegador negou
@@ -129,7 +141,9 @@ export function useSpeech() {
       const gen = ++genRef.current;
       setSpeakingBoth(true);
       try {
-        let url = cache.current.get(text);
+        // O cache é por paciente: a voz de um nunca responde pelo outro.
+        const cacheKey = `${activePatientId() ?? "?"}|${text}`;
+        let url = cache.current.get(cacheKey);
         console.log("[EMERGENCY] cache lookup:", url ? "HIT" : "MISS");
         if (!url && elevenAvailable.current !== false) {
           try {
@@ -137,14 +151,14 @@ export function useSpeech() {
             const res = await fetch("/api/tts", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text }),
+              body: JSON.stringify({ text, patientId: activePatientId() }),
             });
             console.log("[EMERGENCY] TTS response received:", res.status);
             if (res.ok) {
               elevenAvailable.current = true;
               const blob = await res.blob();
               url = URL.createObjectURL(blob);
-              cache.current.set(text, url);
+              cache.current.set(cacheKey, url);
             } else if (res.status === 503) {
               elevenAvailable.current = false;
             }
@@ -251,16 +265,17 @@ export function useSpeech() {
   const prime = useCallback(async (texts: string[]): Promise<void> => {
     for (const text of texts) {
       if (elevenAvailable.current === false) return;
-      if (!text.trim() || cache.current.has(text)) continue;
+      const cacheKey = `${activePatientId() ?? "?"}|${text}`;
+      if (!text.trim() || cache.current.has(cacheKey)) continue;
       try {
         const res = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, patientId: activePatientId() }),
         });
         if (res.ok) {
           elevenAvailable.current = true;
-          cache.current.set(text, URL.createObjectURL(await res.blob()));
+          cache.current.set(cacheKey, URL.createObjectURL(await res.blob()));
         } else if (res.status === 503) {
           elevenAvailable.current = false;
         }

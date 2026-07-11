@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { GestureProvider } from "@/lib/gestures";
+import { PatientProvider } from "@/lib/patient";
 import { HeloProvider } from "@/lib/helo-state";
 
 const inter = Inter({
@@ -30,9 +30,9 @@ export default function RootLayout({
   return (
     <html lang="pt-BR" className={`${inter.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
-        <GestureProvider>
+        <PatientProvider>
           <HeloProvider>{children}</HeloProvider>
-        </GestureProvider>
+        </PatientProvider>
       </body>
     </html>
   );

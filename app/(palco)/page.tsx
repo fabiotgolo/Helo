@@ -47,7 +47,10 @@ export default function Home() {
   }, [playIntro, advance]);
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-between gap-6 px-4 pb-6 pt-12 sm:px-6">
+    // Espaço negativo dosado: o vão entre o CTA e o bloco da marca fica com
+    // METADE da folga (o restante desce para baixo do bloco) — respiro sem
+    // abismo entre as duas ilhas de conteúdo.
+    <main className="flex flex-1 flex-col items-center gap-6 px-4 pb-6 pt-12 sm:px-6">
       <div key={activeMode} className="fade-rise flex flex-col items-center gap-4 text-center">
         <p className="max-w-md text-ink-soft">{info.description}</p>
         <button
@@ -58,6 +61,8 @@ export default function Home() {
           {activeMode === "conversar" ? "Iniciar conversa" : `Abrir ${info.title.toLowerCase()}`}
         </button>
       </div>
+
+      <div aria-hidden="true" className="min-h-0 flex-1" />
 
       <div className="flex flex-col items-center gap-5">
         <div className="text-center">
@@ -81,6 +86,8 @@ export default function Home() {
           confirmada antes de ser comunicada, salva ou compartilhada.
         </p>
       </div>
+
+      <div aria-hidden="true" className="min-h-0 flex-1" />
     </main>
   );
 }

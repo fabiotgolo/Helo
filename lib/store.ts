@@ -1,10 +1,28 @@
 import { firestore } from "@/lib/firestore";
-import type { HeloEvent, HeloMessage } from "@/lib/types";
+import type {
+  HeloEvent,
+  HeloItemMode,
+  HeloMessage,
+  ModeItem,
+  ModeItemInput,
+  Patient,
+} from "@/lib/types";
+import {
+  DEFAULT_ITEMS,
+  MODE_SPEAKER_ROLE,
+  modeRequiresConfirmation,
+  PATIENT_SETTING_KEYS,
+} from "@/lib/defaults";
 
 // Camada de acesso a dados da Helo sobre o Firestore.
 // Substitui o SQLite (better-sqlite3), mantendo o mesmo contrato das rotas.
 // IDs numéricos de sessão e pessoa são derivados de Date.now() — o cliente
-// guarda e reutiliza esse número; o volume (um paciente) torna colisão irreal.
+// guarda e reutiliza esse número; o volume (poucos pacientes) torna colisão irreal.
+//
+// Isolamento por paciente: settings, people e items vivem em SUBCOLEÇÕES de
+// patients/{id} — uma escrita nunca alcança outro paciente por construção.
+// sessions/events/messages seguem globais (série histórica), carimbados com
+// patientId.
 
 const SP_TZ = "America/Sao_Paulo";
 
@@ -12,15 +30,295 @@ const col = {
   sessions: () => firestore.collection("sessions"),
   events: () => firestore.collection("events"),
   messages: () => firestore.collection("messages"),
-  people: () => firestore.collection("people"),
-  settings: () => firestore.collection("settings"),
+  patients: () => firestore.collection("patients"),
+  // Coleções legadas (fase de paciente único) — lidas apenas na migração.
+  legacyPeople: () => firestore.collection("people"),
+  legacySettings: () => firestore.collection("settings"),
 };
+
+const patientDoc = (patientId: number) =>
+  col.patients().doc(String(patientId));
+const sub = {
+  settings: (pid: number) => patientDoc(pid).collection("settings"),
+  people: (pid: number) => patientDoc(pid).collection("people"),
+  items: (pid: number) => patientDoc(pid).collection("items"),
+};
+
+// ---------- Pacientes ----------
+
+function toPatient(id: string, v: FirebaseFirestore.DocumentData): Patient {
+  return {
+    id: Number(id),
+    name: (v.name as string) ?? "Paciente",
+    active: v.active !== 0 && v.active !== false,
+    createdAt: (v.createdAt as string) ?? "",
+  };
+}
+
+export async function listPatients(): Promise<Patient[]> {
+  await ensureMigrated();
+  const snap = await col.patients().get();
+  return snap.docs
+    .map((d) => toPatient(d.id, d.data()))
+    .filter((p) => p.active)
+    .sort((a, b) => a.id - b.id);
+}
+
+export async function createPatient(name: string): Promise<Patient> {
+  const id = Date.now();
+  const patient: Patient = {
+    id,
+    name: name.trim() || "Paciente",
+    active: true,
+    createdAt: new Date().toISOString(),
+  };
+  await patientDoc(id).set({
+    name: patient.name,
+    active: 1,
+    createdAt: patient.createdAt,
+  });
+  // Cópia inicial do conteúdo padrão — a partir daqui, tudo é do paciente.
+  await Promise.all([
+    seedDefaults(id, "rotina"),
+    seedDefaults(id, "emergencia"),
+    seedDefaults(id, "conversa"),
+    setPatientSettings(id, { [PATIENT_SETTING_KEYS.name]: patient.name }),
+  ]);
+  return patient;
+}
+
+export async function updatePatient(
+  id: number,
+  updates: { name?: string; active?: boolean }
+): Promise<void> {
+  const data: Record<string, unknown> = {};
+  if (updates.name?.trim()) data.name = updates.name.trim();
+  if (updates.active !== undefined) data.active = updates.active ? 1 : 0;
+  if (Object.keys(data).length === 0) return;
+  await patientDoc(id).set(data, { merge: true });
+  if (typeof data.name === "string") {
+    await setPatientSettings(id, { [PATIENT_SETTING_KEYS.name]: data.name });
+  }
+}
+
+// ——— Migração da fase de paciente único ———
+// Na primeira leitura sem nenhum paciente cadastrado, cria o paciente inicial
+// a partir dos dados globais legados (settings.patient_name, people) e
+// semeia o conteúdo padrão. Nada é apagado das coleções legadas.
+//
+// O id do paciente migrado é FIXO (1): requisições concorrentes no primeiro
+// acesso escrevem o mesmo documento (e os itens têm ids determinísticos),
+// então a migração é idempotente — nunca nascem dois pacientes.
+const MIGRATED_PATIENT_ID = 1;
+let migrated = false;
+async function ensureMigrated(): Promise<void> {
+  if (migrated) return;
+  const snap = await col.patients().limit(1).get();
+  if (!snap.empty) {
+    migrated = true;
+    return;
+  }
+  const legacy = await getLegacySettings();
+  const id = MIGRATED_PATIENT_ID;
+  await patientDoc(id).set({
+    name: legacy.patient_name || "Paciente",
+    active: 1,
+    createdAt: new Date().toISOString(),
+  });
+  const settingsCopy: Record<string, string> = {};
+  for (const key of Object.values(PATIENT_SETTING_KEYS)) {
+    if (legacy[key]) settingsCopy[key] = legacy[key];
+  }
+  if (!settingsCopy[PATIENT_SETTING_KEYS.name]) {
+    settingsCopy[PATIENT_SETTING_KEYS.name] = legacy.patient_name || "Paciente";
+  }
+  const legacyPeopleSnap = await col.legacyPeople().where("active", "==", 1).get();
+  const batch = firestore.batch();
+  legacyPeopleSnap.docs.forEach((d) => {
+    batch.set(sub.people(id).doc(d.id), d.data());
+  });
+  await batch.commit();
+  await Promise.all([
+    setPatientSettings(id, settingsCopy),
+    seedDefaults(id, "rotina"),
+    seedDefaults(id, "emergencia"),
+    seedDefaults(id, "conversa"),
+  ]);
+  migrated = true;
+}
+
+async function getLegacySettings(): Promise<Record<string, string>> {
+  const snap = await col.legacySettings().get();
+  const out: Record<string, string> = {};
+  snap.docs.forEach((d) => {
+    const v = d.data().value;
+    if (v != null) out[d.id] = String(v);
+  });
+  return out;
+}
+
+// ---------- Itens de modo (Rotina, Emergência, expressões de Conversa) ----------
+
+function defaultDocId(defaultKey: string): string {
+  return defaultKey.replace(/[^\w.-]/g, "_");
+}
+
+function itemFromDefault(
+  patientId: number,
+  mode: HeloItemMode,
+  d: (typeof DEFAULT_ITEMS)[HeloItemMode][number],
+  order: number
+): Omit<ModeItem, "id"> {
+  return {
+    patientId,
+    mode,
+    label: d.label,
+    spokenText: d.spokenText,
+    category: d.category,
+    enabled: true,
+    order,
+    isDefault: true,
+    defaultKey: d.defaultKey,
+    speakerRole: MODE_SPEAKER_ROLE,
+    requiresConfirmation: modeRequiresConfirmation(mode),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function seedDefaults(patientId: number, mode: HeloItemMode): Promise<void> {
+  const batch = firestore.batch();
+  DEFAULT_ITEMS[mode].forEach((d, i) => {
+    batch.set(
+      sub.items(patientId).doc(defaultDocId(d.defaultKey)),
+      itemFromDefault(patientId, mode, d, i)
+    );
+  });
+  await batch.commit();
+}
+
+export async function listItems(
+  patientId: number,
+  mode: HeloItemMode
+): Promise<ModeItem[]> {
+  const snap = await sub.items(patientId).where("mode", "==", mode).get();
+  return snap.docs
+    .map((d) => ({ ...(d.data() as Omit<ModeItem, "id">), id: d.id }))
+    .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+}
+
+export async function addItem(
+  patientId: number,
+  mode: HeloItemMode,
+  input: ModeItemInput
+): Promise<ModeItem> {
+  if (!input.label?.trim() || !input.spokenText?.trim()) {
+    throw new Error("label e spokenText são obrigatórios");
+  }
+  const existing = await listItems(patientId, mode);
+  const item: Omit<ModeItem, "id"> = {
+    patientId,
+    mode,
+    label: input.label.trim(),
+    spokenText: input.spokenText.trim(),
+    category: input.category?.trim() || (mode === "emergencia" ? "emergencia" : "geral"),
+    enabled: input.enabled ?? true,
+    order: input.order ?? (existing.length > 0 ? existing[existing.length - 1].order + 1 : 0),
+    isDefault: false,
+    defaultKey: null,
+    speakerRole: MODE_SPEAKER_ROLE,
+    requiresConfirmation: modeRequiresConfirmation(mode),
+    updatedAt: new Date().toISOString(),
+  };
+  const id = `c${Date.now()}`;
+  await sub.items(patientId).doc(id).set(item);
+  return { ...item, id };
+}
+
+export async function updateItem(
+  patientId: number,
+  itemId: string,
+  input: ModeItemInput
+): Promise<void> {
+  const data: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if (input.label !== undefined) data.label = input.label.trim();
+  if (input.spokenText !== undefined) data.spokenText = input.spokenText.trim();
+  if (input.category !== undefined) data.category = input.category.trim();
+  if (input.enabled !== undefined) data.enabled = input.enabled;
+  if (input.order !== undefined) data.order = input.order;
+  if (data.label === "" || data.spokenText === "") {
+    throw new Error("label e spokenText não podem ficar vazios");
+  }
+  await sub.items(patientId).doc(itemId).set(data, { merge: true });
+}
+
+/** Reordena todos os itens do modo na sequência recebida. */
+export async function reorderItems(
+  patientId: number,
+  ids: string[]
+): Promise<void> {
+  const batch = firestore.batch();
+  const ts = new Date().toISOString();
+  ids.forEach((id, i) => {
+    batch.set(sub.items(patientId).doc(id), { order: i, updatedAt: ts }, { merge: true });
+  });
+  await batch.commit();
+}
+
+// Itens padrão não são excluídos — são desativados (não desaparecem em
+// silêncio e podem ser restaurados). Só itens criados pela família saem.
+export async function deleteItem(
+  patientId: number,
+  itemId: string
+): Promise<{ deleted: boolean; reason?: string }> {
+  const ref = sub.items(patientId).doc(itemId);
+  const doc = await ref.get();
+  if (!doc.exists) return { deleted: false, reason: "não encontrado" };
+  if (doc.data()?.isDefault) {
+    await ref.set(
+      { enabled: false, updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+    return { deleted: false, reason: "item padrão foi desativado, não excluído" };
+  }
+  await ref.delete();
+  return { deleted: true };
+}
+
+/**
+ * Restaura o conteúdo padrão do modo: itens padrão voltam ao texto, ordem e
+ * estado originais (recriados se excluídos); itens personalizados são
+ * preservados, reordenados após os padrão.
+ */
+export async function restoreDefaults(
+  patientId: number,
+  mode: HeloItemMode
+): Promise<void> {
+  const existing = await listItems(patientId, mode);
+  const custom = existing.filter((i) => !i.isDefault);
+  const batch = firestore.batch();
+  const defaults = DEFAULT_ITEMS[mode];
+  defaults.forEach((d, i) => {
+    batch.set(
+      sub.items(patientId).doc(defaultDocId(d.defaultKey)),
+      itemFromDefault(patientId, mode, d, i)
+    );
+  });
+  custom.forEach((c, i) => {
+    batch.set(
+      sub.items(patientId).doc(c.id),
+      { order: defaults.length + i, updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+  });
+  await batch.commit();
+}
 
 // ---------- Sessões ----------
 
 export async function createSession(
   mode: string,
-  operator?: string
+  operator?: string,
+  patientId?: number | null
 ): Promise<number> {
   const id = Date.now();
   await col.sessions().doc(String(id)).set({
@@ -28,6 +326,7 @@ export async function createSession(
     endedAt: null,
     operator: operator ?? null,
     mode: mode ?? "conversa",
+    patientId: patientId ?? null,
   });
   return id;
 }
@@ -44,6 +343,8 @@ export async function endSession(id: number): Promise<void> {
 export async function insertEvent(e: HeloEvent): Promise<void> {
   await col.events().add({
     sessionId: e.sessionId ?? null,
+    patientId: e.patientId ?? null,
+    itemId: e.itemId ?? null,
     type: e.type,
     category: e.category ?? null,
     question: e.question ?? null,
@@ -60,22 +361,29 @@ export async function insertEvent(e: HeloEvent): Promise<void> {
 export async function insertMessage(m: HeloMessage): Promise<string> {
   const ref = await col.messages().add({
     sessionId: m.sessionId ?? null,
+    patientId: m.patientId ?? null,
     text: m.text,
     category: m.category ?? null,
     sensitive: m.sensitive ? 1 : 0,
     status: m.status,
     confirmations: m.confirmations ?? 1,
+    // Contrato da orquestração de voz: a voz clonada do paciente só poderá
+    // ser usada com speakerRole "patient" + confirmationStatus "confirmed".
+    speakerRole: m.speakerRole ?? "patient",
+    confirmationStatus:
+      m.confirmationStatus ??
+      (m.status === "confirmada" ? "confirmed" : "rejected"),
     ts: new Date().toISOString(),
   });
   return ref.id;
 }
 
-// ---------- Pessoas ----------
+// ---------- Pessoas (por paciente) ----------
 
 export type Person = { id: number; name: string; relation: string | null };
 
-export async function listPeople(): Promise<Person[]> {
-  const snap = await col.people().where("active", "==", 1).get();
+export async function listPeople(patientId: number): Promise<Person[]> {
+  const snap = await sub.people(patientId).where("active", "==", 1).get();
   return snap.docs
     .map((d) => {
       const v = d.data();
@@ -89,11 +397,12 @@ export async function listPeople(): Promise<Person[]> {
 }
 
 export async function addPerson(
+  patientId: number,
   name: string,
   relation?: string | null
 ): Promise<number> {
   const id = Date.now();
-  await col.people().doc(String(id)).set({
+  await sub.people(patientId).doc(String(id)).set({
     name,
     relation: relation?.trim() || null,
     active: 1,
@@ -102,14 +411,19 @@ export async function addPerson(
   return id;
 }
 
-export async function deactivatePerson(id: number): Promise<void> {
-  await col.people().doc(String(id)).set({ active: 0 }, { merge: true });
+export async function deactivatePerson(
+  patientId: number,
+  id: number
+): Promise<void> {
+  await sub.people(patientId).doc(String(id)).set({ active: 0 }, { merge: true });
 }
 
-// ---------- Configurações ----------
+// ---------- Configurações (por paciente) ----------
 
-export async function getSettings(): Promise<Record<string, string>> {
-  const snap = await col.settings().get();
+export async function getPatientSettings(
+  patientId: number
+): Promise<Record<string, string>> {
+  const snap = await sub.settings(patientId).get();
   const out: Record<string, string> = {};
   snap.docs.forEach((d) => {
     const v = d.data().value;
@@ -118,16 +432,22 @@ export async function getSettings(): Promise<Record<string, string>> {
   return out;
 }
 
-export async function setSettings(updates: Record<string, string>): Promise<void> {
+export async function setPatientSettings(
+  patientId: number,
+  updates: Record<string, string>
+): Promise<void> {
   const batch = firestore.batch();
   for (const [key, value] of Object.entries(updates)) {
-    batch.set(col.settings().doc(key), { value }, { merge: true });
+    batch.set(sub.settings(patientId).doc(key), { value }, { merge: true });
   }
   await batch.commit();
 }
 
-export async function getSetting(key: string): Promise<string | undefined> {
-  const doc = await col.settings().doc(key).get();
+export async function getPatientSetting(
+  patientId: number,
+  key: string
+): Promise<string | undefined> {
+  const doc = await sub.settings(patientId).doc(key).get();
   const v = doc.exists ? doc.data()?.value : undefined;
   return v != null ? String(v) : undefined;
 }

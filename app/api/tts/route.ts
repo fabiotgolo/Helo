@@ -1,13 +1,14 @@
-import { getSetting } from "@/lib/store";
+import { getPatientSetting } from "@/lib/store";
 
 // Síntese de voz via ElevenLabs. Sem ELEVENLABS_API_KEY configurada,
 // responde 503 e o cliente usa a voz local do navegador (pt-BR).
 // A voz vem, em ordem: do corpo da requisição (prévia nos ajustes),
-// da configuração salva, da env, ou de um padrão multilíngue.
+// da voz configurada para o paciente, da env, ou de um padrão multilíngue.
 export async function POST(request: Request) {
-  const { text, voiceId } = (await request.json()) as {
+  const { text, voiceId, patientId } = (await request.json()) as {
     text?: string;
     voiceId?: string;
+    patientId?: number;
   };
   if (!text || typeof text !== "string" || text.length > 1000) {
     return Response.json({ error: "texto inválido" }, { status: 400 });
@@ -18,7 +19,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "sem chave ElevenLabs" }, { status: 503 });
   }
 
-  const saved = await getSetting("voice_id");
+  const saved = patientId
+    ? await getPatientSetting(Number(patientId), "voice_id").catch(() => undefined)
+    : undefined;
 
   const voice =
     voiceId || saved || process.env.ELEVENLABS_VOICE_ID || "onwK4e9ZLuTAKqWW03F9";

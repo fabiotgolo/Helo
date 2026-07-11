@@ -270,27 +270,6 @@ export const flow: Record<string, FlowNode> = Object.fromEntries(
 
 export const START_NODE = "inicio";
 
-// ——— Modo rotina: frases rápidas, funcionam sem IA ———
-export const ROTINA: { label: string; phrase: string; category: string }[] = [
-  { label: "Água", phrase: "Quero água, por favor.", category: "necessidades" },
-  { label: "Banheiro", phrase: "Preciso ir ao banheiro.", category: "necessidades" },
-  { label: "Estou com dor", phrase: "Estou com dor.", category: "dor" },
-  { label: "Quero descansar", phrase: "Quero descansar agora.", category: "necessidades" },
-  { label: "Estou com frio", phrase: "Estou com frio.", category: "conforto" },
-  { label: "Estou com calor", phrase: "Estou com calor.", category: "conforto" },
-  { label: "Estou bem", phrase: "Estou bem.", category: "sentimentos" },
-  { label: "Estou cansado", phrase: "Estou cansado.", category: "sentimentos" },
-  { label: "Não entendi", phrase: "Não entendi. Pode repetir?", category: "geral" },
-  { label: "Repita, por favor", phrase: "Repita, por favor.", category: "geral" },
-  { label: "Não é isso", phrase: "Não é isso que eu quis dizer.", category: "geral" },
-  { label: "Quero minha família", phrase: "Quero falar com a minha família.", category: "pessoas" },
-];
-
-// ——— Modo emergência: sempre disponível, não depende de IA ———
-export const EMERGENCIA: { label: string; phrase: string }[] = [
-  { label: "Falta de ar", phrase: "Estou com falta de ar. Preciso de ajuda agora." },
-  { label: "Dor forte", phrase: "Estou com uma dor forte. Preciso de ajuda agora." },
-  { label: "Preciso de ajuda", phrase: "Preciso de ajuda agora." },
-  { label: "Chamem alguém", phrase: "Quero que chamem alguém agora, por favor." },
-  { label: "Não estou bem", phrase: "Não estou me sentindo bem. Fiquem comigo." },
-];
+// As frases dos modos Rotina e Emergência migraram para lib/defaults.ts:
+// hoje são conteúdo padrão POR PACIENTE (personalizável em Ajustes), com o
+// mesmo texto de antes — nada foi perdido na transição.

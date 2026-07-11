@@ -12,6 +12,7 @@ Regras absolutas:
 - As opções devem ser alternativas plausíveis ao que o paciente já rejeitou — não repita opções rejeitadas.
 - Nunca sugira decisões médicas, legais ou financeiras definitivas.
 - Se o tema for sensível (dinheiro, herança, decisões médicas, conflitos, despedidas), marque "sensitive": true.
+- Quando houver um perfil do paciente, use-o apenas para adequar estilo, vocabulário e assuntos — nunca invente memórias, fatos ou sentimentos como se fossem do paciente, e nunca sugira temas listados como evitados.
 - Responda em português brasileiro.`;
 
 interface SuggestRequest {
@@ -20,6 +21,15 @@ interface SuggestRequest {
   rejected: string[];
   path: { question: string; answer: string }[];
   draft?: string[];
+  /** Perfil de comunicação do paciente — personaliza as sugestões sem
+   *  nunca substituir a confirmação por gesto. */
+  profile?: {
+    name?: string;
+    speechStyle?: string;
+    avoidedTopics?: string;
+    preferredExpressions?: string[];
+    people?: { name: string; relation: string | null }[];
+  };
 }
 
 const SCHEMA = {
@@ -51,7 +61,33 @@ export async function POST(request: Request) {
   const body = (await request.json()) as SuggestRequest;
   const client = new Anthropic();
 
+  const p = body.profile;
+  const perfil = p
+    ? [
+        p.name ? `Nome/tratamento do paciente: ${p.name}` : null,
+        p.speechStyle
+          ? `Jeito de falar do paciente (imitar tom e vocabulário): ${p.speechStyle}`
+          : null,
+        p.preferredExpressions?.length
+          ? `Expressões típicas do paciente (use como referência de estilo):\n${p.preferredExpressions
+              .map((e) => `- "${e}"`)
+              .join("\n")}`
+          : null,
+        p.people?.length
+          ? `Pessoas importantes: ${p.people
+              .map((x) => (x.relation ? `${x.name} (${x.relation})` : x.name))
+              .join(", ")}`
+          : null,
+        p.avoidedTopics
+          ? `Temas que NÃO devem ser sugeridos: ${p.avoidedTopics}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : null;
+
   const contexto = [
+    perfil ? `Perfil do paciente:\n${perfil}` : null,
     `Pergunta atual: ${body.question}`,
     `Tema: ${body.category}`,
     body.path.length > 0

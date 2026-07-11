@@ -23,13 +23,14 @@ export async function saveMessage(m: HeloMessage): Promise<void> {
 
 export async function startSession(
   mode: string,
-  operator?: string
+  operator?: string,
+  patientId?: number | null
 ): Promise<number | null> {
   try {
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, operator }),
+      body: JSON.stringify({ mode, operator, patientId }),
     });
     const data = (await res.json()) as { id: number };
     return data.id;

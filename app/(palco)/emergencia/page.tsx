@@ -1,29 +1,53 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { EMERGENCIA } from "@/lib/flow";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePatient, usePatientItems } from "@/lib/patient";
+import { DEFAULT_ITEMS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { OverlayVeil } from "@/components/overlay-panel";
 
-// Modo emergência: frases críticas fixas, sem IA e sem etapas.
-// O toque do assistente é a confirmação — a voz sai na hora.
+// Modo emergência: frases críticas DO PACIENTE (editáveis em Ajustes, nunca
+// aqui), sem IA e sem etapas. O toque do assistente é a confirmação — a voz
+// sai na hora. O espelho local garante o modo mesmo sem rede; sem nada em
+// cache (primeiro uso offline), o conteúdo padrão entra como rede de
+// segurança — a Emergência nunca abre vazia.
 //
 // Fase 8 — Emergência imersiva: o orbe âmbar assume o centro do palco e as
 // ações flutuam direto sobre ele, que segue visível e animado ao fundo.
 // Diferente dos outros modos, o conteúdo entra SEM animação (nada de
 // fade-rise): as ações de socorro estão legíveis e clicáveis no primeiro
 // frame, enquanto a transição visual do orbe termina por conta própria.
+type EmergencyAction = { itemId: string | null; label: string; phrase: string };
+
 export default function EmergenciaPage() {
   const { speak, prime } = useHelo();
+  const { patientId } = usePatient();
+  const { enabledItems, loading } = usePatientItems("emergencia");
   const sessionRef = useRef<number | null>(null);
   const sessionPending = useRef<Promise<number | null> | null>(null);
+
+  const actions: EmergencyAction[] = useMemo(() => {
+    if (enabledItems.length > 0) {
+      return enabledItems.map((i) => ({
+        itemId: i.id,
+        label: i.label,
+        phrase: i.spokenText,
+      }));
+    }
+    if (loading) return [];
+    return DEFAULT_ITEMS.emergencia.map((d) => ({
+      itemId: null,
+      label: d.label,
+      phrase: d.spokenText,
+    }));
+  }, [enabledItems, loading]);
 
   // Pré-aquece o áudio das frases: o toque reproduz na hora, com a voz
   // clonada, e continua falando mesmo se a rede cair depois de entrar.
   useEffect(() => {
-    void prime(EMERGENCIA.map((item) => item.phrase));
-  }, [prime]);
+    if (actions.length > 0) void prime(actions.map((item) => item.phrase));
+  }, [prime, actions]);
 
   useEffect(() => {
     const handler = () => endSession(sessionRef.current);
@@ -39,14 +63,14 @@ export default function EmergenciaPage() {
   const ensureSession = useCallback(() => {
     if (sessionRef.current != null) return Promise.resolve(sessionRef.current);
     if (!sessionPending.current) {
-      sessionPending.current = startSession("emergencia").then((id) => {
+      sessionPending.current = startSession("emergencia", undefined, patientId).then((id) => {
         sessionRef.current = id;
         if (id == null) sessionPending.current = null;
         return id;
       });
     }
     return sessionPending.current;
-  }, []);
+  }, [patientId]);
 
   // Feedback visível do toque: nenhum caminho pode ser silencioso — o
   // assistente sempre vê que o toque foi recebido e se a voz falhou.
@@ -55,7 +79,7 @@ export default function EmergenciaPage() {
   >(null);
 
   const trigger = useCallback(
-    (item: { label: string; phrase: string }) => {
+    (item: EmergencyAction) => {
       console.log("[EMERGENCY] click received:", item.label);
       console.log("[EMERGENCY] phrase selected:", item.phrase);
       setFeedback({ label: item.label, status: "falando" });
@@ -89,16 +113,28 @@ export default function EmergenciaPage() {
         });
       // Registro é segundo plano: falha de rede não silencia o pedido.
       void ensureSession().then((sid) => {
-        logEvent({ sessionId: sid, type: "emergencia", category: "emergencia", detail: item.phrase });
+        logEvent({
+          sessionId: sid,
+          patientId,
+          itemId: item.itemId ?? undefined,
+          type: "emergencia",
+          category: "emergencia",
+          detail: item.phrase,
+        });
         void saveMessage({
           sessionId: sid,
+          patientId,
           text: item.phrase,
           category: "emergencia",
           status: "confirmada",
+          speakerRole: "patient",
+          // Regra do produto: em emergência o toque do assistente é a
+          // confirmação — não há gesto na frente do socorro.
+          confirmationStatus: "confirmed",
         });
       });
     },
-    [speak, ensureSession]
+    [speak, ensureSession, patientId]
   );
 
   return (
@@ -130,12 +166,16 @@ export default function EmergenciaPage() {
             )}
           </div>
 
+          {actions.length === 0 && loading && (
+            <p className="text-center text-ink-mute">Carregando as ações do paciente…</p>
+          )}
+
           <div className="flex flex-col gap-4">
-            {EMERGENCIA.map((item) => {
+            {actions.map((item) => {
               const isActive = feedback?.label === item.label && feedback.status === "falando";
               return (
                 <button
-                  key={item.label}
+                  key={item.itemId ?? item.label}
                   type="button"
                   onClick={() => trigger(item)}
                   className={`rounded-3xl border-2 px-6 py-7 text-left shadow-[var(--shadow-soft)] backdrop-blur-md transition-transform hover:scale-[1.02] active:scale-[0.98] ${

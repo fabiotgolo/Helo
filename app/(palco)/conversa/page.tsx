@@ -5,6 +5,8 @@ import Link from "next/link";
 import { flow, compose, START_NODE, type FlowNode, type Option } from "@/lib/flow";
 import { GESTURES, type Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
+import { usePatient, usePatientItems } from "@/lib/patient";
+import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { GestureTriplet } from "@/components/ui";
@@ -32,11 +34,15 @@ export default function ConversaPage() {
   const { speak, speaking } = useHelo();
 
   const gestures = useGestures();
+  // Perfil do paciente ativo: nome, estilo de fala, temas evitados e
+  // expressões preferidas alimentam a conversa e as sugestões da IA.
+  const { patientId, settings } = usePatient();
+  const { enabledItems: preferredExpressions } = usePatientItems("conversa");
+  const patientName = settings[PATIENT_SETTING_KEYS.name] ?? "";
   const [phase, setPhase] = useState<Phase>("intro");
   const [paused, setPaused] = useState(false);
   const [operator, setOperator] = useState("");
   const [sessionId, setSessionId] = useState<number | null>(null);
-  const [patientName, setPatientName] = useState("");
   const [people, setPeople] = useState<Person[]>([]);
 
   const [nodeId, setNodeId] = useState(START_NODE);
@@ -79,15 +85,17 @@ export default function ConversaPage() {
   useEffect(() => {
     const saved = localStorage.getItem("helo.operator");
     if (saved) setOperator(saved);
-    void fetch("/api/settings")
-      .then((r) => r.json())
-      .then((s: Record<string, string>) => setPatientName(s.patient_name ?? ""))
-      .catch(() => {});
-    void fetch("/api/people")
-      .then((r) => r.json())
-      .then((d: { people: Person[] }) => setPeople(d.people))
-      .catch(() => {});
   }, []);
+
+  // Rede de pessoas DO paciente ativo — troca de paciente, troca a rede.
+  useEffect(() => {
+    if (patientId == null) return;
+    setPeople([]);
+    void fetch(`/api/people?patientId=${patientId}`)
+      .then((r) => r.json())
+      .then((d: { people: Person[] }) => setPeople(d.people ?? []))
+      .catch(() => {});
+  }, [patientId]);
 
   // ——— Navegação entre nós ———
 
@@ -104,13 +112,14 @@ export default function ConversaPage() {
       shownAt.current = Date.now();
       logEvent({
         sessionId,
+        patientId,
         type: "pergunta_apresentada",
         category: n.category,
         question: n.question,
       });
       void speak(n.question);
     },
-    [sessionId, speak]
+    [sessionId, patientId, speak]
   );
 
   const toConfirm = useCallback(
@@ -137,6 +146,18 @@ export default function ConversaPage() {
             category: n.category,
             rejected: rejectedLog.current,
             path: pathLog.current.slice(-8),
+            // Perfil do paciente: adapta estilo e vocabulário das sugestões.
+            // A confirmação por gesto continua obrigatória — perfil não é
+            // consentimento.
+            profile: {
+              name: patientName || undefined,
+              speechStyle: settings[PATIENT_SETTING_KEYS.speechStyle] || undefined,
+              avoidedTopics: settings[PATIENT_SETTING_KEYS.avoidedTopics] || undefined,
+              preferredExpressions: preferredExpressions
+                .slice(0, 12)
+                .map((e) => e.spokenText),
+              people: people.map((p) => ({ name: p.name, relation: p.relation })),
+            },
           }),
         });
         if (!res.ok) return false;
@@ -147,6 +168,7 @@ export default function ConversaPage() {
         shownAt.current = Date.now();
         logEvent({
           sessionId,
+          patientId,
           type: "opcao_apresentada",
           category: n.category,
           question: n.question,
@@ -161,7 +183,7 @@ export default function ConversaPage() {
         setAiLoading(false);
       }
     },
-    [sessionId, speak]
+    [sessionId, patientId, speak, patientName, settings, preferredExpressions, people]
   );
 
   const goBackToPrevious = useCallback(() => {
@@ -185,6 +207,7 @@ export default function ConversaPage() {
         // Nem as sugestões da IA serviram — devolve a direção ao paciente
         logEvent({
           sessionId,
+          patientId,
           type: "opcao_apresentada",
           category: n.category,
           question: n.question,
@@ -200,6 +223,7 @@ export default function ConversaPage() {
         shownAt.current = Date.now();
         logEvent({
           sessionId,
+          patientId,
           type: "opcao_apresentada",
           category: n.category,
           question: n.question,
@@ -213,6 +237,7 @@ export default function ConversaPage() {
         if (!gotAI) {
           logEvent({
             sessionId,
+            patientId,
             type: "opcao_apresentada",
             category: n.category,
             question: n.question,
@@ -222,7 +247,7 @@ export default function ConversaPage() {
         }
       }
     },
-    [batch, effectiveOptions, aiOptions, sessionId, speak, trySuggestions, goBackToPrevious]
+    [batch, effectiveOptions, aiOptions, sessionId, patientId, speak, trySuggestions, goBackToPrevious]
   );
 
   // ——— Gestos ———
@@ -232,6 +257,7 @@ export default function ConversaPage() {
       if (node.kind !== "pergunta") return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: node.category,
         question: node.question,
@@ -246,7 +272,7 @@ export default function ConversaPage() {
         toConfirm(compose(target.phrase, ctx), node.category, Boolean(node.sensitive), node.id);
       }
     },
-    [node, batch, ctx, sessionId, enterNode, toConfirm]
+    [node, batch, ctx, sessionId, patientId, enterNode, toConfirm]
   );
 
   const onOptionGesture = useCallback(
@@ -257,6 +283,7 @@ export default function ConversaPage() {
       if (!option || marks[idx]) return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: node.category,
         question: option.label,
@@ -291,7 +318,7 @@ export default function ConversaPage() {
         void advanceBatch(node);
       }
     },
-    [node, batchOptions, aiOptions, marks, ctx, batch, sessionId, enterNode, toConfirm, advanceBatch]
+    [node, batchOptions, aiOptions, marks, ctx, batch, sessionId, patientId, enterNode, toConfirm, advanceBatch]
   );
 
   const onConfirmGesture = useCallback(
@@ -299,6 +326,7 @@ export default function ConversaPage() {
       if (!confirm) return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: confirm.category,
         question:
@@ -317,12 +345,14 @@ export default function ConversaPage() {
         }
         logEvent({
           sessionId,
+          patientId,
           type: "confirmacao",
           category: confirm.category,
           detail: confirm.fromAI ? `${confirm.phrase} (sugestão IA)` : confirm.phrase,
         });
         void saveMessage({
           sessionId,
+          patientId,
           text: confirm.phrase,
           category: confirm.category,
           sensitive: confirm.sensitive,
@@ -337,6 +367,7 @@ export default function ConversaPage() {
       if (g === "talvez") {
         logEvent({
           sessionId,
+          patientId,
           type: "reformulacao",
           category: confirm.category,
           detail: confirm.phrase,
@@ -350,12 +381,14 @@ export default function ConversaPage() {
       // ✊ descartar — nada é dito em nome do paciente
       logEvent({
         sessionId,
+        patientId,
         type: "descarte",
         category: confirm.category,
         detail: confirm.phrase,
       });
       void saveMessage({
         sessionId,
+        patientId,
         text: confirm.phrase,
         category: confirm.category,
         sensitive: confirm.sensitive,
@@ -365,14 +398,14 @@ export default function ConversaPage() {
       setConfirm(null);
       enterNode(START_NODE);
     },
-    [confirm, sessionId, speak, enterNode]
+    [confirm, sessionId, patientId, speak, enterNode]
   );
 
   // ——— Controles do assistente ———
 
   const begin = useCallback(async () => {
     localStorage.setItem("helo.operator", operator);
-    const id = await startSession("conversa", operator || undefined);
+    const id = await startSession("conversa", operator || undefined, patientId);
     setSessionId(id);
     setPhase("node");
     setNodeId(START_NODE);
@@ -386,6 +419,7 @@ export default function ConversaPage() {
     shownAt.current = Date.now();
     logEvent({
       sessionId: id,
+      patientId,
       type: "pergunta_apresentada",
       category: "geral",
       question: flow[START_NODE].question,
@@ -393,7 +427,7 @@ export default function ConversaPage() {
     // Vocativo com o nome do paciente: "Dr. Fábio, o que você quer comunicar?"
     const q = flow[START_NODE].question;
     void speak(patientName ? `${patientName}, ${q.charAt(0).toLowerCase()}${q.slice(1)}` : q);
-  }, [operator, patientName, speak]);
+  }, [operator, patientName, patientId, speak]);
 
   const repeat = useCallback(() => {
     if (phase === "confirm" && confirm) {
@@ -406,24 +440,25 @@ export default function ConversaPage() {
   const uncertain = useCallback(() => {
     logEvent({
       sessionId,
+      patientId,
       type: "gesto_incerto",
       category: node.category,
       question: phase === "confirm" ? confirm?.phrase : node.question,
     });
     void speak("Sem problema. Vou repetir.");
     setTimeout(repeat, 400);
-  }, [sessionId, node, phase, confirm, speak, repeat]);
+  }, [sessionId, patientId, node, phase, confirm, speak, repeat]);
 
   const togglePause = useCallback(() => {
     if (paused) {
-      logEvent({ sessionId, type: "retomada" });
+      logEvent({ sessionId, patientId, type: "retomada" });
       setPaused(false);
       shownAt.current = Date.now();
     } else {
-      logEvent({ sessionId, type: "pausa" });
+      logEvent({ sessionId, patientId, type: "pausa" });
       setPaused(true);
     }
-  }, [paused, sessionId]);
+  }, [paused, sessionId, patientId]);
 
   const goBack = useCallback(() => {
     const prev = history[history.length - 1];

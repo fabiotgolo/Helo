@@ -1,30 +1,65 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ROTINA } from "@/lib/flow";
-import type { Gesture } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Gesture, ModeItem } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
+import { usePatient, usePatientItems } from "@/lib/patient";
+import { DEFAULT_ITEMS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { GestureTriplet } from "@/components/ui";
 import { OverlayVeil } from "@/components/overlay-panel";
 
-type Pending = { label: string; phrase: string; category: string };
+// Modo rotina: as frases rápidas são DO PACIENTE (personalizáveis em
+// Ajustes), com espelho local — o modo continua funcionando sem IA e sem
+// rede. Se ainda não há nada carregado (primeiro uso offline), o conteúdo
+// padrão da Helo entra como rede de segurança.
+
+type Pending = {
+  itemId: string | null;
+  label: string;
+  phrase: string;
+  category: string;
+};
 
 export default function RotinaPage() {
   const { speak } = useHelo();
   const gestures = useGestures();
+  const { patientId } = usePatient();
+  const { enabledItems, loading } = usePatientItems("rotina");
   const [pending, setPending] = useState<Pending | null>(null);
   const sessionRef = useRef<number | null>(null);
   // Marcado em propose(); o valor inicial nunca é lido (onGesture exige pending)
   const shownAt = useRef(0);
+  // Trava contra duplo toque: o gesto vale uma única vez por confirmação.
+  const answeredRef = useRef(false);
+
+  // Rede de segurança: sem itens do paciente (primeiro uso sem rede),
+  // a Rotina apresenta o conteúdo padrão — nunca uma tela vazia.
+  const items: Pending[] = useMemo(() => {
+    if (enabledItems.length > 0) {
+      return enabledItems.map((i: ModeItem) => ({
+        itemId: i.id,
+        label: i.label,
+        phrase: i.spokenText,
+        category: i.category,
+      }));
+    }
+    if (loading) return [];
+    return DEFAULT_ITEMS.rotina.map((d) => ({
+      itemId: null,
+      label: d.label,
+      phrase: d.spokenText,
+      category: d.category,
+    }));
+  }, [enabledItems, loading]);
 
   const ensureSession = useCallback(async () => {
     if (sessionRef.current == null) {
-      sessionRef.current = await startSession("rotina");
+      sessionRef.current = await startSession("rotina", undefined, patientId);
     }
     return sessionRef.current;
-  }, []);
+  }, [patientId]);
 
   useEffect(() => {
     const handler = () => endSession(sessionRef.current);
@@ -39,24 +74,30 @@ export default function RotinaPage() {
     async (item: Pending) => {
       const sid = await ensureSession();
       setPending(item);
+      answeredRef.current = false;
       shownAt.current = Date.now();
       logEvent({
         sessionId: sid,
+        patientId,
+        itemId: item.itemId ?? undefined,
         type: "pergunta_apresentada",
         category: item.category,
         question: `Confirma: ${item.phrase}`,
       });
       void speak(`Você quer dizer: ${item.phrase} — Confirma?`);
     },
-    [ensureSession, speak]
+    [ensureSession, speak, patientId]
   );
 
   const onGesture = useCallback(
     (g: Gesture) => {
-      if (!pending) return;
+      if (!pending || answeredRef.current) return;
+      answeredRef.current = true;
       const sid = sessionRef.current;
       logEvent({
         sessionId: sid,
+        patientId,
+        itemId: pending.itemId ?? undefined,
         type: "gesto",
         category: pending.category,
         question: `Confirma: ${pending.phrase}`,
@@ -64,28 +105,34 @@ export default function RotinaPage() {
         responseMs: Date.now() - shownAt.current,
       });
       if (g === "sim") {
-        logEvent({ sessionId: sid, type: "confirmacao", category: pending.category, detail: pending.phrase });
+        logEvent({ sessionId: sid, patientId, type: "confirmacao", category: pending.category, detail: pending.phrase });
         void saveMessage({
           sessionId: sid,
+          patientId,
           text: pending.phrase,
           category: pending.category,
           status: "confirmada",
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
         });
         void speak(pending.phrase);
       } else if (g === "nao") {
-        logEvent({ sessionId: sid, type: "descarte", category: pending.category, detail: pending.phrase });
+        logEvent({ sessionId: sid, patientId, type: "descarte", category: pending.category, detail: pending.phrase });
         void saveMessage({
           sessionId: sid,
+          patientId,
           text: pending.phrase,
           category: pending.category,
           status: "descartada",
+          speakerRole: "patient",
+          confirmationStatus: "rejected",
         });
       } else {
-        logEvent({ sessionId: sid, type: "reformulacao", category: pending.category, detail: pending.phrase });
+        logEvent({ sessionId: sid, patientId, type: "reformulacao", category: pending.category, detail: pending.phrase });
       }
       setPending(null);
     },
-    [pending, speak]
+    [pending, speak, patientId]
   );
 
   return (
@@ -127,10 +174,14 @@ export default function RotinaPage() {
               </p>
             </div>
 
+            {items.length === 0 && loading && (
+              <p className="text-center text-ink-mute">Carregando as frases do paciente…</p>
+            )}
+
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              {ROTINA.map((item) => (
+              {items.map((item) => (
                 <button
-                  key={item.label}
+                  key={item.itemId ?? item.label}
                   type="button"
                   onClick={() => void propose(item)}
                   className="rounded-3xl border border-line/70 bg-card/70 px-5 py-8 text-xl font-medium tracking-tight shadow-[var(--shadow-soft)] backdrop-blur-md transition-transform hover:scale-[1.03] active:scale-[0.98]"

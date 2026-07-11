@@ -1,11 +1,12 @@
 import { createSession, endSession } from "@/lib/store";
 
 export async function POST(request: Request) {
-  const { operator, mode } = (await request.json()) as {
+  const { operator, mode, patientId } = (await request.json()) as {
     operator?: string;
     mode?: string;
+    patientId?: number | null;
   };
-  const id = await createSession(mode ?? "conversa", operator);
+  const id = await createSession(mode ?? "conversa", operator, patientId);
   return Response.json({ id });
 }
 
