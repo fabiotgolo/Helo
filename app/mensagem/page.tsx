@@ -253,9 +253,16 @@ export default function MensagemPage() {
           text: fullMessage,
           category: "mensagem",
           status: "confirmada",
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
         });
         setPhase("done");
-        void speak(fullMessage);
+        // Mensagem confirmada em nome do PACIENTE — voz clonada dele quando houver.
+        void speak(fullMessage, {
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
+          patientId,
+        });
       } else if (g === "talvez") {
         // Reformular: remove a última frase e volta a perguntar
         const removed = draft[draft.length - 1];
@@ -272,6 +279,8 @@ export default function MensagemPage() {
           text: fullMessage,
           category: "mensagem",
           status: "descartada",
+          speakerRole: "patient",
+          confirmationStatus: "rejected",
         });
         setDraft([]);
         setPhase("intro");
@@ -436,7 +445,13 @@ export default function MensagemPage() {
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => void speak(fullMessage)}
+                onClick={() =>
+                  void speak(fullMessage, {
+                    speakerRole: "patient",
+                    confirmationStatus: "confirmed",
+                    patientId,
+                  })
+                }
                 className="rounded-full border border-line bg-card px-6 py-3 font-medium hover:border-ink-mute"
               >
                 🔊 Repetir

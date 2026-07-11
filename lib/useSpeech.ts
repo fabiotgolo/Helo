@@ -2,9 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ACTIVE_PATIENT_KEY } from "@/lib/patient";
+import {
+  audioCacheKey,
+  patientCloneAllowed,
+  type ActiveSpeaker,
+  type SpeakOptions,
+  type VoiceSource,
+} from "@/lib/voice";
 
-// A voz configurada é a do paciente ativo. Lida do espelho local (e não do
-// contexto React) para a fala funcionar em qualquer camada, inclusive offline.
+// Paciente ativo lido do espelho local (e não do contexto React) para a fala
+// funcionar em qualquer camada, inclusive offline.
 function activePatientId(): number | null {
   try {
     const v = Number(localStorage.getItem(ACTIVE_PATIENT_KEY));
@@ -19,9 +26,20 @@ function activePatientId(): number | null {
 // a reprodução sem gesto do usuário (não é erro; tentar após interação).
 export type SpeakResult = "concluida" | "interrompida" | "bloqueada" | "erro";
 
-// Voz do Helo: tenta ElevenLabs via /api/tts; sem chave ou em caso de
-// falha, cai para a voz local do navegador em pt-BR. Áudios já gerados
-// ficam em cache para repetição instantânea ("Repita, por favor").
+// ——— Orquestrador de voz da Helo (VoiceOrchestrator) ———
+// Duas vozes, ambas ElevenLabs, escolhidas pela AUTORIA da fala (não pela tela):
+//   speak(text)                              → voz oficial da plataforma Helo;
+//   speak(text, { speakerRole: "patient",
+//                 confirmationStatus, patientId }) → voz clonada do paciente,
+//                 somente com a confirmação exigida pelo fluxo.
+// A resolução do voiceId é do servidor (/api/tts); aqui ficam o bloqueio de
+// domínio da confirmação, a validação do paciente ativo, o cache por
+// papel+paciente e os estados consumidos pela interface e pelo Orb.
+//
+// Fallback aprovado (nunca substituição silenciosa): se a ElevenLabs estiver
+// indisponível, a voz local do navegador entra CLARAMENTE identificada
+// (engine "navegador", activeVoiceSource "approvedFallback") — regra do
+// produto: uma frase de socorro nunca morre em silêncio.
 //
 // Expõe também getAmplitude(): volume instantâneo 0–1 da fala em curso,
 // para o orbe reagir à voz. Com ElevenLabs a medição é real (AnalyserNode);
@@ -29,7 +47,9 @@ export type SpeakResult = "concluida" | "interrompida" | "bloqueada" | "erro";
 export function useSpeech() {
   const [speaking, setSpeaking] = useState(false);
   const [engine, setEngine] = useState<"elevenlabs" | "navegador">("navegador");
-  const cache = useRef<Map<string, string>>(new Map());
+  const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>("none");
+  const [activeVoiceSource, setActiveVoiceSource] = useState<VoiceSource>("none");
+  const cache = useRef<Map<string, { url: string; source: VoiceSource }>>(new Map());
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const elevenAvailable = useRef<boolean | null>(null);
   const speakingRef = useRef(false);
@@ -46,6 +66,10 @@ export function useSpeech() {
   const setSpeakingBoth = useCallback((v: boolean) => {
     speakingRef.current = v;
     setSpeaking(v);
+    if (!v) {
+      setActiveSpeaker("none");
+      setActiveVoiceSource("none");
+    }
   }, []);
 
   // Elemento único, reutilizado em todas as falas — permite ligar o
@@ -86,6 +110,8 @@ export function useSpeech() {
 
   useEffect(() => stop, [stop]);
 
+  // Fallback aprovado: voz local do navegador em pt-BR, claramente
+  // identificada — nunca apresentada como voz da Helo nem do paciente.
   const speakBrowser = useCallback((text: string) => {
     return new Promise<SpeakResult>((resolve) => {
       const synth = window.speechSynthesis;
@@ -134,47 +160,96 @@ export function useSpeech() {
     });
   }, []);
 
+  // Resolve a autoria e busca (ou reaproveita) o áudio ElevenLabs da fala.
+  // Devolve null quando a ElevenLabs não pôde atender — o chamador decide o
+  // fallback. Nunca devolve áudio de outro paciente: a chave de cache inclui
+  // papel e paciente, e o patientId é validado contra o paciente ativo.
+  const fetchElevenAudio = useCallback(
+    async (
+      text: string,
+      opts: Required<Pick<SpeakOptions, "speakerRole" | "confirmationStatus">> & {
+        patientId: number | null;
+      }
+    ): Promise<{ url: string; source: VoiceSource } | null> => {
+      const { speakerRole, confirmationStatus, patientId } = opts;
+      const cacheKey = audioCacheKey(speakerRole, patientId, text);
+      const cached = cache.current.get(cacheKey);
+      console.log("[EMERGENCY] cache lookup:", cached ? "HIT" : "MISS");
+      if (cached) return cached;
+      if (elevenAvailable.current === false) return null;
+      try {
+        console.log("[EMERGENCY] TTS request started");
+        const res = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            speakerRole,
+            confirmationStatus,
+            patientId: speakerRole === "patient" ? patientId : undefined,
+          }),
+        });
+        console.log("[EMERGENCY] TTS response received:", res.status);
+        if (res.ok) {
+          elevenAvailable.current = true;
+          const source =
+            (res.headers.get("X-Voice-Source") as VoiceSource | null) ??
+            (speakerRole === "patient" ? "patientElevenLabsClone" : "heloElevenLabs");
+          const entry = { url: URL.createObjectURL(await res.blob()), source };
+          cache.current.set(cacheKey, entry);
+          return entry;
+        }
+        if (res.status === 503) elevenAvailable.current = false;
+      } catch (err) {
+        // Rede indisponível: a fala não pode falhar — o chamador segue para
+        // o fallback aprovado (voz local do navegador, identificada).
+        console.error("[EMERGENCY ERROR] TTS fetch:", (err as Error)?.message ?? err);
+      }
+      return null;
+    },
+    []
+  );
+
   const speak = useCallback(
-    async (text: string): Promise<SpeakResult> => {
+    async (text: string, options?: SpeakOptions): Promise<SpeakResult> => {
       if (!text.trim()) return "concluida";
+      const speakerRole = options?.speakerRole ?? "helo";
+      const confirmationStatus = options?.confirmationStatus ?? "notRequired";
+      // Fala do paciente sempre valida o contexto do paciente ATIVO — uma
+      // troca rápida de paciente nunca reproduz a voz (ou o cache) errado.
+      const patientId =
+        speakerRole === "patient"
+          ? options?.patientId ?? activePatientId()
+          : null;
+      if (speakerRole === "patient" && patientId !== activePatientId()) {
+        console.error("[VOZ] fala do paciente com patientId fora do contexto ativo — bloqueada");
+        return "erro";
+      }
+      // Bloqueio de domínio (regra obrigatória): a voz clonada do paciente
+      // nunca soa antes da confirmação exigida pelo fluxo. O servidor aplica
+      // o mesmo bloqueio — a interface não é a única barreira.
+      if (speakerRole === "patient" && !patientCloneAllowed(speakerRole, confirmationStatus)) {
+        console.error("[VOZ] fala do paciente sem confirmação exigida — bloqueada");
+        return "erro";
+      }
       stop();
       const gen = ++genRef.current;
       setSpeakingBoth(true);
+      setActiveSpeaker(speakerRole === "patient" ? "patient" : "platform");
       try {
-        // O cache é por paciente: a voz de um nunca responde pelo outro.
-        const cacheKey = `${activePatientId() ?? "?"}|${text}`;
-        let url = cache.current.get(cacheKey);
-        console.log("[EMERGENCY] cache lookup:", url ? "HIT" : "MISS");
-        if (!url && elevenAvailable.current !== false) {
-          try {
-            console.log("[EMERGENCY] TTS request started");
-            const res = await fetch("/api/tts", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text, patientId: activePatientId() }),
-            });
-            console.log("[EMERGENCY] TTS response received:", res.status);
-            if (res.ok) {
-              elevenAvailable.current = true;
-              const blob = await res.blob();
-              url = URL.createObjectURL(blob);
-              cache.current.set(cacheKey, url);
-            } else if (res.status === 503) {
-              elevenAvailable.current = false;
-            }
-          } catch (err) {
-            // Rede indisponível: a fala não pode falhar — segue para a
-            // voz local do navegador, que funciona offline.
-            console.error("[EMERGENCY ERROR] TTS fetch:", (err as Error)?.message ?? err);
-          }
-        }
+        const entry = await fetchElevenAudio(text, {
+          speakerRole,
+          confirmationStatus,
+          patientId,
+        });
         // stop() chegou enquanto o áudio ainda era preparado — não toca
         if (genRef.current !== gen) {
           console.warn("[EMERGENCY] interrompida antes de tocar (stop durante preparação)");
           return "interrompida";
         }
-        if (url) {
+        if (entry) {
           setEngine("elevenlabs");
+          setActiveVoiceSource(entry.source);
           const audio = ensureAudio();
           console.log("[EMERGENCY] audio object created; AudioContext:", audioCtxRef.current?.state ?? "sem Web Audio");
           // AudioContext suspenso = play() "funciona" mas SEM som — o áudio
@@ -211,7 +286,7 @@ export function useSpeech() {
               audio.pause();
             }, 2500);
             settleRef.current = settle;
-            audio.src = url;
+            audio.src = entry.url;
             audio.muted = false;
             audio.volume = 1;
             audio.onplaying = () => {
@@ -240,13 +315,14 @@ export function useSpeech() {
             });
           });
           // Falha de reprodução (não interrupção/autoplay): a fala não pode
-          // morrer em silêncio — tenta a voz local do navegador.
+          // morrer em silêncio — tenta o fallback aprovado do navegador.
           if (r !== "erro") return r;
           if (genRef.current !== gen) return "interrompida";
-          console.warn("[EMERGENCY] áudio ElevenLabs falhou — tentando voz do navegador");
+          console.warn("[EMERGENCY] áudio ElevenLabs falhou — fallback aprovado (voz do navegador)");
         }
-        console.log("[EMERGENCY] fallback: voz local do navegador");
+        console.log("[EMERGENCY] fallback aprovado: voz local do navegador");
         setEngine("navegador");
+        setActiveVoiceSource("approvedFallback");
         return await speakBrowser(text);
       } finally {
         // Só a fala mais recente encerra o estado — uma fala antiga
@@ -254,36 +330,36 @@ export function useSpeech() {
         if (genRef.current === gen) setSpeakingBoth(false);
       }
     },
-    [stop, speakBrowser, ensureAudio, setSpeakingBoth]
+    [stop, speakBrowser, ensureAudio, setSpeakingBoth, fetchElevenAudio]
   );
 
   // Pré-aquece o cache de áudio para frases conhecidas (ex.: as ações de
   // emergência ao entrar no modo): o toque reproduz na hora, com a voz
-  // clonada, e as frases seguem faladas mesmo se a rede cair depois.
+  // certa, e as frases seguem faladas mesmo se a rede cair depois.
   // Sequencial de propósito — sem rajada na API de TTS; qualquer falha
   // apenas interrompe o aquecimento (o toque cai no fallback normal).
-  const prime = useCallback(async (texts: string[]): Promise<void> => {
-    for (const text of texts) {
-      if (elevenAvailable.current === false) return;
-      const cacheKey = `${activePatientId() ?? "?"}|${text}`;
-      if (!text.trim() || cache.current.has(cacheKey)) continue;
-      try {
-        const res = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, patientId: activePatientId() }),
-        });
-        if (res.ok) {
-          elevenAvailable.current = true;
-          cache.current.set(cacheKey, URL.createObjectURL(await res.blob()));
-        } else if (res.status === 503) {
-          elevenAvailable.current = false;
-        }
-      } catch {
-        return; // rede indisponível agora — o toque decide na hora
+  const prime = useCallback(
+    async (texts: string[], options?: SpeakOptions): Promise<void> => {
+      const speakerRole = options?.speakerRole ?? "helo";
+      const confirmationStatus = options?.confirmationStatus ?? "notRequired";
+      const patientId =
+        speakerRole === "patient"
+          ? options?.patientId ?? activePatientId()
+          : null;
+      if (speakerRole === "patient" && patientId !== activePatientId()) return;
+      if (speakerRole === "patient" && !patientCloneAllowed(speakerRole, confirmationStatus)) return;
+      for (const text of texts) {
+        if (elevenAvailable.current === false) return;
+        if (!text.trim()) continue;
+        // Troca de paciente durante o aquecimento: para na hora — nenhum
+        // áudio é gerado (nem cacheado) fora do contexto ativo.
+        if (speakerRole === "patient" && patientId !== activePatientId()) return;
+        // Falhou (rede ou 503): o topo do laço decide se ainda vale insistir.
+        await fetchElevenAudio(text, { speakerRole, confirmationStatus, patientId });
       }
-    }
-  }, []);
+    },
+    [fetchElevenAudio]
+  );
 
   // Chamado a cada frame pelo orbe — usa refs, nunca estado React.
   const getAmplitude = useCallback((): number => {
@@ -303,5 +379,5 @@ export function useSpeech() {
     return 0.3 + 0.2 * Math.sin(performance.now() / 180);
   }, []);
 
-  return { speak, stop, speaking, engine, getAmplitude, prime };
+  return { speak, stop, speaking, engine, activeSpeaker, activeVoiceSource, getAmplitude, prime };
 }

@@ -9,7 +9,7 @@ import type {
 } from "@/lib/types";
 import {
   DEFAULT_ITEMS,
-  MODE_SPEAKER_ROLE,
+  modeSpeakerRole,
   modeRequiresConfirmation,
   PATIENT_SETTING_KEYS,
 } from "@/lib/defaults";
@@ -179,7 +179,7 @@ function itemFromDefault(
     order,
     isDefault: true,
     defaultKey: d.defaultKey,
-    speakerRole: MODE_SPEAKER_ROLE,
+    speakerRole: modeSpeakerRole(mode),
     requiresConfirmation: modeRequiresConfirmation(mode),
     updatedAt: new Date().toISOString(),
   };
@@ -225,7 +225,7 @@ export async function addItem(
     order: input.order ?? (existing.length > 0 ? existing[existing.length - 1].order + 1 : 0),
     isDefault: false,
     defaultKey: null,
-    speakerRole: MODE_SPEAKER_ROLE,
+    speakerRole: modeSpeakerRole(mode),
     requiresConfirmation: modeRequiresConfirmation(mode),
     updatedAt: new Date().toISOString(),
   };
@@ -535,6 +535,8 @@ type EventRow = {
   gesture: string | null;
   responseMs: number | null;
   ts: string;
+  sessionId: number | null;
+  detail: string | null;
 };
 type MessageRow = {
   id: string;
@@ -545,7 +547,17 @@ type MessageRow = {
   status: string;
 };
 
-export async function getStats(period: Period) {
+// Isolamento por paciente na série histórica global: um registro pertence ao
+// paciente do seu carimbo patientId. Registros da fase de paciente único
+// (patientId null) pertencem ao paciente migrado (id 1) — a MESMA regra da
+// migração de settings/people em ensureMigrated. Nada é atribuído a outro
+// paciente em hipótese alguma.
+function belongsTo(patientId: number, recordPid: unknown): boolean {
+  if (recordPid == null) return patientId === MIGRATED_PATIENT_ID;
+  return Number(recordPid) === patientId;
+}
+
+export async function getStats(period: Period, patientId: number) {
   const cut = cutoffIso(period);
 
   const [eventsSnap, messagesSnap, sessionsSnap] = await Promise.all([
@@ -554,27 +566,43 @@ export async function getStats(period: Period) {
     col.sessions().where("startedAt", ">=", cut).get(),
   ]);
 
-  const events: EventRow[] = eventsSnap.docs.map((d) => {
-    const v = d.data();
-    return {
-      type: v.type as string,
-      gesture: (v.gesture ?? null) as string | null,
-      responseMs: (v.responseMs ?? null) as number | null,
-      ts: v.ts as string,
-    };
+  // O modo da sessão distingue registros de Rotina, Conversa e Emergência
+  // (o evento carrega a categoria do item, não o modo).
+  const sessionMode = new Map<number, string>();
+  const sessionDocs = sessionsSnap.docs.filter((d) =>
+    belongsTo(patientId, d.data().patientId)
+  );
+  sessionDocs.forEach((d) => {
+    sessionMode.set(Number(d.id), (d.data().mode as string) ?? "conversa");
   });
 
-  const messages: MessageRow[] = messagesSnap.docs.map((d) => {
-    const v = d.data();
-    return {
-      id: d.id,
-      ts: v.ts as string,
-      text: v.text as string,
-      category: (v.category ?? null) as string | null,
-      sensitive: Number(v.sensitive ?? 0),
-      status: v.status as string,
-    };
-  });
+  const events: EventRow[] = eventsSnap.docs
+    .filter((d) => belongsTo(patientId, d.data().patientId))
+    .map((d) => {
+      const v = d.data();
+      return {
+        type: v.type as string,
+        gesture: (v.gesture ?? null) as string | null,
+        responseMs: (v.responseMs ?? null) as number | null,
+        ts: v.ts as string,
+        sessionId: (v.sessionId ?? null) as number | null,
+        detail: (v.detail ?? null) as string | null,
+      };
+    });
+
+  const messages: MessageRow[] = messagesSnap.docs
+    .filter((d) => belongsTo(patientId, d.data().patientId))
+    .map((d) => {
+      const v = d.data();
+      return {
+        id: d.id,
+        ts: v.ts as string,
+        text: v.text as string,
+        category: (v.category ?? null) as string | null,
+        sensitive: Number(v.sensitive ?? 0),
+        status: v.status as string,
+      };
+    });
 
   const countEvt = (t: string) => events.filter((e) => e.type === t).length;
   const confirmadas = messages.filter((m) => m.status === "confirmada");
@@ -596,9 +624,34 @@ export async function getStats(period: Period) {
     gestosIncertos: countEvt("gesto_incerto"),
     pausas: countEvt("pausa"),
     reformulacoes: countEvt("reformulacao"),
-    sessoes: sessionsSnap.size,
+    emergencias: countEvt("emergencia"),
+    sessoes: sessionDocs.length,
     tempoMedioRespostaMs,
   };
+
+  // Itens de Rotina mais acionados (confirmações em sessões de Rotina)
+  const rotinaMap = new Map<string, number>();
+  for (const e of events) {
+    if (
+      e.type === "confirmacao" &&
+      e.detail &&
+      e.sessionId != null &&
+      sessionMode.get(e.sessionId) === "rotina"
+    ) {
+      rotinaMap.set(e.detail, (rotinaMap.get(e.detail) ?? 0) + 1);
+    }
+  }
+  const rotinaMaisUsadas = [...rotinaMap.entries()]
+    .map(([text, n]) => ({ text, n }))
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 5);
+
+  // Emergências acionadas — quando e qual frase
+  const emergenciasRecentes = events
+    .filter((e) => e.type === "emergencia")
+    .sort((a, b) => b.ts.localeCompare(a.ts))
+    .slice(0, 20)
+    .map((e) => ({ ts: localTs(e.ts), text: e.detail ?? "" }));
 
   // gestos por tipo
   const gestoMap = new Map<string, number>();
@@ -669,6 +722,7 @@ export async function getStats(period: Period) {
 
   return {
     period,
+    patientId,
     geradoEm: new Date().toISOString(),
     totals,
     gestosPorTipo,
@@ -676,6 +730,188 @@ export async function getStats(period: Period) {
     porCategoria,
     porHora,
     relatosDor,
+    rotinaMaisUsadas,
+    emergenciasRecentes,
     mensagens,
   };
+}
+
+// ---------- Resumo multi-paciente (Dashboard Geral) ----------
+// Uma leitura por coleção (janela recente) + settings/people por paciente.
+// Nenhum conteúdo de mensagem sai daqui: a visão geral resume ATIVIDADE,
+// não comunicação — dados sensíveis ficam no Dashboard Individual.
+
+export interface PatientSummary {
+  patientId: number;
+  name: string;
+  createdAt: string;
+  /** Última atividade registrada (evento/mensagem/sessão) — null se nada na janela. */
+  lastActivityAt: string | null;
+  /** Contagens dos últimos 7 dias. */
+  sessions7d: number;
+  approvedPhrases7d: number;
+  reformulations7d: number;
+  pauses7d: number;
+  emergencies7d: number;
+  /** Voz clonada do paciente configurada? (status, nunca o ID) */
+  voiceConfigured: boolean;
+  /** Itens do perfil preenchidos, para o indicador de configuração. */
+  profile: { name: boolean; voice: boolean; speechStyle: boolean; people: boolean };
+  profileCompletion: number; // 0–1
+}
+
+const SUMMARY_WINDOW_DAYS = 30;
+
+export async function getPatientSummaries(): Promise<PatientSummary[]> {
+  const patients = await listPatients();
+  const windowCut = new Date(
+    Date.now() - SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+  const cut7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [eventsSnap, messagesSnap, sessionsSnap] = await Promise.all([
+    col.events().where("ts", ">=", windowCut).get(),
+    col.messages().where("ts", ">=", windowCut).get(),
+    col.sessions().where("startedAt", ">=", windowCut).get(),
+  ]);
+
+  return Promise.all(
+    patients.map(async (p) => {
+      const ev = eventsSnap.docs
+        .map((d) => d.data())
+        .filter((v) => belongsTo(p.id, v.patientId));
+      const ms = messagesSnap.docs
+        .map((d) => d.data())
+        .filter((v) => belongsTo(p.id, v.patientId));
+      const ss = sessionsSnap.docs
+        .map((d) => d.data())
+        .filter((v) => belongsTo(p.id, v.patientId));
+
+      const stamps = [
+        ...ev.map((v) => v.ts as string),
+        ...ms.map((v) => v.ts as string),
+        ...ss.map((v) => (v.endedAt ?? v.startedAt) as string),
+      ].filter(Boolean);
+      const lastActivityAt =
+        stamps.length > 0 ? stamps.sort().at(-1)! : null;
+
+      const [settings, people] = await Promise.all([
+        getPatientSettings(p.id),
+        listPeople(p.id),
+      ]);
+      const profile = {
+        name: Boolean(settings[PATIENT_SETTING_KEYS.name]?.trim()),
+        voice: Boolean(settings[PATIENT_SETTING_KEYS.voiceId]?.trim()),
+        speechStyle: Boolean(settings[PATIENT_SETTING_KEYS.speechStyle]?.trim()),
+        people: people.length > 0,
+      };
+      const done = Object.values(profile).filter(Boolean).length;
+
+      return {
+        patientId: p.id,
+        name: p.name,
+        createdAt: p.createdAt,
+        lastActivityAt,
+        sessions7d: ss.filter((v) => (v.startedAt as string) >= cut7d).length,
+        approvedPhrases7d: ms.filter(
+          (v) => v.status === "confirmada" && (v.ts as string) >= cut7d
+        ).length,
+        reformulations7d: ev.filter(
+          (v) => v.type === "reformulacao" && (v.ts as string) >= cut7d
+        ).length,
+        pauses7d: ev.filter(
+          (v) => v.type === "pausa" && (v.ts as string) >= cut7d
+        ).length,
+        emergencies7d: ev.filter(
+          (v) => v.type === "emergencia" && (v.ts as string) >= cut7d
+        ).length,
+        voiceConfigured: profile.voice,
+        profile,
+        profileCompletion: done / Object.keys(profile).length,
+      };
+    })
+  );
+}
+
+// ---------- Sessões recentes de um paciente (Dashboard Individual) ----------
+
+export interface SessionSummary {
+  id: number;
+  startedAt: string; // horário local (SP)
+  endedAt: string | null;
+  durationMin: number | null;
+  operator: string | null;
+  mode: string;
+  phrasesShown: number;
+  confirmed: number;
+  reformulations: number;
+  rejections: number;
+  emergencies: number;
+}
+
+export async function listRecentSessions(
+  patientId: number,
+  limit = 20
+): Promise<SessionSummary[]> {
+  const windowCut = new Date(
+    Date.now() - 90 * 24 * 60 * 60 * 1000
+  ).toISOString();
+  const [sessionsSnap, eventsSnap] = await Promise.all([
+    col.sessions().where("startedAt", ">=", windowCut).get(),
+    col.events().where("ts", ">=", windowCut).get(),
+  ]);
+
+  const sessions = sessionsSnap.docs
+    .filter((d) => belongsTo(patientId, d.data().patientId))
+    .map((d) => {
+      const v = d.data();
+      return {
+        id: Number(d.id),
+        startedAt: String(v.startedAt),
+        endedAt: v.endedAt ? String(v.endedAt) : null,
+        operator: (v.operator ?? null) as string | null,
+        mode: (v.mode as string) ?? "conversa",
+      };
+    })
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    .slice(0, limit);
+
+  const wanted = new Set(sessions.map((s) => s.id));
+  const bySession = new Map<number, { type: string }[]>();
+  eventsSnap.docs.forEach((d) => {
+    const v = d.data();
+    // Dupla checagem: o evento precisa pertencer À SESSÃO e AO PACIENTE.
+    if (v.sessionId == null || !wanted.has(Number(v.sessionId))) return;
+    if (!belongsTo(patientId, v.patientId)) return;
+    const list = bySession.get(Number(v.sessionId)) ?? [];
+    list.push({ type: v.type as string });
+    bySession.set(Number(v.sessionId), list);
+  });
+
+  return sessions.map((s) => {
+    const ev = bySession.get(s.id) ?? [];
+    const count = (t: string) => ev.filter((e) => e.type === t).length;
+    const started = String(s.startedAt);
+    const ended = s.endedAt ? String(s.endedAt) : null;
+    return {
+      id: s.id,
+      startedAt: localTs(started),
+      endedAt: ended ? localTs(ended) : null,
+      durationMin: ended
+        ? Math.max(
+            0,
+            Math.round(
+              (new Date(ended).getTime() - new Date(started).getTime()) / 60000
+            )
+          )
+        : null,
+      operator: (s.operator ?? null) as string | null,
+      mode: (s.mode as string) ?? "conversa",
+      phrasesShown: count("pergunta_apresentada") + count("opcao_apresentada"),
+      confirmed: count("confirmacao"),
+      reformulations: count("reformulacao"),
+      rejections: count("descarte"),
+      emergencies: count("emergencia"),
+    };
+  });
 }

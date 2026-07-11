@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Gesture, ModeItem } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
-import { DEFAULT_ITEMS } from "@/lib/defaults";
+import { DEFAULT_ITEMS, modeSpeakerRole } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { GestureTriplet } from "@/components/ui";
@@ -112,10 +112,19 @@ export default function RotinaPage() {
           text: pending.phrase,
           category: pending.category,
           status: "confirmada",
-          speakerRole: "patient",
+          speakerRole: modeSpeakerRole("rotina"),
           confirmationStatus: "confirmed",
         });
-        void speak(pending.phrase);
+        // Definição atual do produto: a Rotina é dita pela voz da PLATAFORMA
+        // Helo, mesmo sendo necessidade do paciente. A autoria vem de
+        // modeSpeakerRole — quando um item ganhar autoria própria, a exceção
+        // entra lá, não aqui.
+        void speak(pending.phrase, {
+          speakerRole: modeSpeakerRole("rotina"),
+          confirmationStatus: "confirmed",
+          patientId,
+          mode: "rotina",
+        });
       } else if (g === "nao") {
         logEvent({ sessionId: sid, patientId, type: "descarte", category: pending.category, detail: pending.phrase });
         void saveMessage({
@@ -124,7 +133,7 @@ export default function RotinaPage() {
           text: pending.phrase,
           category: pending.category,
           status: "descartada",
-          speakerRole: "patient",
+          speakerRole: modeSpeakerRole("rotina"),
           confirmationStatus: "rejected",
         });
       } else {

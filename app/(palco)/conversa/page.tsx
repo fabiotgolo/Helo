@@ -358,9 +358,18 @@ export default function ConversaPage() {
           sensitive: confirm.sensitive,
           status: "confirmada",
           confirmations: confirm.sensitive ? 2 : 1,
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
         });
         setPhase("done");
-        void speak(confirm.phrase);
+        // Frase confirmada em nome do PACIENTE: sai na voz clonada dele
+        // (quando configurada) — a condução da conversa segue na voz da Helo.
+        void speak(confirm.phrase, {
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
+          patientId,
+          mode: "conversa",
+        });
         return;
       }
 
@@ -393,6 +402,8 @@ export default function ConversaPage() {
         category: confirm.category,
         sensitive: confirm.sensitive,
         status: "descartada",
+        speakerRole: "patient",
+        confirmationStatus: "rejected",
       });
       void speak("Mensagem descartada.");
       setConfirm(null);
@@ -622,7 +633,14 @@ export default function ConversaPage() {
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => void speak(confirm.phrase)}
+                onClick={() =>
+                  void speak(confirm.phrase, {
+                    speakerRole: "patient",
+                    confirmationStatus: "confirmed",
+                    patientId,
+                    mode: "conversa",
+                  })
+                }
                 className="rounded-full border border-line bg-card px-6 py-3 font-medium hover:border-ink-mute"
               >
                 🔊 Repetir

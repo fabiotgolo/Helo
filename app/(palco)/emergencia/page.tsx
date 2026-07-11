@@ -45,9 +45,16 @@ export default function EmergenciaPage() {
 
   // Pré-aquece o áudio das frases: o toque reproduz na hora, com a voz
   // clonada, e continua falando mesmo se a rede cair depois de entrar.
+  // Autoria do paciente: Emergência é, por definição do produto, fala DELE —
+  // e o fluxo dispensa confirmação (o toque do assistente é a confirmação).
   useEffect(() => {
-    if (actions.length > 0) void prime(actions.map((item) => item.phrase));
-  }, [prime, actions]);
+    if (actions.length > 0 && patientId != null) {
+      void prime(
+        actions.map((item) => item.phrase),
+        { speakerRole: "patient", confirmationStatus: "notRequired", patientId }
+      );
+    }
+  }, [prime, actions, patientId]);
 
   useEffect(() => {
     const handler = () => endSession(sessionRef.current);
@@ -84,8 +91,15 @@ export default function EmergenciaPage() {
       console.log("[EMERGENCY] phrase selected:", item.phrase);
       setFeedback({ label: item.label, status: "falando" });
       // A voz sai PRIMEIRO — nenhuma rede ou registro na frente do socorro.
+      // Fala do PACIENTE: usa a voz clonada dele quando configurada; sem
+      // clone, o servidor aplica o fallback aprovado (voz neutra identificada).
       console.log("[EMERGENCY] speak called");
-      speak(item.phrase)
+      speak(item.phrase, {
+        speakerRole: "patient",
+        confirmationStatus: "notRequired",
+        patientId,
+        mode: "emergencia",
+      })
         .then((result) => {
           console.log("[EMERGENCY] speak result:", result);
           if (result === "erro" || result === "bloqueada") {

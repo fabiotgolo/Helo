@@ -14,6 +14,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useSpeech, type SpeakResult } from "@/lib/useSpeech";
+import type { ActiveSpeaker, SpeakOptions, VoiceSource } from "@/lib/voice";
 import type { OrbPalette } from "@/components/ui";
 
 export type HeloMode = "conversar" | "rotina" | "emergencia";
@@ -75,13 +76,18 @@ interface HeloContextValue {
    */
   playIntro: () => Promise<SpeakResult | "ignorada">;
   modes: typeof HELO_MODES;
-  // Voz global da Helo
-  speak: (text: string) => Promise<SpeakResult>;
-  /** Pré-aquece o cache de áudio (voz clonada) para frases conhecidas. */
-  prime: (texts: string[]) => Promise<void>;
+  // Orquestrador de voz global. Sem opções, a fala é da PLATAFORMA (voz
+  // oficial ElevenLabs da Helo); com speakerRole "patient" + confirmação,
+  // é do PACIENTE (voz clonada ElevenLabs dele).
+  speak: (text: string, options?: SpeakOptions) => Promise<SpeakResult>;
+  /** Pré-aquece o cache de áudio para frases conhecidas, na voz da autoria indicada. */
+  prime: (texts: string[], options?: SpeakOptions) => Promise<void>;
   stop: () => void;
   speaking: boolean;
   engine: "elevenlabs" | "navegador";
+  /** Quem fala agora — o Orb ativo reage a esta fala, seja de que papel for. */
+  activeSpeaker: ActiveSpeaker;
+  activeVoiceSource: VoiceSource;
   getAmplitude: () => number;
 }
 
@@ -89,7 +95,8 @@ const HeloContext = createContext<HeloContextValue | null>(null);
 
 export function HeloProvider({ children }: { children: ReactNode }) {
   const [activeMode, setActiveModeState] = useState<HeloMode>("conversar");
-  const { speak, stop, speaking, engine, getAmplitude, prime } = useSpeech();
+  const { speak, stop, speaking, engine, activeSpeaker, activeVoiceSource, getAmplitude, prime } =
+    useSpeech();
   const router = useRouter();
 
   // Espelho do modo ativo fora do estado React: o stop() precisa acontecer
@@ -156,9 +163,11 @@ export function HeloProvider({ children }: { children: ReactNode }) {
       stop,
       speaking,
       engine,
+      activeSpeaker,
+      activeVoiceSource,
       getAmplitude,
     }),
-    [activeMode, setActiveMode, enterMode, playIntro, speak, prime, stop, speaking, engine, getAmplitude]
+    [activeMode, setActiveMode, enterMode, playIntro, speak, prime, stop, speaking, engine, activeSpeaker, activeVoiceSource, getAmplitude]
   );
 
   return <HeloContext.Provider value={value}>{children}</HeloContext.Provider>;

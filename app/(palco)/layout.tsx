@@ -25,7 +25,21 @@ const PATH_TO_MODE: Record<string, HeloMode> = {
 
 export default function PalcoLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { setActiveMode, engine } = useHelo();
+  const { setActiveMode, engine, activeSpeaker, activeVoiceSource } = useHelo();
+  // Transparência da voz: enquanto algo soa, o selo diz QUEM fala e com QUAL
+  // voz técnica — um fallback nunca passa por voz da Helo nem do paciente.
+  const voiceBadge =
+    activeVoiceSource === "heloElevenLabs"
+      ? "Helo · ElevenLabs"
+      : activeVoiceSource === "patientElevenLabsClone"
+        ? "paciente · ElevenLabs"
+        : activeVoiceSource === "approvedFallback"
+          ? activeSpeaker === "patient"
+            ? "paciente · fallback aprovado"
+            : "fallback aprovado"
+          : engine === "elevenlabs"
+            ? "ElevenLabs"
+            : "navegador";
   const routeMode = PATH_TO_MODE[pathname];
   const isHome = !routeMode;
   // Todas as experiências são imersivas (Fases 5, 7 e 8): o orbe do modo
@@ -46,7 +60,7 @@ export default function PalcoLayout({ children }: { children: React.ReactNode })
         right={
           <>
             <span className="hidden rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft sm:inline">
-              voz: {engine === "elevenlabs" ? "ElevenLabs" : "navegador"}
+              voz: {voiceBadge}
             </span>
             <PillLink href="/ajustes">Ajustes</PillLink>
             <PillLink href="/dashboard">Dashboard</PillLink>

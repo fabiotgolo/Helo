@@ -126,14 +126,25 @@ export default function AjustesPage() {
       setPreviewing(true);
       try {
         audioRef.current?.pause();
+        // Prévia explícita da voz DO PACIENTE (única rota em que o cliente
+        // indica uma voz). Sem voz escolhida, ouve a que valeria hoje para as
+        // falas dele (clone salvo ou fallback aprovado) — nunca a voz da Helo.
         const res = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: `Olá${patientName ? `, ${patientName}` : ""}. Eu sou a voz do Helo. O elo entre sentir e dizer.`,
-            voiceId: id || undefined,
-            patientId,
-          }),
+          body: JSON.stringify(
+            id
+              ? {
+                  text: `Olá${patientName ? `, ${patientName}` : ""}. Esta será a voz das suas mensagens.`,
+                  previewVoiceId: id,
+                }
+              : {
+                  text: `Olá${patientName ? `, ${patientName}` : ""}. Esta será a voz das suas mensagens.`,
+                  speakerRole: "patient",
+                  confirmationStatus: "notRequired",
+                  patientId,
+                }
+          ),
         });
         if (!res.ok) return;
         const url = URL.createObjectURL(await res.blob());
@@ -341,10 +352,11 @@ export default function AjustesPage() {
 
         {/* ——— Voz ——— */}
         <section className="rounded-3xl border border-line bg-card p-6">
-          <h2 className="font-semibold tracking-tight">Voz do Helo</h2>
+          <h2 className="font-semibold tracking-tight">Voz do paciente</h2>
           <p className="text-sm text-ink-soft">
-            Vozes da sua conta ElevenLabs — incluindo a clonagem autorizada da
-            voz deste paciente.
+            A voz que fala EM NOME deste paciente (Emergência e mensagens
+            confirmadas) — idealmente a clonagem autorizada da voz dele na
+            ElevenLabs. A voz da plataforma Helo é separada e não muda aqui.
           </p>
           {voicesError ? (
             <p className="mt-4 rounded-2xl bg-talvez-soft px-4 py-3 text-sm text-talvez">
@@ -361,7 +373,7 @@ export default function AjustesPage() {
                 aria-label="Escolher voz"
                 className="w-full rounded-2xl border border-line bg-cream px-5 py-3.5 text-lg outline-none focus:border-ink-mute"
               >
-                <option value="">Padrão (definida no .env)</option>
+                <option value="">Sem voz própria — fallback neutro aprovado</option>
                 {voices.map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.name}

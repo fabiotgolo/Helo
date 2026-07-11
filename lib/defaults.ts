@@ -6,7 +6,8 @@
 // A defaultKey é estável: é ela que permite "restaurar padrão" sem duplicar
 // itens nem apagar o que o paciente personalizou por cima.
 
-import type { HeloItemMode, SpeakerRole } from "@/lib/types";
+import type { HeloItemMode } from "@/lib/types";
+import { modeSpeakerRole } from "@/lib/voice";
 
 export interface DefaultItem {
   defaultKey: string;
@@ -55,8 +56,10 @@ export function modeRequiresConfirmation(mode: HeloItemMode): boolean {
   return mode !== "emergencia";
 }
 
-// Todo item de modo é dito em nome do paciente.
-export const MODE_SPEAKER_ROLE: SpeakerRole = "patient";
+// Autoria da fala por modo (definição atual do produto): Rotina é dita pela
+// voz da plataforma Helo; Emergência e Conversa são falas do paciente.
+// A regra vive em lib/voice.ts (modeSpeakerRole) — ponto único de resolução.
+export { modeSpeakerRole };
 
 // Chaves de settings por paciente (perfil de comunicação).
 export const PATIENT_SETTING_KEYS = {
