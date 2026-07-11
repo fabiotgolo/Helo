@@ -1,4 +1,16 @@
-import { createSession, endSession } from "@/lib/store";
+import { createSession, endSession, listRecentSessions } from "@/lib/store";
+
+// Sessões recentes de UM paciente, com métricas por sessão.
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const patientId = Number(url.searchParams.get("patientId"));
+  if (!patientId || Number.isNaN(patientId)) {
+    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+  }
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 50);
+  const sessions = await listRecentSessions(patientId, limit);
+  return Response.json({ sessions });
+}
 
 export async function POST(request: Request) {
   const { operator, mode, patientId } = (await request.json()) as {
