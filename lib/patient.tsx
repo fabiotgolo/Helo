@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import type { HeloItemMode, ModeItem, Patient } from "@/lib/types";
+import { redirectToLogin } from "@/lib/use-auth";
 
 export const ACTIVE_PATIENT_KEY = "helo.patientId";
 const PATIENTS_CACHE_KEY = "helo.patients";
@@ -86,6 +87,13 @@ export function PatientProvider({ children }: { children: ReactNode }) {
   const reloadPatients = useCallback(async () => {
     try {
       const r = await fetch("/api/patients");
+      if (r.status === 401) {
+        // Sem sessão: nada de cache — os pacientes visíveis dependem do
+        // usuário autenticado. Vai para o login (exceto se já está nele).
+        setPatients([]);
+        redirectToLogin();
+        return;
+      }
       if (!r.ok) throw new Error();
       const d = (await r.json()) as { patients: Patient[] };
       applyPatients(d.patients);

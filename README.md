@@ -82,6 +82,22 @@ As credenciais do Firestore vêm automaticamente da conta de serviço do runtime
 - `app/api/tts` — síntese ElevenLabs com fallback para voz local.
 - `app/api/suggest` — sugestões dinâmicas de opções via Claude, limitadas a 3.
 
+## Contas, vínculos e permissões
+
+Usuários e pacientes têm relação **muitos-para-muitos**: cada usuário
+(cuidador, enfermeiro, profissional de saúde, familiar) vê somente os
+pacientes aos quais possui vínculo; um paciente pode ser acompanhado por
+vários usuários — todos acessando **o mesmo** Dashboard Individual
+(`/dashboard/[patientId]`). A autorização é aplicada **no servidor** em
+todas as rotas de API (`lib/auth.ts`), nunca só na interface.
+
+- `/login` — entrada; na primeira execução (nenhum usuário) cria o Admin.
+- `/admin` — exclusivo do Admin: usuários, pacientes, matriz de acesso
+  (vínculos com permissões granulares por vínculo) e auditoria.
+- `lib/access.ts` — users, userPatientAccess, auditEvents, sessões de login.
+- Testes de autorização: `npm run test:access` (com emulador + dev server;
+  **limpa o banco do emulador**).
+
 ## Registro (autoria protegida)
 
 Cada interação grava: o que foi apresentado, qual gesto o paciente fez, tempo de

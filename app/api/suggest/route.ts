@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { requireUser } from "@/lib/auth";
 
 // Gera até 3 novas opções quando as opções curadas se esgotam.
 // Transparência: o cliente marca essas opções como "sugeridas por IA".
@@ -54,6 +55,8 @@ const SCHEMA = {
 } as const;
 
 export async function POST(request: Request) {
+  const auth = await requireUser(request);
+  if (auth instanceof Response) return auth;
   if (!process.env.ANTHROPIC_API_KEY) {
     return Response.json({ error: "sem chave Anthropic" }, { status: 503 });
   }

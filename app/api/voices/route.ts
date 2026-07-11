@@ -1,5 +1,10 @@
-// Lista as vozes disponíveis na conta ElevenLabs.
-export async function GET() {
+import { requireUser } from "@/lib/auth";
+
+// Lista as vozes disponíveis na conta ElevenLabs. Requer login — os nomes
+// de vozes da conta não são públicos.
+export async function GET(request: Request) {
+  const auth = await requireUser(request);
+  if (auth instanceof Response) return auth;
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return Response.json({ error: "sem chave ElevenLabs" }, { status: 503 });

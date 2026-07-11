@@ -21,6 +21,7 @@ import {
   fmtTs,
 } from "@/components/dashboard-ui";
 import { usePatient } from "@/lib/patient";
+import { redirectToLogin } from "@/lib/use-auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { GESTURES, type Gesture, type ModeItem, type Patient } from "@/lib/types";
 import type { SessionSummary } from "@/lib/store";
@@ -85,6 +86,7 @@ export default function DashboardIndividualPage() {
   const [settings, setSettings] = useState<Record<string, string> | null>(null);
   const [platformVoiceOk, setPlatformVoiceOk] = useState<boolean | null>(null);
   const [error, setError] = useState(false);
+  const [denied, setDenied] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const patient: Patient | undefined = patients.find((p) => p.id === patientId);
@@ -107,6 +109,16 @@ export default function DashboardIndividualPage() {
           fetch(`/api/voices`),
         ]);
         if (isStale()) return;
+        if (statsR.status === 401) {
+          redirectToLogin();
+          return;
+        }
+        if (statsR.status === 403) {
+          // Sem vínculo/permissão: negação REAL vinda do servidor — nenhum
+          // dado deste paciente chegou ao cliente.
+          setDenied(true);
+          return;
+        }
         if (!statsR.ok) throw new Error("stats");
         setStats((await statsR.json()) as Stats);
         setSessions(sessR.ok ? ((await sessR.json()) as { sessions: SessionSummary[] }).sessions : []);
@@ -134,6 +146,7 @@ export default function DashboardIndividualPage() {
     setItemsRotina(null);
     setItemsEmergencia(null);
     setSettings(null);
+    setDenied(false);
     void load(() => stale);
     return () => {
       stale = true;
@@ -168,6 +181,28 @@ export default function DashboardIndividualPage() {
       settings?.[PATIENT_SETTING_KEYS.gestureNao]?.trim()
   );
   const periodLabel = PERIODS.find((p) => p.id === period)?.label ?? "";
+
+  // ——— Acesso negado (sem vínculo ou sem permissão) ———
+  if (denied) {
+    return (
+      <div className="flex min-h-dvh flex-col">
+        <TopBar right={<PillLink href="/dashboard">← Pacientes</PillLink>} />
+        <main role="alert" className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+          <p className="text-2xl font-medium">Acesso negado.</p>
+          <p className="text-ink-soft">
+            Você não possui vínculo ativo com este paciente ou não tem a
+            permissão necessária. Fale com o administrador.
+          </p>
+          <Link
+            href="/dashboard"
+            className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+          >
+            Voltar aos meus pacientes
+          </Link>
+        </main>
+      </div>
+    );
+  }
 
   // ——— Estados de rota inválida / paciente inexistente ———
   if (invalidId || (!patientsLoading && !patient)) {

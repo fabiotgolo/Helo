@@ -15,6 +15,8 @@ import { useRouter } from "next/navigation";
 import { TopBar, PillLink } from "@/components/ui";
 import { Avatar } from "@/components/dashboard-ui";
 import { usePatient } from "@/lib/patient";
+import { redirectToLogin, useAuthUser } from "@/lib/use-auth";
+import { ROLES_THAT_CREATE_PATIENTS, ROLE_LABELS } from "@/lib/access-types";
 import type { PatientSummary } from "@/lib/store";
 
 type Filter = "todos" | "ativos" | "inativos" | "semVoz" | "incompletos";
@@ -42,6 +44,8 @@ function relTime(iso: string | null): string {
 export default function DashboardGeralPage() {
   const router = useRouter();
   const { addPatient } = usePatient();
+  const { user, logout } = useAuthUser();
+  const canCreate = !user || ROLES_THAT_CREATE_PATIENTS.includes(user.role);
   const [summaries, setSummaries] = useState<PatientSummary[] | null>(null);
   const [error, setError] = useState(false);
   const [query, setQuery] = useState("");
@@ -55,6 +59,10 @@ export default function DashboardGeralPage() {
     setError(false);
     try {
       const r = await fetch("/api/patients/summary");
+      if (r.status === 401) {
+        redirectToLogin();
+        return;
+      }
       if (!r.ok) throw new Error();
       const d = (await r.json()) as { summaries: PatientSummary[] };
       setSummaries(d.summaries);
@@ -121,8 +129,19 @@ export default function DashboardGeralPage() {
       <TopBar
         right={
           <>
+            {user?.role === "admin" && <PillLink href="/admin">Admin</PillLink>}
             <PillLink href="/ajustes">Ajustes</PillLink>
             <PillLink href="/">Início</PillLink>
+            {user && (
+              <button
+                type="button"
+                onClick={() => void logout()}
+                title={`${user.name} · ${ROLE_LABELS[user.role]}`}
+                className="rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium text-ink hover:border-ink-mute"
+              >
+                Sair
+              </button>
+            )}
           </>
         }
       />
@@ -132,13 +151,15 @@ export default function DashboardGeralPage() {
           <div>
             <h1 className="text-3xl font-medium tracking-tight">Pacientes</h1>
             <p className="mt-1 text-ink-soft">
-              Cada paciente tem sua própria Helo. Toque em um card para abrir o
-              acompanhamento individual.
+              {user
+                ? `${user.name} · ${ROLE_LABELS[user.role]} — você vê os pacientes vinculados a você.`
+                : "Cada paciente tem sua própria Helo. Toque em um card para abrir o acompanhamento individual."}
             </p>
           </div>
         </div>
 
-        {/* ——— Novo paciente ——— */}
+        {/* ——— Novo paciente (admin, profissional, cuidador, familiar) ——— */}
+        {canCreate && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -162,6 +183,7 @@ export default function DashboardGeralPage() {
             {creating ? "Criando…" : "+ Novo paciente"}
           </button>
         </form>
+        )}
         {createError && (
           <p role="alert" className="rounded-2xl bg-nao-soft px-4 py-3 text-sm text-nao">
             Não foi possível criar o paciente. Verifique a conexão e tente de novo.
@@ -227,10 +249,15 @@ export default function DashboardGeralPage() {
           <p className="py-16 text-center text-ink-soft">Carregando pacientes…</p>
         ) : summaries.length === 0 ? (
           <div className="rounded-3xl border border-line bg-card p-10 text-center">
-            <p className="text-lg">Nenhum paciente cadastrado ainda.</p>
+            <p className="text-lg">
+              {user && user.role !== "admin"
+                ? "Você ainda não possui pacientes vinculados."
+                : "Nenhum paciente cadastrado ainda."}
+            </p>
             <p className="mt-1 text-sm text-ink-soft">
-              Cadastre o primeiro paciente acima — a Helo cria o perfil, as
-              frases padrão e o acompanhamento individual automaticamente.
+              {canCreate
+                ? "Cadastre um paciente acima — a Helo cria o perfil, as frases padrão e o acompanhamento individual automaticamente."
+                : "Peça ao administrador para vincular você a um paciente."}
             </p>
           </div>
         ) : shown.length === 0 ? (

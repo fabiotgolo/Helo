@@ -1,5 +1,6 @@
 import { getPatientSetting } from "@/lib/store";
 import { patientCloneAllowed } from "@/lib/voice";
+import { requirePatientAccess, requireUser } from "@/lib/auth";
 import type { ConfirmationStatus, SpeakerRole } from "@/lib/types";
 
 // Síntese de voz via ElevenLabs — provedor obrigatório dos DOIS papéis:
@@ -29,6 +30,14 @@ export async function POST(request: Request) {
   const { text, patientId, previewVoiceId } = body;
   if (!text || typeof text !== "string" || text.length > 1000) {
     return Response.json({ error: "texto inválido" }, { status: 400 });
+  }
+
+  // Síntese requer login; a voz clonada de um paciente, vínculo com ele.
+  const authUser = await requireUser(request);
+  if (authUser instanceof Response) return authUser;
+  if (body.speakerRole === "patient" && patientId) {
+    const authPatient = await requirePatientAccess(request, Number(patientId));
+    if (authPatient instanceof Response) return authPatient;
   }
 
   const apiKey = process.env.ELEVENLABS_API_KEY;

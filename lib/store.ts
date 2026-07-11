@@ -55,13 +55,34 @@ function toPatient(id: string, v: FirebaseFirestore.DocumentData): Patient {
   };
 }
 
-export async function listPatients(): Promise<Patient[]> {
+export async function listPatients(includeInactive = false): Promise<Patient[]> {
   await ensureMigrated();
   const snap = await col.patients().get();
   return snap.docs
     .map((d) => toPatient(d.id, d.data()))
-    .filter((p) => p.active)
+    .filter((p) => includeInactive || p.active)
     .sort((a, b) => a.id - b.id);
+}
+
+export async function getPatient(id: number): Promise<Patient | null> {
+  const doc = await patientDoc(id).get();
+  return doc.exists ? toPatient(doc.id, doc.data()!) : null;
+}
+
+/**
+ * Exclusão definitiva (Admin, com confirmação reforçada na UI): remove o
+ * perfil e as subcoleções do paciente. A série histórica global
+ * (sessions/events/messages) é preservada para auditoria — carimbada com o
+ * patientId, deixa de ser alcançável sem o perfil.
+ */
+export async function hardDeletePatient(id: number): Promise<void> {
+  for (const subCol of [sub.settings(id), sub.people(id), sub.items(id)]) {
+    const snap = await subCol.get();
+    const batch = firestore.batch();
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+  await patientDoc(id).delete();
 }
 
 export async function createPatient(name: string): Promise<Patient> {
@@ -194,6 +215,15 @@ async function seedDefaults(patientId: number, mode: HeloItemMode): Promise<void
     );
   });
   await batch.commit();
+}
+
+/** Modo de um item existente — usado pela autorização de edição por modo. */
+export async function getItemMode(
+  patientId: number,
+  itemId: string
+): Promise<HeloItemMode | null> {
+  const doc = await sub.items(patientId).doc(itemId).get();
+  return doc.exists ? ((doc.data()?.mode as HeloItemMode) ?? null) : null;
 }
 
 export async function listItems(
@@ -762,8 +792,19 @@ export interface PatientSummary {
 
 const SUMMARY_WINDOW_DAYS = 30;
 
-export async function getPatientSummaries(): Promise<PatientSummary[]> {
-  const patients = await listPatients();
+/**
+ * Resumos do Dashboard Geral. `allowedIds` restringe aos pacientes
+ * vinculados ao usuário autenticado (null = todos, uso do Admin) — o
+ * filtro acontece AQUI, no servidor, nunca só na interface.
+ */
+export async function getPatientSummaries(
+  allowedIds: number[] | null = null
+): Promise<PatientSummary[]> {
+  let patients = await listPatients();
+  if (allowedIds !== null) {
+    const allowed = new Set(allowedIds);
+    patients = patients.filter((p) => allowed.has(p.id));
+  }
   const windowCut = new Date(
     Date.now() - SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000
   ).toISOString();
