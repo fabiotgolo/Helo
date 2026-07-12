@@ -73,6 +73,25 @@ export default function DashboardGeralPage() {
 
   useEffect(() => {
     void load();
+    // Aba antiga não pode mostrar pacientes já excluídos: ao voltar o foco
+    // para a janela (ou a aba ficar visível), a lista é recarregada.
+    // Dedupe de 5s: trocas rápidas de foco não viram rajada de requisições.
+    let lastLoad = Date.now();
+    const reload = () => {
+      if (Date.now() - lastLoad < 5000) return;
+      lastLoad = Date.now();
+      void load();
+    };
+    const onFocus = reload;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reload();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
   const shown = useMemo(() => {

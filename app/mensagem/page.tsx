@@ -61,7 +61,7 @@ export default function MensagemPage() {
   }, [sessionId]);
 
   const begin = useCallback(async () => {
-    const id = await startSession("mensagem", undefined, patientId);
+    const { id } = await startSession("mensagem", patientId);
     setSessionId(id);
     setDraft([]);
     setBatch(0);

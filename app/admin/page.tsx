@@ -46,6 +46,60 @@ const btnLight =
 const btnDanger =
   "min-h-10 rounded-full bg-nao-soft px-4 py-2 text-sm font-medium text-nao hover:opacity-80 disabled:opacity-40";
 
+// Confirmação inline no lugar de window.confirm/prompt: diálogos nativos
+// bloqueantes não existem em webviews e no browser de preview — e a versão
+// inline é acessível e testável. `requireText` cobre a confirmação reforçada
+// (digitar o nome exato) da exclusão definitiva.
+function ConfirmBox({
+  lines,
+  requireText,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  lines: string[];
+  requireText?: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const ready = !requireText || typed.trim() === requireText;
+  return (
+    <div
+      role="alertdialog"
+      aria-label={confirmLabel}
+      className="flex w-full flex-col gap-3 rounded-2xl border border-nao/30 bg-nao-soft p-4"
+    >
+      {lines.map((l) => (
+        <p key={l} className="text-sm">{l}</p>
+      ))}
+      {requireText && (
+        <input
+          className={`${input} w-full`}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder={requireText}
+          aria-label={`Confirmação reforçada: digite ${requireText}`}
+        />
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="min-h-10 rounded-full bg-nao px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-40"
+          disabled={!ready}
+          onClick={onConfirm}
+        >
+          {confirmLabel}
+        </button>
+        <button type="button" className={btnLight} onClick={onCancel}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
 async function api(
   url: string,
   method: string,
@@ -302,22 +356,18 @@ function UserRow({
   run: (p: Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>;
 }) {
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [name, setName] = useState(u.name);
   const [role, setRole] = useState<UserRole>(u.role);
 
   const remove = async () => {
-    const n = u.links.length;
-    const msg =
-      `Excluir a conta de ${u.name}?\n\n` +
-      `• ${n} vínculo(s) com paciente(s) serão removidos.\n` +
-      "• Os pacientes e seus dados NÃO serão apagados.\n" +
-      "• As sessões de login serão invalidadas.\n\nEsta ação não pode ser desfeita.";
-    if (!window.confirm(msg)) return;
+    setConfirming(false);
     await run(api("/api/admin/users", "DELETE", { id: u.id }), `Usuário ${u.name} excluído.`);
   };
 
   return (
-    <li className="flex flex-col gap-3 rounded-3xl border border-line bg-card p-4 sm:flex-row sm:items-center">
+    <li className="flex flex-col gap-3 rounded-3xl border border-line bg-card p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <Avatar name={u.name} />
         <div className="min-w-0">
@@ -379,12 +429,27 @@ function UserRow({
               >
                 {u.status === "active" ? "Desativar" : "Reativar"}
               </button>
-              <button type="button" className={btnDanger} onClick={() => void remove()}>
+              <button type="button" className={btnDanger} onClick={() => setConfirming(true)}>
                 Excluir
               </button>
             </>
           )}
         </div>
+      )}
+      </div>
+      {confirming && (
+        <ConfirmBox
+          lines={[
+            `Excluir a conta de ${u.name}?`,
+            `${u.links.length} vínculo(s) com paciente(s) serão removidos.`,
+            "Os pacientes e seus dados NÃO serão apagados.",
+            "As sessões de login serão invalidadas.",
+            "Esta ação não pode ser desfeita.",
+          ]}
+          confirmLabel="Excluir usuário"
+          onConfirm={() => void remove()}
+          onCancel={() => setConfirming(false)}
+        />
       )}
     </li>
   );
@@ -457,22 +522,11 @@ function PatientRow({
   run: (pr: Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>;
 }) {
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState<"soft" | "hard" | null>(null);
   const [name, setName] = useState(p.name);
 
   const remove = async (hard: boolean) => {
-    const base =
-      `${hard ? "EXCLUIR DEFINITIVAMENTE" : "Desativar"} o paciente ${p.name}?\n\n` +
-      `• ${authorized.length} usuário(s) possuem acesso a este paciente.\n`;
-    const msg = hard
-      ? base +
-        "• Perfil, Rotinas, Emergências, gestos, configurações de voz e vínculos serão APAGADOS.\n" +
-        "• Esta ação NÃO pode ser desfeita.\n\nDigite OK para confirmar."
-      : base + "• Os dados são preservados e o paciente pode ser reativado.";
-    if (!window.confirm(msg)) return;
-    if (hard) {
-      const typed = window.prompt(`Confirmação reforçada: digite o nome do paciente (${p.name}) para excluir.`);
-      if (typed?.trim() !== p.name) return;
-    }
+    setConfirming(null);
     await run(
       api("/api/patients", "DELETE", { id: p.id, hard }),
       hard ? `Paciente ${p.name} excluído.` : `Paciente ${p.name} desativado.`
@@ -516,11 +570,38 @@ function PatientRow({
           <div className="flex flex-wrap items-center gap-2">
             <a href={`/dashboard/${p.id}`} className={btnLight}>Dashboard</a>
             <button type="button" className={btnLight} onClick={() => setEditing(true)}>Renomear</button>
-            <button type="button" className={btnLight} onClick={() => void remove(false)}>Desativar</button>
-            <button type="button" className={btnDanger} onClick={() => void remove(true)}>Excluir</button>
+            <button type="button" className={btnLight} onClick={() => setConfirming("soft")}>Desativar</button>
+            <button type="button" className={btnDanger} onClick={() => setConfirming("hard")}>Excluir</button>
           </div>
         )}
       </div>
+      {confirming === "soft" && (
+        <ConfirmBox
+          lines={[
+            `Desativar o paciente ${p.name}?`,
+            `${authorized.length} usuário(s) possuem acesso a este paciente.`,
+            "Os dados são preservados e o paciente pode ser reativado.",
+          ]}
+          confirmLabel="Desativar paciente"
+          onConfirm={() => void remove(false)}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
+      {confirming === "hard" && (
+        <ConfirmBox
+          lines={[
+            `EXCLUIR DEFINITIVAMENTE o paciente ${p.name}?`,
+            `${authorized.length} usuário(s) possuem acesso a este paciente.`,
+            "Perfil, Rotinas, Emergências, gestos, configurações de voz e vínculos serão APAGADOS.",
+            "Esta ação NÃO pode ser desfeita.",
+            `Para confirmar, digite o nome do paciente: ${p.name}`,
+          ]}
+          requireText={p.name}
+          confirmLabel="Excluir definitivamente"
+          onConfirm={() => void remove(true)}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
     </li>
   );
 }
@@ -717,6 +798,7 @@ function LinkRow({
   run: (p: Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>;
 }) {
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [perms, setPerms] = useState<Permission[]>(link.permissions);
 
   return (
@@ -731,22 +813,27 @@ function LinkRow({
         <button type="button" className={btnLight} onClick={() => setEditing((v) => !v)}>
           {editing ? "Fechar" : "Permissões"}
         </button>
-        <button
-          type="button"
-          className={btnDanger}
-          onClick={() => {
-            if (
-              window.confirm(
-                "Remover este vínculo?\n\nO usuário perde o acesso a este paciente imediatamente. Os dados do paciente NÃO são apagados e os demais vínculos continuam valendo."
-              )
-            ) {
-              void run(api("/api/admin/access", "DELETE", { id: link.id }), "Vínculo removido.");
-            }
-          }}
-        >
+        <button type="button" className={btnDanger} onClick={() => setConfirming(true)}>
           Revogar
         </button>
       </div>
+      {confirming && (
+        <div className="mt-3">
+          <ConfirmBox
+            lines={[
+              "Remover este vínculo?",
+              "O usuário perde o acesso a este paciente imediatamente.",
+              "Os dados do paciente NÃO são apagados e os demais vínculos continuam valendo.",
+            ]}
+            confirmLabel="Revogar vínculo"
+            onConfirm={() => {
+              setConfirming(false);
+              void run(api("/api/admin/access", "DELETE", { id: link.id }), "Vínculo removido.");
+            }}
+            onCancel={() => setConfirming(false)}
+          />
+        </div>
+      )}
       {editing && (
         <div className="mt-3 flex flex-wrap gap-2">
           {PERMISSIONS.map((p) => (

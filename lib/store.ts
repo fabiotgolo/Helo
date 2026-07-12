@@ -345,18 +345,24 @@ export async function restoreDefaults(
 
 // ---------- Sessões ----------
 
-export async function createSession(
-  mode: string,
-  operator?: string,
-  patientId?: number | null
-): Promise<number> {
+export async function createSession(opts: {
+  mode: string;
+  patientId?: number | null;
+  /** Identidade REAL do operador — sempre o userId autenticado. */
+  operatorId?: string | null;
+  /** Snapshot do nome para leitura do histórico; nunca fonte de identidade. */
+  operatorName?: string | null;
+  operatorRole?: string | null;
+}): Promise<number> {
   const id = Date.now();
   await col.sessions().doc(String(id)).set({
     startedAt: new Date().toISOString(),
     endedAt: null,
-    operator: operator ?? null,
-    mode: mode ?? "conversa",
-    patientId: patientId ?? null,
+    operator: opts.operatorName ?? null,
+    operatorId: opts.operatorId ?? null,
+    operatorRole: opts.operatorRole ?? null,
+    mode: opts.mode ?? "conversa",
+    patientId: opts.patientId ?? null,
   });
   return id;
 }

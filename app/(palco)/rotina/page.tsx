@@ -56,7 +56,7 @@ export default function RotinaPage() {
 
   const ensureSession = useCallback(async () => {
     if (sessionRef.current == null) {
-      sessionRef.current = await startSession("rotina", undefined, patientId);
+      sessionRef.current = (await startSession("rotina", patientId)).id;
     }
     return sessionRef.current;
   }, [patientId]);

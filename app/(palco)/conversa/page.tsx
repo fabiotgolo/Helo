@@ -8,6 +8,12 @@ import { useGestures } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
+import { useAuthUser, redirectToLogin } from "@/lib/use-auth";
+import {
+  ROLE_LABELS,
+  PROFESSIONAL_TYPE_LABELS,
+  type AppUser,
+} from "@/lib/access-types";
 import { useHelo } from "@/lib/helo-state";
 import { GestureTriplet } from "@/components/ui";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
@@ -36,12 +42,16 @@ export default function ConversaPage() {
   const gestures = useGestures();
   // Perfil do paciente ativo: nome, estilo de fala, temas evitados e
   // expressões preferidas alimentam a conversa e as sugestões da IA.
-  const { patientId, settings } = usePatient();
+  const { patient, patientId, settings, loading: patientLoading } = usePatient();
   const { enabledItems: preferredExpressions } = usePatientItems("conversa");
-  const patientName = settings[PATIENT_SETTING_KEYS.name] ?? "";
+  const patientName = settings[PATIENT_SETTING_KEYS.name] ?? patient?.name ?? "";
+  // Operador = usuário autenticado. Nenhum nome digitado define identidade;
+  // o servidor ignora qualquer nome vindo do cliente ao criar a sessão.
+  const { user, loading: authLoading, logout } = useAuthUser();
   const [phase, setPhase] = useState<Phase>("intro");
   const [paused, setPaused] = useState(false);
-  const [operator, setOperator] = useState("");
+  const [startError, setStartError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
 
@@ -82,10 +92,11 @@ export default function ConversaPage() {
     [effectiveOptions, batch]
   );
 
+  // Sem usuário autenticado não há operador — a tela não pergunta nome,
+  // ela exige login antes de qualquer sessão.
   useEffect(() => {
-    const saved = localStorage.getItem("helo.operator");
-    if (saved) setOperator(saved);
-  }, []);
+    if (!authLoading && !user) redirectToLogin();
+  }, [authLoading, user]);
 
   // Rede de pessoas DO paciente ativo — troca de paciente, troca a rede.
   useEffect(() => {
@@ -415,8 +426,24 @@ export default function ConversaPage() {
   // ——— Controles do assistente ———
 
   const begin = useCallback(async () => {
-    localStorage.setItem("helo.operator", operator);
-    const id = await startSession("conversa", operator || undefined, patientId);
+    if (!user) {
+      redirectToLogin();
+      return;
+    }
+    if (patientId == null) {
+      setStartError("Nenhum paciente selecionado. Escolha um paciente no Dashboard.");
+      return;
+    }
+    setStartError(null);
+    setStarting(true);
+    // A identidade do operador é resolvida no servidor a partir do cookie de
+    // sessão — aqui só vai o modo e o paciente ativo.
+    const { id, error } = await startSession("conversa", patientId);
+    setStarting(false);
+    if (id == null) {
+      setStartError(error ?? "Não foi possível iniciar a conversa. Tente novamente.");
+      return;
+    }
     setSessionId(id);
     setPhase("node");
     setNodeId(START_NODE);
@@ -438,7 +465,7 @@ export default function ConversaPage() {
     // Vocativo com o nome do paciente: "Dr. Fábio, o que você quer comunicar?"
     const q = flow[START_NODE].question;
     void speak(patientName ? `${patientName}, ${q.charAt(0).toLowerCase()}${q.slice(1)}` : q);
-  }, [operator, patientName, patientId, speak]);
+  }, [user, patientName, patientId, speak]);
 
   const repeat = useCallback(() => {
     if (phase === "confirm" && confirm) {
@@ -525,7 +552,16 @@ export default function ConversaPage() {
       <main className="relative flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-6">
         {phase === "intro" ? (
           <OverlayPanel label="Conversa guiada" variant="imersivo">
-            <Intro operator={operator} setOperator={setOperator} onBegin={begin} />
+            <Intro
+              user={user}
+              loading={authLoading || patientLoading}
+              patientName={patientName}
+              hasPatient={patientId != null}
+              starting={starting}
+              error={startError}
+              onBegin={begin}
+              onSwitchOperator={logout}
+            />
           </OverlayPanel>
         ) : (
         <section
@@ -713,16 +749,35 @@ export default function ConversaPage() {
   );
 }
 
+/** Rótulo humano do papel — profissionais mostram a especialidade. */
+function operatorRoleLabel(user: AppUser): string {
+  if (user.role === "profissional" && user.professionalType) {
+    return PROFESSIONAL_TYPE_LABELS[user.professionalType];
+  }
+  return ROLE_LABELS[user.role];
+}
+
 function Intro({
-  operator,
-  setOperator,
+  user,
+  loading,
+  patientName,
+  hasPatient,
+  starting,
+  error,
   onBegin,
+  onSwitchOperator,
 }: {
-  operator: string;
-  setOperator: (v: string) => void;
+  user: AppUser | null;
+  loading: boolean;
+  patientName: string;
+  hasPatient: boolean;
+  starting: boolean;
+  error: string | null;
   onBegin: () => void;
+  onSwitchOperator: () => void;
 }) {
   const gestures = useGestures();
+  const ready = !loading && user != null && hasPatient;
   return (
     <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-8 text-center">
       <div>
@@ -737,23 +792,66 @@ function Intro({
         <span>{gestures.talvez.emoji} Talvez</span>
         <span>{gestures.nao.emoji} Não</span>
       </div>
-      <label className="flex w-full flex-col gap-2 text-left">
-        <span className="text-sm font-medium text-ink-soft">Quem está acompanhando ou operando o Helo?</span>
-        <input
-          type="text"
-          value={operator}
-          onChange={(e) => setOperator(e.target.value)}
-          placeholder="Enfermeiro, cuidador, familiar ou acompanhante"
-          className="w-full rounded-2xl border border-line bg-card px-5 py-4 text-lg outline-none focus:border-ink-mute"
-        />
-      </label>
+
+      {/* Identificação somente leitura: operador = usuário autenticado,
+          paciente = seleção feita no Dashboard. Nada é digitado aqui. */}
+      {loading ? (
+        <p className="text-ink-mute animate-pulse">Identificando operador…</p>
+      ) : user ? (
+        <div className="flex w-full flex-col gap-4 sm:flex-row sm:justify-center sm:gap-8">
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-ink-mute">
+              Você está acompanhando como:
+            </span>
+            <span className="text-xl font-medium">{user.name}</span>
+            <span className="text-sm text-ink-soft">{operatorRoleLabel(user)}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-ink-mute">Paciente:</span>
+            <span className="text-xl font-medium">
+              {hasPatient ? patientName || "Paciente sem nome" : "—"}
+            </span>
+            {!hasPatient && (
+              <span className="text-sm text-ink-soft">
+                Selecione um paciente no{" "}
+                <Link href="/dashboard" className="underline">
+                  Dashboard
+                </Link>
+                .
+              </span>
+            )}
+          </div>
+        </div>
+      ) : (
+        <p className="text-ink-soft" role="alert">
+          É preciso entrar na plataforma para operar o Helo. Redirecionando para
+          o login…
+        </p>
+      )}
+
+      {error && (
+        <p role="alert" className="w-full rounded-2xl bg-nao-soft px-5 py-3 text-nao">
+          {error}
+        </p>
+      )}
+
       <button
         type="button"
         onClick={onBegin}
-        className="rounded-full bg-ink px-10 py-4 text-lg font-medium text-white transition-transform hover:scale-[1.02] hover:bg-black"
+        disabled={!ready || starting}
+        className="rounded-full bg-ink px-10 py-4 text-lg font-medium text-white transition-transform hover:scale-[1.02] hover:bg-black disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Começar
+        {starting ? "Iniciando…" : "Começar"}
       </button>
+      {user && (
+        <button
+          type="button"
+          onClick={onSwitchOperator}
+          className="text-sm text-ink-mute underline-offset-4 hover:underline"
+        >
+          Trocar operador (sair e entrar com outra conta)
+        </button>
+      )}
       <p className="text-sm text-ink-mute">
         O Helo nunca fala pelo paciente. Toda mensagem é confirmada antes de ser comunicada.
       </p>

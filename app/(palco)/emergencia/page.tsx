@@ -70,7 +70,7 @@ export default function EmergenciaPage() {
   const ensureSession = useCallback(() => {
     if (sessionRef.current != null) return Promise.resolve(sessionRef.current);
     if (!sessionPending.current) {
-      sessionPending.current = startSession("emergencia", undefined, patientId).then((id) => {
+      sessionPending.current = startSession("emergencia", patientId).then(({ id }) => {
         sessionRef.current = id;
         if (id == null) sessionPending.current = null;
         return id;

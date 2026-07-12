@@ -1,5 +1,6 @@
 import { createSession, endSession, listRecentSessions } from "@/lib/store";
 import { requirePatientAccess, requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/access";
 
 // Sessões recentes de UM paciente, com métricas por sessão.
 // GET exige viewSessions; POST (operar a Helo) exige createSession.
@@ -17,8 +18,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const { operator, mode, patientId } = (await request.json()) as {
-    operator?: string;
+  const { mode, patientId } = (await request.json()) as {
     mode?: string;
     patientId?: number | null;
   };
@@ -28,11 +28,25 @@ export async function POST(request: Request) {
     "createSession"
   );
   if (auth instanceof Response) return auth;
-  const id = await createSession(
-    mode ?? "conversa",
-    operator ?? auth.user.name,
-    patientId
-  );
+  // Identidade do operador vem SEMPRE da sessão autenticada — nunca do corpo
+  // da requisição. O nome fica gravado só como snapshot legível do histórico.
+  const operatorRole = auth.link?.accessRole ?? auth.user.role;
+  const id = await createSession({
+    mode: mode ?? "conversa",
+    patientId: Number(patientId),
+    operatorId: auth.user.id,
+    operatorName: auth.user.name,
+    operatorRole,
+  });
+  void logAudit({
+    userId: auth.user.id,
+    userName: auth.user.name,
+    patientId: Number(patientId),
+    action: "session_started",
+    entityType: "session",
+    entityId: String(id),
+    metadata: { mode: mode ?? "conversa", operatorRole },
+  });
   return Response.json({ id });
 }
 
