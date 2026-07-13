@@ -17,7 +17,7 @@ import { useSpeech, type SpeakResult } from "@/lib/useSpeech";
 import type { ActiveSpeaker, SpeakOptions, VoiceSource } from "@/lib/voice";
 import type { OrbPalette } from "@/components/ui";
 
-export type HeloMode = "conversar" | "rotina" | "emergencia";
+export type HeloMode = "conversar" | "rotina" | "emergencia" | "atividades";
 
 export interface HeloModeInfo {
   id: HeloMode;
@@ -56,9 +56,25 @@ export const HELO_MODES: Record<HeloMode, HeloModeInfo> = {
     href: "/emergencia",
     spoken: "Emergência: um toque fala na hora, em voz alta.",
   },
+  atividades: {
+    id: "atividades",
+    title: "Atividades",
+    description:
+      "Sessões personalizadas: memórias, reconhecimento, treino e exercícios.",
+    palette: "ceu",
+    href: "/atividades",
+    spoken: "Atividades: experiências pensadas especialmente para você.",
+  },
 };
 
-export const MODE_ORDER: HeloMode[] = ["rotina", "conversar", "emergencia"];
+// A ordem preserva o trio original nos mesmos lugares (slots ±1 do palco);
+// o 4º modo entra no slot seguinte.
+export const MODE_ORDER: HeloMode[] = [
+  "rotina",
+  "conversar",
+  "emergencia",
+  "atividades",
+];
 
 // Apresentação inicial da Helo — falada uma única vez, ao abrir o app
 export const INTRO_SPEECH =

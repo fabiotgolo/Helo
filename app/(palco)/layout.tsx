@@ -21,6 +21,7 @@ const PATH_TO_MODE: Record<string, HeloMode> = {
   "/conversa": "conversar",
   "/rotina": "rotina",
   "/emergencia": "emergencia",
+  "/atividades": "atividades",
 };
 
 export default function PalcoLayout({ children }: { children: React.ReactNode }) {

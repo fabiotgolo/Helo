@@ -29,14 +29,37 @@ type Layout = Record<HeloMode, Rect>;
 export type StageVariant = "aberto" | "compacto" | "imersivo";
 
 // Composição própria por formato — mobile não é desktop encolhido:
-//   ≥640px (sm):  [ menor ]  [ MAIOR ]  [ menor ]
+//   ≥640px (sm):  [ menor ]  [ MAIOR ]  [ menor ]  ( [ menor ] … )
 //   <640px:            [ MAIOR ]
-//                 [ menor ]  [ menor ]
-// Compacto (experiência aberta): trio horizontal pequeno, o ativo segue
+//                 [ menor ]  [ menor ]  ( [ menor ] … )
+// Compacto (experiência aberta): fila horizontal pequena, o ativo segue
 // protagonista e todos permanecem visíveis e clicáveis sobre o overlay.
+//
+// Os inativos ocupam "slots" simétricos a partir do centro: ±1 reproduz
+// exatamente o trio original; modos adicionais entram em ±2 — o palco
+// aceita novos modos sem redesenhar a coreografia.
+const SLOTS = [-1, 1, -2, 2];
+
+/** Deslocamento horizontal do slot: meio do grande + k orbes pequenos + k folgas. */
+function slotX(
+  center: number,
+  slot: number,
+  big: number,
+  small: number,
+  gap: number
+): number {
+  const k = Math.abs(slot);
+  return center + Math.sign(slot) * (big / 2 + small * (k - 0.5) + gap * k);
+}
+
+function clampX(x: number, d: number, w: number): number {
+  return Math.min(Math.max(x, d / 2 + 12), w - d / 2 - 12);
+}
+
 function computeLayout(w: number, h: number, active: HeloMode, variant: StageVariant): Layout {
   const inactive = MODE_ORDER.filter((m) => m !== active);
   const mobile = w < 640;
+  const lay = {} as Layout;
 
   if (variant === "imersivo") {
     // O ativo ocupa o centro do palco, atrás do overlay de conteúdo; os
@@ -45,33 +68,39 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
     const D = Math.min(w * (mobile ? 0.82 : 0.52), h * 0.68, 480);
     const d = mobile ? 52 : 68;
     const y = mobile ? 44 : 54;
-    const offset = d / 2 + (mobile ? 32 : 44);
-    return {
-      [active]: { x: w * 0.5, y: h * 0.46, d: D },
-      [inactive[0]]: { x: w * 0.5 - offset, y, d },
-      [inactive[1]]: { x: w * 0.5 + offset, y, d },
-    } as Layout;
+    const gap = mobile ? 32 : 44;
+    lay[active] = { x: w * 0.5, y: h * 0.46, d: D };
+    inactive.forEach((m, i) => {
+      lay[m] = { x: clampX(slotX(w * 0.5, SLOTS[i], 0, d, gap), d, w), y, d };
+    });
+    return lay;
   }
 
   if (variant === "compacto") {
     const D = Math.min(h * 0.72, mobile ? 112 : 150);
     const d = D * 0.45;
-    const offset = D / 2 + d / 2 + (mobile ? 18 : 28);
-    return {
-      [active]: { x: w * 0.5, y: h * 0.5, d: D },
-      [inactive[0]]: { x: w * 0.5 - offset, y: h * 0.56, d },
-      [inactive[1]]: { x: w * 0.5 + offset, y: h * 0.56, d },
-    } as Layout;
+    const gap = mobile ? 18 : 28;
+    lay[active] = { x: w * 0.5, y: h * 0.5, d: D };
+    inactive.forEach((m, i) => {
+      lay[m] = {
+        x: clampX(slotX(w * 0.5, SLOTS[i], D, d, gap), d, w),
+        y: h * 0.56,
+        d,
+      };
+    });
+    return lay;
   }
 
   if (mobile) {
+    // Home mobile: o grande no alto, os demais em fila na base.
     const D = Math.min(w * 0.6, h * 0.46, 280);
-    const d = Math.min(D * 0.5, w * 0.28 * 2 - 16);
-    return {
-      [active]: { x: w * 0.5, y: h * 0.3, d: D },
-      [inactive[0]]: { x: w * 0.28, y: h * 0.76, d },
-      [inactive[1]]: { x: w * 0.72, y: h * 0.76, d },
-    } as Layout;
+    const n = inactive.length;
+    const d = Math.min(D * 0.5, w / (n + 1) - 14);
+    lay[active] = { x: w * 0.5, y: h * 0.3, d: D };
+    inactive.forEach((m, i) => {
+      lay[m] = { x: (w * (i + 1)) / (n + 1), y: h * 0.76, d };
+    });
+    return lay;
   }
 
   // Composição da referência visual (Fase 10): central grande ao centro,
@@ -79,12 +108,15 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
   const D = Math.min(w * 0.34, h * 0.72, 340);
   const d = D * 0.48;
   const gap = Math.max(28, w * 0.03);
-  const offset = D / 2 + d / 2 + gap;
-  return {
-    [active]: { x: w * 0.5, y: h * 0.46, d: D },
-    [inactive[0]]: { x: Math.max(d / 2 + 12, w * 0.5 - offset), y: h * 0.55, d },
-    [inactive[1]]: { x: Math.min(w - d / 2 - 12, w * 0.5 + offset), y: h * 0.55, d },
-  } as Layout;
+  lay[active] = { x: w * 0.5, y: h * 0.46, d: D };
+  inactive.forEach((m, i) => {
+    lay[m] = {
+      x: clampX(slotX(w * 0.5, SLOTS[i], D, d, gap), d, w),
+      y: h * 0.55,
+      d,
+    };
+  });
+  return lay;
 }
 
 export default function OrbStage({
@@ -331,7 +363,7 @@ export default function OrbStage({
       // Posicionamento (relative/absolute) vem de quem monta o palco
       className={`w-full ${className}`}
       role="group"
-      aria-label="Modos do Helo: Conversar, Rotina e Emergência"
+      aria-label={`Modos do Helo: ${MODE_ORDER.map((m) => HELO_MODES[m].title).join(", ")}`}
     >
       {/* Fallback sem WebGL: os mesmos orbes, em gradiente CSS */}
       {!webglOk && layout && (

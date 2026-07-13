@@ -20,6 +20,7 @@ import {
   Tile,
   fmtTs,
 } from "@/components/dashboard-ui";
+import { ActivitySection } from "@/components/activity-dashboard";
 import { usePatient } from "@/lib/patient";
 import { redirectToLogin } from "@/lib/use-auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
@@ -630,6 +631,9 @@ export default function DashboardIndividualPage() {
                 </div>
               )}
             </Card>
+
+            {/* ——— Atividades e sessões personalizadas ——— */}
+            <ActivitySection patientId={patientId} period={period} />
 
             <p className="text-center text-xs text-ink-mute">
               Estas informações são observacionais e não constituem diagnóstico médico.

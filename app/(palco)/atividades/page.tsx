@@ -1,0 +1,285 @@
+"use client";
+
+// ——— Modo Atividades: sessões personalizadas do paciente ativo ———
+// MODO DE USO apenas: lista as atividades ATIVAS do paciente e executa
+// sessões. Criar/editar vive em /atividades/gerenciar (modo de edição) —
+// nada aqui altera conteúdo, evitando edição acidental durante a sessão.
+//
+// O palco dos orbes persiste por baixo (layout do grupo (palco)); o
+// conteúdo flutua em overlay, como Rotina e Conversa.
+
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { usePatient } from "@/lib/patient";
+import { redirectToLogin } from "@/lib/use-auth";
+import { OverlayVeil } from "@/components/overlay-panel";
+import { SessionPlayer } from "@/components/activity-player";
+import {
+  ACTIVITY_CATEGORIES,
+  ACTIVITY_CATEGORY_LABELS,
+  type ActivityCaps,
+  type ActivityRun,
+  type ActivityTemplate,
+} from "@/lib/activity-types";
+
+type View =
+  | { kind: "lista" }
+  | { kind: "sessao"; run: ActivityRun }
+  | { kind: "fim"; titulo: string; respondidos: number; total: number };
+
+export default function AtividadesPage() {
+  const { patient, patientId } = usePatient();
+  const [templates, setTemplates] = useState<ActivityTemplate[] | null>(null);
+  const [caps, setCaps] = useState<ActivityCaps | null>(null);
+  const [state, setState] = useState<"ok" | "carregando" | "negado" | "erro">(
+    "carregando"
+  );
+  const [view, setView] = useState<View>({ kind: "lista" });
+  const [starting, setStarting] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // Carga isolada por paciente: troca rápida descarta respostas antigas.
+  useEffect(() => {
+    if (patientId == null) return;
+    let stale = false;
+    setState("carregando");
+    setTemplates(null);
+    setView({ kind: "lista" });
+    void fetch(`/api/activities?patientId=${patientId}`)
+      .then(async (r) => {
+        if (stale) return;
+        if (r.status === 401) {
+          redirectToLogin();
+          return;
+        }
+        if (r.status === 403) {
+          setState("negado");
+          return;
+        }
+        if (!r.ok) throw new Error();
+        const d = (await r.json()) as {
+          templates: ActivityTemplate[];
+          caps: ActivityCaps;
+        };
+        if (stale) return;
+        setTemplates(d.templates);
+        setCaps(d.caps);
+        setState("ok");
+      })
+      .catch(() => {
+        if (!stale) setState("erro");
+      });
+    return () => {
+      stale = true;
+    };
+  }, [patientId]);
+
+  const start = useCallback(
+    async (template: ActivityTemplate) => {
+      if (patientId == null || starting) return;
+      setStarting(template.id);
+      setStartError(null);
+      try {
+        const r = await fetch("/api/activities/runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ patientId, templateId: template.id }),
+        });
+        const d = (await r.json().catch(() => null)) as
+          | { run?: ActivityRun; error?: string }
+          | null;
+        if (!r.ok || !d?.run) {
+          throw new Error(d?.error ?? "não foi possível iniciar a sessão");
+        }
+        setView({ kind: "sessao", run: d.run });
+      } catch (e) {
+        setStartError((e as Error).message);
+      } finally {
+        setStarting(null);
+      }
+    },
+    [patientId, starting]
+  );
+
+  if (patientId == null) {
+    return (
+      <Shell>
+        <p className="text-center text-ink-soft">Carregando o paciente…</p>
+      </Shell>
+    );
+  }
+
+  if (view.kind === "sessao") {
+    return (
+      <div className="relative flex flex-1 flex-col">
+        <OverlayVeil />
+        <main className="relative flex w-full flex-1 flex-col items-center px-0 pb-6">
+          <SessionPlayer
+            run={view.run}
+            patientId={patientId}
+            onExit={({ status, respondidos, total }) =>
+              setView(
+                status === "concluida"
+                  ? {
+                      kind: "fim",
+                      titulo: view.run.templateTitle,
+                      respondidos,
+                      total,
+                    }
+                  : { kind: "lista" }
+              )
+            }
+          />
+        </main>
+      </div>
+    );
+  }
+
+  if (view.kind === "fim") {
+    return (
+      <Shell>
+        <section
+          aria-label="Sessão concluída"
+          className="flex flex-col items-center gap-5 text-center"
+        >
+          <p className="text-sm font-semibold uppercase tracking-widest text-ink-soft">
+            Sessão concluída
+          </p>
+          <h1 className="text-3xl font-medium tracking-tight">{view.titulo}</h1>
+          {view.total > 0 && (
+            <p className="text-lg text-ink-soft">
+              {view.respondidos} de {view.total}{" "}
+              {view.total === 1 ? "pergunta registrada" : "perguntas registradas"}.
+            </p>
+          )}
+          <p className="max-w-md text-sm text-ink-mute">
+            Os registros são observacionais e ficam no Dashboard do paciente.
+          </p>
+          <button
+            type="button"
+            onClick={() => setView({ kind: "lista" })}
+            className="rounded-full bg-ink px-8 py-3 font-medium text-white hover:bg-black"
+          >
+            Voltar às atividades
+          </button>
+        </section>
+      </Shell>
+    );
+  }
+
+  // ——— Lista ———
+  return (
+    <Shell>
+      <div className="text-center">
+        <h1 className="text-3xl font-medium tracking-tight sm:text-4xl">Atividades</h1>
+        <p className="mt-2 text-lg text-ink-soft">
+          Sessões personalizadas de {patient?.name ?? "…"} — memórias,
+          reconhecimento, treino e exercícios.
+        </p>
+      </div>
+
+      {(caps?.create || caps?.edit) && (
+        <div className="flex justify-center">
+          <Link
+            href="/atividades/gerenciar"
+            className="rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium hover:border-ink-mute"
+          >
+            ⚙ Gerenciar atividades
+          </Link>
+        </div>
+      )}
+
+      {state === "carregando" && (
+        <p className="text-center text-ink-mute">Carregando as atividades…</p>
+      )}
+
+      {state === "negado" && (
+        <p role="alert" className="mx-auto max-w-md text-center text-ink-soft">
+          Você não tem permissão para ver as Atividades deste paciente. Fale
+          com o administrador.
+        </p>
+      )}
+
+      {state === "erro" && (
+        <p role="alert" className="mx-auto max-w-md text-center text-ink-soft">
+          Não foi possível carregar as atividades. Verifique a conexão e tente
+          de novo.
+        </p>
+      )}
+
+      {state === "ok" && templates && templates.length === 0 && (
+        <div className="flex flex-col items-center gap-4 py-6 text-center">
+          <p className="text-ink-soft">Nenhuma sessão personalizada criada ainda.</p>
+          {caps?.create && (
+            <Link
+              href="/atividades/gerenciar"
+              className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+            >
+              Criar sessão
+            </Link>
+          )}
+        </div>
+      )}
+
+      {state === "ok" && templates && templates.length > 0 && (
+        <div className="flex flex-col gap-7">
+          {startError && (
+            <p role="alert" className="text-center text-sm text-nao">
+              {startError}
+            </p>
+          )}
+          {!caps?.run && (
+            <p className="text-center text-sm text-ink-mute">
+              Você pode ver as atividades, mas não tem permissão para executá-las.
+            </p>
+          )}
+          {ACTIVITY_CATEGORIES.map((cat) => {
+            const group = templates.filter((t) => t.category === cat);
+            if (group.length === 0) return null;
+            return (
+              <section key={cat} aria-label={ACTIVITY_CATEGORY_LABELS[cat]}>
+                <h2 className="mb-3 text-center text-sm font-semibold uppercase tracking-widest text-ink-soft">
+                  {ACTIVITY_CATEGORY_LABELS[cat]}
+                </h2>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {group.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      disabled={!caps?.run || starting != null}
+                      onClick={() => void start(t)}
+                      className="flex flex-col items-center gap-1.5 rounded-3xl border border-line/70 bg-card/70 px-5 py-7 shadow-[var(--shadow-soft)] backdrop-blur-md transition-transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-60 disabled:hover:scale-100"
+                    >
+                      <span className="text-xl font-medium tracking-tight">
+                        {starting === t.id ? "Iniciando…" : t.title}
+                      </span>
+                      {t.description && (
+                        <span className="text-sm text-ink-soft">{t.description}</span>
+                      )}
+                      <span className="text-xs text-ink-mute">
+                        {t.items.length} {t.items.length === 1 ? "item" : "itens"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+    </Shell>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="relative flex flex-1 flex-col">
+      <OverlayVeil />
+      <main className="relative flex w-full flex-1 flex-col justify-center px-4 pb-6 sm:px-6">
+        <div className="fade-rise pointer-events-auto mx-auto flex w-full max-w-4xl flex-col gap-6 py-8">
+          {children}
+        </div>
+      </main>
+    </div>
+  );
+}

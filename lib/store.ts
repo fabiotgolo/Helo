@@ -530,7 +530,7 @@ function spMidnightInstant(now: Date, y: number, m: number, d: number): number {
   return Date.UTC(y, m - 1, d, 0, 0, 0) - offset;
 }
 
-function cutoffIso(period: Period): string {
+export function cutoffIso(period: Period): string {
   const now = new Date();
   const p = spParts(now);
   let instant: number;
@@ -554,15 +554,15 @@ function cutoffIso(period: Period): string {
   return new Date(instant).toISOString();
 }
 
-function localTs(iso: string): string {
+export function localTs(iso: string): string {
   const p = spParts(new Date(iso));
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
 }
-function localDay(iso: string): string {
+export function localDay(iso: string): string {
   const p = spParts(new Date(iso));
   return `${p.year}-${p.month}-${p.day}`;
 }
-function localHour(iso: string): string {
+export function localHour(iso: string): string {
   return spParts(new Date(iso)).hour;
 }
 

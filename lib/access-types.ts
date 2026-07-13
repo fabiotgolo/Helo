@@ -66,6 +66,14 @@ export const PERMISSIONS = [
   "editGestures",
   "selectPatientVoiceSource",
   "createSession",
+  // Atividades (sessões personalizadas) — permissões próprias, POR VÍNCULO,
+  // nunca derivadas da profissão (regra do produto — seção 12):
+  "viewActivities",
+  "runActivities",
+  "createActivities",
+  "editActivities",
+  "deleteActivities",
+  "viewActivityResults",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -81,6 +89,12 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   editGestures: "Editar gestos",
   selectPatientVoiceSource: "Escolher a voz das falas do paciente",
   createSession: "Usar a Helo (criar sessões)",
+  viewActivities: "Ver Atividades personalizadas",
+  runActivities: "Executar Atividades",
+  createActivities: "Criar Atividades",
+  editActivities: "Editar Atividades",
+  deleteActivities: "Excluir Atividades",
+  viewActivityResults: "Ver resultados das Atividades",
 };
 
 /** Papéis que podem criar pacientes (regra do produto — seção 11). */
@@ -95,14 +109,32 @@ export const ROLES_THAT_CREATE_PATIENTS: UserRole[] = [
 export function defaultPermissionsFor(role: UserRole): Permission[] {
   switch (role) {
     case "familiar":
-      return ["viewDashboard", "viewSessions", "viewMetrics", "createSession"];
+      // Familiares veem e executam Atividades; criar/editar conteúdo
+      // (inclusive afetivo) é concessão explícita do Admin.
+      return [
+        "viewDashboard",
+        "viewSessions",
+        "viewMetrics",
+        "createSession",
+        "viewActivities",
+        "runActivities",
+      ];
     case "paciente":
-      return ["viewDashboard", "viewSessions", "viewMetrics"];
+      return ["viewDashboard", "viewSessions", "viewMetrics", "viewActivities"];
     default:
-      // admin/profissional/cuidador: tudo, EXCETO a escolha da voz do
-      // paciente — regra do produto: selectPatientVoiceSource nunca é
-      // concedida automaticamente por papel, só por decisão explícita.
-      return PERMISSIONS.filter((p) => p !== "selectPatientVoiceSource");
+      // admin/profissional/cuidador: tudo, EXCETO:
+      //   - selectPatientVoiceSource — a escolha da voz do paciente nunca é
+      //     concedida automaticamente por papel, só por decisão explícita;
+      //   - criar/editar/excluir Atividades — a permissão não depende da
+      //     profissão (seção 12): ser profissional de saúde não concede
+      //     edição sozinho. Ver/executar/acompanhar resultados entram.
+      const explicitOnly: Permission[] = [
+        "selectPatientVoiceSource",
+        "createActivities",
+        "editActivities",
+        "deleteActivities",
+      ];
+      return PERMISSIONS.filter((p) => !explicitOnly.includes(p));
   }
 }
 
