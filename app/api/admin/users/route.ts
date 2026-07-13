@@ -82,6 +82,8 @@ export async function PATCH(request: Request) {
     professionalType?: ProfessionalType | null;
     status?: "active" | "inactive";
     password?: string;
+    /** Concessão do Admin: usuário pode escolher a própria voz da plataforma. */
+    canSelectPlatformVoice?: boolean;
   };
   if (!body.id) return Response.json({ error: "id obrigatório" }, { status: 400 });
   const target = await getUserById(body.id);
@@ -100,7 +102,11 @@ export async function PATCH(request: Request) {
   await logAudit({
     userId: auth.user.id,
     userName: auth.user.name,
-    action: body.status ? `user.${body.status === "inactive" ? "deactivate" : "reactivate"}` : "user.update",
+    action: body.status
+      ? `user.${body.status === "inactive" ? "deactivate" : "reactivate"}`
+      : body.canSelectPlatformVoice !== undefined
+        ? `user.voicePermission.${body.canSelectPlatformVoice ? "grant" : "revoke"}`
+        : "user.update",
     entityType: "user",
     entityId: body.id,
   });

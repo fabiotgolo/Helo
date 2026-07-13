@@ -42,6 +42,19 @@ export const PROFESSIONAL_TYPE_LABELS: Record<ProfessionalType, string> = {
 
 // Permissões granulares POR VÍNCULO — não por título profissional.
 // Dois familiares do mesmo paciente podem ter conjuntos diferentes.
+//
+// Voz (arquitetura de catálogo controlado):
+//   - o CATÁLOGO de vozes da plataforma e a VOZ CLONADA do paciente são
+//     exclusivos do Admin (rotas /api/admin/* — não existem como permissão
+//     de vínculo, por construção);
+//   - "selectPatientVoiceSource" permite ao usuário vinculado escolher a
+//     FONTE da voz das falas do paciente (clone dele ou voz aprovada do
+//     catálogo). Substitui a antiga "manageVoice" (que deixava gravar um
+//     voiceId livre) — vínculos antigos com manageVoice são mapeados;
+//   - a permissão de escolher a voz da PLATAFORMA é do usuário (não do
+//     vínculo): AppUser.canSelectPlatformVoice, concedida pelo Admin;
+//   - VER o status da voz (configurada/não, nunca IDs) segue coberto pelo
+//     próprio vínculo ativo — equivale à "viewPatientVoiceStatus".
 export const PERMISSIONS = [
   "viewDashboard",
   "viewSessions",
@@ -51,7 +64,7 @@ export const PERMISSIONS = [
   "editRoutine",
   "editEmergency",
   "editGestures",
-  "manageVoice",
+  "selectPatientVoiceSource",
   "createSession",
 ] as const;
 
@@ -66,7 +79,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   editRoutine: "Editar Rotina",
   editEmergency: "Editar Emergência",
   editGestures: "Editar gestos",
-  manageVoice: "Gerenciar voz do paciente",
+  selectPatientVoiceSource: "Escolher a voz das falas do paciente",
   createSession: "Usar a Helo (criar sessões)",
 };
 
@@ -86,9 +99,10 @@ export function defaultPermissionsFor(role: UserRole): Permission[] {
     case "paciente":
       return ["viewDashboard", "viewSessions", "viewMetrics"];
     default:
-      // admin/profissional/cuidador: tudo (o vínculo de admin é opcional —
-      // o papel admin já dá acesso global).
-      return [...PERMISSIONS];
+      // admin/profissional/cuidador: tudo, EXCETO a escolha da voz do
+      // paciente — regra do produto: selectPatientVoiceSource nunca é
+      // concedida automaticamente por papel, só por decisão explícita.
+      return PERMISSIONS.filter((p) => p !== "selectPatientVoiceSource");
   }
 }
 
@@ -99,6 +113,10 @@ export interface AppUser {
   role: UserRole;
   professionalType: ProfessionalType | null;
   status: "active" | "inactive";
+  /** Concedida pelo Admin: pode escolher a própria voz da plataforma. */
+  canSelectPlatformVoice: boolean;
+  /** Preferência do usuário: id de voz do CATÁLOGO (nunca voiceId técnico). */
+  platformVoiceId: string | null;
   createdAt: string;
   updatedAt: string;
 }

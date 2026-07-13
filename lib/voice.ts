@@ -14,8 +14,11 @@ import type { ConfirmationStatus, HeloItemMode, SpeakerRole } from "@/lib/types"
 
 /** Voz técnica que sintetiza o áudio de uma fala. */
 export type VoiceSource =
-  | "heloElevenLabs" // voz oficial da plataforma (ElevenLabs)
+  | "heloElevenLabs" // voz da plataforma (catálogo aprovado, ElevenLabs)
   | "patientElevenLabsClone" // voz clonada/personalizada do paciente (ElevenLabs)
+  | "platformCatalogVoice" // fala DO PACIENTE vocalizada por uma voz aprovada
+  //                          do catálogo (escolha explícita) — a autoria
+  //                          (speakerRole) continua sendo "patient"
   | "approvedFallback" // fallback aprovado pelo produto, claramente identificado
   | "none";
 

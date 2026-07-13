@@ -76,7 +76,7 @@ export default function DashboardIndividualPage() {
   const params = useParams<{ id: string }>();
   const patientId = Number(params.id);
   const router = useRouter();
-  const { patients, loading: patientsLoading, selectPatient } = usePatient();
+  const { patients, loading: patientsLoading, selectPatient, reloadPatients } = usePatient();
 
   const [period, setPeriod] = useState<(typeof PERIODS)[number]["id"]>("semana");
   const [stats, setStats] = useState<Stats | null>(null);
@@ -85,12 +85,31 @@ export default function DashboardIndividualPage() {
   const [itemsEmergencia, setItemsEmergencia] = useState<ModeItem[] | null>(null);
   const [settings, setSettings] = useState<Record<string, string> | null>(null);
   const [platformVoiceOk, setPlatformVoiceOk] = useState<boolean | null>(null);
+  // Estado da voz do paciente vindo de /api/voices (status apenas — o
+  // voiceId técnico nunca chega ao cliente).
+  const [patientVoice, setPatientVoice] = useState<{
+    hasClone: boolean;
+    source: "clone" | "platform";
+  } | null>(null);
   const [error, setError] = useState(false);
   const [denied, setDenied] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const patient: Patient | undefined = patients.find((p) => p.id === patientId);
   const invalidId = !patientId || Number.isNaN(patientId);
+
+  // A lista do provider pode estar defasada em relação ao card clicado
+  // (ex.: o Admin acabou de criar o paciente/vínculo em outra janela).
+  // Antes de concluir "não encontrado", recarrega a lista UMA vez; o
+  // veredito só vale depois dessa busca fresca.
+  const [patientsRefetched, setPatientsRefetched] = useState(false);
+  useEffect(() => {
+    setPatientsRefetched(false);
+  }, [patientId]);
+  useEffect(() => {
+    if (invalidId || patientsLoading || patient || patientsRefetched) return;
+    void reloadPatients().finally(() => setPatientsRefetched(true));
+  }, [invalidId, patientsLoading, patient, patientsRefetched, reloadPatients]);
 
   // Carga isolada por paciente: tudo parametrizado pelo id da rota. Se o id
   // mudar (troca rápida), o cleanup marca as respostas antigas como
@@ -106,7 +125,7 @@ export default function DashboardIndividualPage() {
           fetch(`/api/items?patientId=${patientId}&mode=rotina`),
           fetch(`/api/items?patientId=${patientId}&mode=emergencia`),
           fetch(`/api/settings?patientId=${patientId}`),
-          fetch(`/api/voices`),
+          fetch(`/api/voices?patientId=${patientId}`),
         ]);
         if (isStale()) return;
         if (statsR.status === 401) {
@@ -125,7 +144,17 @@ export default function DashboardIndividualPage() {
         setItemsRotina(rotR.ok ? ((await rotR.json()) as { items: ModeItem[] }).items : []);
         setItemsEmergencia(emgR.ok ? ((await emgR.json()) as { items: ModeItem[] }).items : []);
         setSettings(setR.ok ? ((await setR.json()) as Record<string, string>) : {});
-        setPlatformVoiceOk(voicesR.ok);
+        if (voicesR.ok) {
+          const v = (await voicesR.json()) as {
+            platformVoiceReady: boolean;
+            patient?: { hasClone: boolean; source: "clone" | "platform" };
+          };
+          setPlatformVoiceOk(v.platformVoiceReady);
+          setPatientVoice(v.patient ?? null);
+        } else {
+          setPlatformVoiceOk(false);
+          setPatientVoice(null);
+        }
         if (isStale()) return;
       } catch {
         if (!isStale()) setError(true);
@@ -146,6 +175,7 @@ export default function DashboardIndividualPage() {
     setItemsRotina(null);
     setItemsEmergencia(null);
     setSettings(null);
+    setPatientVoice(null);
     setDenied(false);
     void load(() => stale);
     return () => {
@@ -166,7 +196,7 @@ export default function DashboardIndividualPage() {
   }, [selectPatient, patientId, router]);
 
   const t = stats?.totals;
-  const voiceConfigured = Boolean(settings?.[PATIENT_SETTING_KEYS.voiceId]?.trim());
+  const voiceConfigured = Boolean(patientVoice?.hasClone);
   const gestureEmojis = useMemo(
     () => ({
       sim: settings?.[PATIENT_SETTING_KEYS.gestureSim]?.trim() || GESTURES.sim.emoji,
@@ -205,7 +235,8 @@ export default function DashboardIndividualPage() {
   }
 
   // ——— Estados de rota inválida / paciente inexistente ———
-  if (invalidId || (!patientsLoading && !patient)) {
+  // "Não encontrado" só depois de uma busca FRESCA da lista confirmar.
+  if (invalidId || (!patientsLoading && !patient && patientsRefetched)) {
     return (
       <div className="flex min-h-dvh flex-col">
         <TopBar right={<PillLink href="/dashboard">← Pacientes</PillLink>} />
@@ -495,8 +526,9 @@ export default function DashboardIndividualPage() {
                 </ul>
                 {!voiceConfigured && (
                   <p className="mt-3 text-sm text-ink-soft">
-                    Sem voz própria, as falas do paciente usam uma voz neutra
-                    claramente identificada. Configure em Ajustes.
+                    Sem voz clonada, as falas do paciente usam uma voz aprovada
+                    do catálogo da plataforma, claramente identificada. A
+                    atribuição do clone é feita pelo administrador.
                   </p>
                 )}
               </Card>

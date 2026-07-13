@@ -62,12 +62,33 @@ export function modeRequiresConfirmation(mode: HeloItemMode): boolean {
 export { modeSpeakerRole };
 
 // Chaves de settings por paciente (perfil de comunicação).
+//
+// Voz — três chaves com papéis distintos (nunca misturar):
+//   voiceId            → voiceId ElevenLabs da voz CLONADA do paciente.
+//                        Escrita EXCLUSIVA do Admin (/api/admin/patient-voice);
+//                        nunca sai em leituras para o cliente.
+//   voiceCloneName     → nome de exibição do clone (ex.: "Voz do Dr. Fábio").
+//   patientVoiceSource → fonte escolhida para as falas do paciente:
+//                        "clone" ou "platform" (via selectPatientVoiceSource).
+//   patientVoicePlatformId → id do CATÁLOGO interno quando a fonte é
+//                        "platform" (nunca um voiceId técnico).
 export const PATIENT_SETTING_KEYS = {
   name: "patient_name",
   voiceId: "voice_id",
+  voiceCloneName: "voice_clone_name",
+  patientVoiceSource: "patient_voice_source",
+  patientVoicePlatformId: "patient_voice_platform_id",
   speechStyle: "speech_style",
   avoidedTopics: "avoided_topics",
   gestureSim: "gesture_sim_emoji",
   gestureTalvez: "gesture_talvez_emoji",
   gestureNao: "gesture_nao_emoji",
 } as const;
+
+/** Chaves de voz — fora do fluxo genérico de settings (rotas dedicadas). */
+export const VOICE_SETTING_KEYS: readonly string[] = [
+  PATIENT_SETTING_KEYS.voiceId,
+  PATIENT_SETTING_KEYS.voiceCloneName,
+  PATIENT_SETTING_KEYS.patientVoiceSource,
+  PATIENT_SETTING_KEYS.patientVoicePlatformId,
+];

@@ -53,6 +53,8 @@ function toUser(id: string, v: FirebaseFirestore.DocumentData): AppUser {
     role: (v.role as UserRole) ?? "familiar",
     professionalType: (v.professionalType as ProfessionalType) ?? null,
     status: v.status === "inactive" ? "inactive" : "active",
+    canSelectPlatformVoice: v.canSelectPlatformVoice === true,
+    platformVoiceId: v.platformVoiceId ? String(v.platformVoiceId) : null,
     createdAt: String(v.createdAt ?? ""),
     updatedAt: String(v.updatedAt ?? ""),
   };
@@ -123,6 +125,7 @@ export async function updateUser(
     professionalType?: ProfessionalType | null;
     status?: "active" | "inactive";
     password?: string;
+    canSelectPlatformVoice?: boolean;
   }
 ): Promise<void> {
   const data: Record<string, unknown> = { updatedAt: new Date().toISOString() };
@@ -133,6 +136,8 @@ export async function updateUser(
     data.professionalType = updates.professionalType;
   if (updates.status) data.status = updates.status;
   if (updates.password) data.passwordHash = hashPassword(updates.password);
+  if (updates.canSelectPlatformVoice !== undefined)
+    data.canSelectPlatformVoice = updates.canSelectPlatformVoice;
   await col.users().doc(id).set(data, { merge: true });
   // Conta desativada não mantém sessões vivas.
   if (updates.status === "inactive") await invalidateUserSessions(id);
@@ -146,6 +151,21 @@ export async function deleteUser(id: string): Promise<void> {
   links.forEach((l) => batch.delete(col.access().doc(l.id)));
   batch.delete(col.users().doc(id));
   await batch.commit();
+}
+
+/**
+ * Preferência de voz da plataforma DO USUÁRIO (id do catálogo interno,
+ * nunca voiceId técnico). null limpa — volta à voz padrão da Helo.
+ * A escolha de um usuário nunca altera a experiência dos demais.
+ */
+export async function setUserPlatformVoice(
+  userId: string,
+  platformVoiceId: string | null
+): Promise<void> {
+  await col.users().doc(userId).set(
+    { platformVoiceId, updatedAt: new Date().toISOString() },
+    { merge: true }
+  );
 }
 
 // ---------- Sessões de autenticação ----------
@@ -191,9 +211,13 @@ export async function invalidateUserSessions(userId: string): Promise<void> {
 
 function toLink(id: string, v: FirebaseFirestore.DocumentData): AccessLink {
   const perms = Array.isArray(v.permissions)
-    ? (v.permissions as string[]).filter((p): p is Permission =>
-        (PERMISSIONS as readonly string[]).includes(p)
-      )
+    ? (v.permissions as string[])
+        // Migração: a antiga "manageVoice" equivale à atual escolha da
+        // fonte da voz do paciente — vínculos existentes nada perdem.
+        .map((p) => (p === "manageVoice" ? "selectPatientVoiceSource" : p))
+        .filter((p): p is Permission =>
+          (PERMISSIONS as readonly string[]).includes(p)
+        )
     : [];
   return {
     id,

@@ -108,6 +108,26 @@ export function PatientProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void reloadPatients();
+    // A lista de pacientes visíveis muda fora deste app (Admin cria/exclui
+    // pacientes e vínculos): ao voltar o foco para a janela, revalida — o
+    // mesmo padrão do Dashboard Geral. Sem isso, um card recém-visível
+    // levava a "paciente não encontrado" porque esta lista continuava a da
+    // carga inicial. Dedupe de 5s evita rajadas em trocas rápidas de foco.
+    let lastLoad = Date.now();
+    const reload = () => {
+      if (Date.now() - lastLoad < 5000) return;
+      lastLoad = Date.now();
+      void reloadPatients();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reload();
+    };
+    window.addEventListener("focus", reload);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", reload);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [reloadPatients]);
 
   // Persistência do paciente ativo + carga das configurações dele.

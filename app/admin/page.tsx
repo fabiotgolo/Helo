@@ -5,7 +5,7 @@
 // com permissões granulares, e auditoria. A checagem de papel acontece no
 // SERVIDOR (toda rota /api/admin/* exige admin); esta tela só reflete.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
 import { Avatar } from "@/components/dashboard-ui";
 import { useAuthUser, redirectToLogin } from "@/lib/use-auth";
@@ -28,14 +28,43 @@ import {
 import type { Patient } from "@/lib/types";
 
 type UserWithLinks = AppUser & { links: AccessLink[] };
-type Tab = "usuarios" | "pacientes" | "acessos" | "auditoria";
+type Tab = "usuarios" | "pacientes" | "acessos" | "vozes" | "auditoria";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "usuarios", label: "Usuários" },
   { id: "pacientes", label: "Pacientes" },
   { id: "acessos", label: "Acessos" },
+  { id: "vozes", label: "Vozes" },
   { id: "auditoria", label: "Auditoria" },
 ];
+
+// ——— Vozes (catálogo controlado) ———
+// Só o Admin vê e gerencia estes dados: o catálogo interno de vozes da
+// plataforma (cadastradas por ElevenLabs voiceId) e a voz clonada de cada
+// paciente. Usuários comuns nunca recebem voiceIds — só nomes amigáveis.
+type PlatformVoiceAdmin = {
+  id: string;
+  elevenLabsVoiceId: string;
+  displayName: string;
+  description: string | null;
+  enabled: boolean;
+  isDefault: boolean;
+};
+type VoiceUsage = { userIds: string[]; patientIds: number[] };
+type PatientVoiceAdmin = {
+  patientId: number;
+  name: string;
+  hasClone: boolean;
+  cloneName: string | null;
+  cloneIdMasked: string | null;
+  source: "clone" | "platform";
+  platformVoiceId: string | null;
+};
+type VoicesAdminData = {
+  voices: PlatformVoiceAdmin[];
+  usage: Record<string, VoiceUsage>;
+  patientVoices: PatientVoiceAdmin[];
+};
 
 const input =
   "min-h-11 rounded-2xl border border-line bg-card px-4 py-2.5 outline-none focus:border-ink-mute";
@@ -127,6 +156,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserWithLinks[] | null>(null);
   const [patients, setPatients] = useState<Patient[] | null>(null);
   const [links, setLinks] = useState<AccessLink[] | null>(null);
+  const [voicesAdmin, setVoicesAdmin] = useState<VoicesAdminData | null>(null);
   const [audit, setAudit] = useState<AuditEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -134,11 +164,12 @@ export default function AdminPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [uR, pR, lR, aR] = await Promise.all([
+      const [uR, pR, lR, aR, vR] = await Promise.all([
         fetch("/api/admin/users"),
         fetch("/api/patients"),
         fetch("/api/admin/access"),
         fetch("/api/admin/audit"),
+        fetch("/api/admin/voices"),
       ]);
       if (uR.status === 401) {
         redirectToLogin();
@@ -150,6 +181,7 @@ export default function AdminPage() {
       setPatients(((await pR.json()) as { patients: Patient[] }).patients);
       setLinks(((await lR.json()) as { links: AccessLink[] }).links);
       setAudit(((await aR.json()) as { events: AuditEvent[] }).events);
+      setVoicesAdmin(vR.ok ? ((await vR.json()) as VoicesAdminData) : null);
     } catch {
       setError("Não foi possível carregar os dados administrativos.");
     }
@@ -252,6 +284,8 @@ export default function AdminPage() {
           <PatientsTab patients={patients} links={links} userById={userById} run={run} />
         ) : tab === "acessos" ? (
           <AccessTab users={users} patients={patients} links={links} userById={userById} patientById={patientById} run={run} />
+        ) : tab === "vozes" ? (
+          <VoicesTab data={voicesAdmin} users={users} run={run} />
         ) : (
           <AuditTab audit={audit ?? []} />
         )}
@@ -869,6 +903,461 @@ function LinkRow({
             Salvar permissões
           </button>
         </div>
+      )}
+    </li>
+  );
+}
+
+// ============================== Vozes ==============================
+// Catálogo da plataforma + voz clonada por paciente + concessão da escolha
+// de voz da plataforma por usuário. Toda ação passa pelas rotas de Admin
+// (o servidor nega quem não é admin — esta tela só reflete).
+
+function VoicesTab({
+  data,
+  users,
+  run,
+}: {
+  data: VoicesAdminData | null;
+  users: UserWithLinks[];
+  run: (p: Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>;
+}) {
+  const [voiceId, setVoiceId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [description, setDescription] = useState("");
+  const [makeDefault, setMakeDefault] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // Prévia de áudio: um player único para a aba inteira — iniciar uma
+  // prévia interrompe a anterior. O cliente só referencia ids do catálogo
+  // ou o clone de um paciente; o voiceId técnico segue no servidor.
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const preview = useCallback(
+    async (key: string, payload: Record<string, unknown>, text: string) => {
+      setPreviewingId(key);
+      try {
+        audioRef.current?.pause();
+        const r = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, ...payload }),
+        });
+        if (!r.ok) return;
+        const audio = new Audio(URL.createObjectURL(await r.blob()));
+        audioRef.current = audio;
+        await audio.play();
+      } catch {
+        /* prévia é melhor-esforço — a falha não interrompe a gestão */
+      } finally {
+        setPreviewingId(null);
+      }
+    },
+    []
+  );
+
+  if (data === null) {
+    return (
+      <p className="rounded-3xl border border-line bg-card p-10 text-center">
+        Não foi possível carregar o catálogo de vozes.
+      </p>
+    );
+  }
+
+  const add = async () => {
+    setBusy(true);
+    const ok = await run(
+      api("/api/admin/voices", "POST", {
+        elevenLabsVoiceId: voiceId,
+        displayName,
+        description,
+        isDefault: makeDefault,
+      }),
+      `Voz "${displayName}" adicionada ao catálogo.`
+    );
+    setBusy(false);
+    if (ok) {
+      setVoiceId("");
+      setDisplayName("");
+      setDescription("");
+      setMakeDefault(false);
+    }
+  };
+
+  return (
+    <section className="flex flex-col gap-6">
+      {/* ——— Cadastro no catálogo ——— */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void add();
+        }}
+        aria-label="Adicionar voz ao catálogo"
+        className="flex flex-col gap-3 rounded-3xl border border-line bg-card p-5"
+      >
+        <h2 className="text-lg font-semibold">Catálogo de vozes da plataforma</h2>
+        <p className="text-sm text-ink-soft">
+          Somente as vozes cadastradas aqui (por ElevenLabs Voice ID) ficam
+          disponíveis para os usuários — eles veem apenas o nome amigável,
+          nunca a biblioteca completa da conta.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <input className={input} placeholder="ElevenLabs Voice ID" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} required aria-label="ElevenLabs Voice ID" />
+          <input className={input} placeholder="Nome amigável (ex.: Helo Serena)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required aria-label="Nome amigável" />
+          <input className={`${input} sm:col-span-2`} placeholder="Descrição (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} aria-label="Descrição" />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} />
+          Definir como voz padrão da Helo
+        </label>
+        <button type="submit" disabled={busy || !voiceId.trim() || !displayName.trim()} className={`${btnDark} self-start`}>
+          {busy ? "Validando…" : "+ Adicionar voz"}
+        </button>
+      </form>
+
+      {/* ——— Lista do catálogo ——— */}
+      {data.voices.length === 0 ? (
+        <p className="rounded-3xl border border-line bg-card p-10 text-center">
+          Nenhuma voz no catálogo ainda. Sem catálogo, o app usa a voz de
+          fallback aprovada.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {data.voices.map((v) => (
+            <CatalogVoiceRow
+              key={v.id}
+              v={v}
+              usage={data.usage[v.id]}
+              run={run}
+              previewing={previewingId === v.id}
+              previewBusy={previewingId !== null}
+              onPreview={() =>
+                void preview(
+                  v.id,
+                  { previewPlatformVoiceId: v.id },
+                  `Olá, eu sou a voz ${v.displayName}. É assim que eu falo na Helo.`
+                )
+              }
+            />
+          ))}
+        </ul>
+      )}
+
+      {/* ——— Voz clonada por paciente ——— */}
+      <div className="flex flex-col gap-3 rounded-3xl border border-line bg-card p-5">
+        <h2 className="text-lg font-semibold">Voz clonada por paciente</h2>
+        <p className="text-sm text-ink-soft">
+          A atribuição do clone é exclusiva do administrador e vale só para o
+          paciente indicado — o clone de um paciente nunca aparece para outro.
+        </p>
+        <ul className="flex flex-col gap-2">
+          {data.patientVoices.map((p) => (
+            <PatientCloneRow
+              key={p.patientId}
+              p={p}
+              run={run}
+              previewing={previewingId === `clone-${p.patientId}`}
+              previewBusy={previewingId !== null}
+              onPreview={() =>
+                void preview(
+                  `clone-${p.patientId}`,
+                  {
+                    previewPatientVoice: {
+                      patientId: p.patientId,
+                      source: "clone",
+                    },
+                  },
+                  `Olá, esta é a voz configurada para as mensagens de ${p.name}.`
+                )
+              }
+            />
+          ))}
+        </ul>
+      </div>
+
+      {/* ——— Permissão: escolher voz da plataforma ——— */}
+      <div className="flex flex-col gap-3 rounded-3xl border border-line bg-card p-5">
+        <h2 className="text-lg font-semibold">Quem pode escolher a voz da plataforma</h2>
+        <p className="text-sm text-ink-soft">
+          Sem esta concessão, o usuário ouve a voz padrão da Helo. A escolha
+          de cada usuário vale só para ele.
+        </p>
+        <ul className="flex flex-col gap-2">
+          {users
+            .filter((u) => u.status === "active" && u.role !== "admin")
+            .map((u) => (
+              <li key={u.id} className="flex items-center justify-between gap-2 rounded-2xl bg-cream px-4 py-3">
+                <span className="min-w-0 truncate text-sm font-medium">
+                  {u.name} <span className="font-normal text-ink-soft">— {ROLE_LABELS[u.role]}</span>
+                </span>
+                <button
+                  type="button"
+                  className={btnLight}
+                  aria-pressed={u.canSelectPlatformVoice}
+                  onClick={() =>
+                    void run(
+                      api("/api/admin/users", "PATCH", {
+                        id: u.id,
+                        canSelectPlatformVoice: !u.canSelectPlatformVoice,
+                      }),
+                      u.canSelectPlatformVoice
+                        ? `${u.name} não escolhe mais a voz da plataforma.`
+                        : `${u.name} agora pode escolher a voz da plataforma.`
+                    )
+                  }
+                >
+                  {u.canSelectPlatformVoice ? "✓ Pode escolher" : "Conceder"}
+                </button>
+              </li>
+            ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function CatalogVoiceRow({
+  v,
+  usage,
+  run,
+  previewing,
+  previewBusy,
+  onPreview,
+}: {
+  v: PlatformVoiceAdmin;
+  usage: VoiceUsage | undefined;
+  run: (p: Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>;
+  previewing: boolean;
+  previewBusy: boolean;
+  onPreview: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [name, setName] = useState(v.displayName);
+  const [desc, setDesc] = useState(v.description ?? "");
+  const inUse = (usage?.userIds.length ?? 0) + (usage?.patientIds.length ?? 0);
+
+  return (
+    <li className="flex flex-col gap-3 rounded-3xl border border-line bg-card p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold">
+            {v.displayName}
+            {v.isDefault && (
+              <span className="ml-2 rounded-full bg-sim-soft px-2 py-0.5 text-xs font-medium text-sim">padrão</span>
+            )}
+            {!v.enabled && (
+              <span className="ml-2 rounded-full bg-talvez-soft px-2 py-0.5 text-xs font-medium text-talvez">desativada</span>
+            )}
+          </p>
+          <p className="truncate text-sm text-ink-soft">
+            {v.description ? `${v.description} · ` : ""}
+            <code className="text-xs">{v.elevenLabsVoiceId}</code>
+            {" · "}
+            {inUse === 0
+              ? "sem uso"
+              : `em uso: ${usage?.userIds.length ?? 0} usuário(s), ${usage?.patientIds.length ?? 0} paciente(s)`}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={btnLight}
+            onClick={onPreview}
+            disabled={previewBusy}
+            aria-label={`Ouvir prévia de ${v.displayName}`}
+          >
+            {previewing ? "Falando…" : "🔊 Ouvir"}
+          </button>
+          <button type="button" className={btnLight} onClick={() => setEditing((e) => !e)}>
+            {editing ? "Fechar" : "Editar"}
+          </button>
+          {!v.isDefault && v.enabled && (
+            <button
+              type="button"
+              className={btnLight}
+              onClick={() =>
+                void run(
+                  api("/api/admin/voices", "PATCH", { id: v.id, isDefault: true }),
+                  `"${v.displayName}" agora é a voz padrão da Helo.`
+                )
+              }
+            >
+              Tornar padrão
+            </button>
+          )}
+          {!v.isDefault && (
+            <button
+              type="button"
+              className={btnLight}
+              onClick={() =>
+                void run(
+                  api("/api/admin/voices", "PATCH", { id: v.id, enabled: !v.enabled }),
+                  v.enabled
+                    ? `"${v.displayName}" desativada — some dos combos dos usuários.`
+                    : `"${v.displayName}" reativada.`
+                )
+              }
+            >
+              {v.enabled ? "Desativar" : "Reativar"}
+            </button>
+          )}
+          {!v.isDefault && (
+            <button type="button" className={btnDanger} onClick={() => setConfirming(true)}>
+              Remover
+            </button>
+          )}
+        </div>
+      </div>
+      {editing && (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void run(
+              api("/api/admin/voices", "PATCH", { id: v.id, displayName: name, description: desc }),
+              "Voz atualizada."
+            ).then((ok) => ok && setEditing(false));
+          }}
+        >
+          <input className={input} value={name} onChange={(e) => setName(e.target.value)} aria-label="Nome amigável" />
+          <input className={`${input} flex-1`} value={desc} onChange={(e) => setDesc(e.target.value)} aria-label="Descrição" placeholder="Descrição" />
+          <button type="submit" className={btnLight}>Salvar</button>
+        </form>
+      )}
+      {confirming && (
+        <ConfirmBox
+          lines={[
+            `Remover "${v.displayName}" do catálogo?`,
+            inUse > 0
+              ? `Em uso por ${usage?.userIds.length ?? 0} usuário(s) e ${usage?.patientIds.length ?? 0} paciente(s) — a remoção será negada; desative-a ou troque as preferências antes.`
+              : "Ela deixa de existir para todos os usuários.",
+          ]}
+          confirmLabel="Remover do catálogo"
+          onConfirm={() => {
+            setConfirming(false);
+            void run(api("/api/admin/voices", "DELETE", { id: v.id }), "Voz removida do catálogo.");
+          }}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+    </li>
+  );
+}
+
+function PatientCloneRow({
+  p,
+  run,
+  previewing,
+  previewBusy,
+  onPreview,
+}: {
+  p: PatientVoiceAdmin;
+  run: (pr: Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>;
+  previewing: boolean;
+  previewBusy: boolean;
+  onPreview: () => void;
+}) {
+  const [assigning, setAssigning] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [confirmingReplace, setConfirmingReplace] = useState(false);
+  const [cloneId, setCloneId] = useState("");
+  const [cloneName, setCloneName] = useState("");
+
+  const submitClone = async () => {
+    const ok = await run(
+      api("/api/admin/patient-voice", "POST", {
+        patientId: p.patientId,
+        elevenLabsVoiceId: cloneId,
+        displayName: cloneName,
+      }),
+      `Voz clonada ${p.hasClone ? "substituída" : "atribuída"} para ${p.name}.`
+    );
+    if (ok) {
+      setAssigning(false);
+      setConfirmingReplace(false);
+      setCloneId("");
+      setCloneName("");
+    }
+  };
+
+  return (
+    <li className="flex flex-col gap-3 rounded-2xl bg-cream px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          {p.name}
+          <span className="ml-2 font-normal text-ink-soft">
+            {p.hasClone
+              ? `${p.cloneName ?? "voz clonada"} · ${p.cloneIdMasked}`
+              : "sem voz clonada"}
+          </span>
+        </span>
+        {p.hasClone && (
+          <button
+            type="button"
+            className={btnLight}
+            onClick={onPreview}
+            disabled={previewBusy}
+            aria-label={`Ouvir a voz clonada de ${p.name}`}
+          >
+            {previewing ? "Falando…" : "🔊 Ouvir"}
+          </button>
+        )}
+        <button type="button" className={btnLight} onClick={() => setAssigning((a) => !a)}>
+          {assigning ? "Fechar" : p.hasClone ? "Substituir" : "Atribuir clone"}
+        </button>
+        {p.hasClone && (
+          <button type="button" className={btnDanger} onClick={() => setConfirmingRemove(true)}>
+            Remover
+          </button>
+        )}
+      </div>
+      {assigning && (
+        <form
+          className="flex flex-col gap-2 sm:flex-row sm:items-center"
+          onSubmit={(e) => {
+            e.preventDefault();
+            // Substituição afeta a voz que fala EM NOME do paciente —
+            // confirmação reforçada mostrando o paciente afetado.
+            if (p.hasClone) setConfirmingReplace(true);
+            else void submitClone();
+          }}
+        >
+          <input className={`${input} flex-1`} placeholder="ElevenLabs Voice ID do clone" value={cloneId} onChange={(e) => setCloneId(e.target.value)} required aria-label={`Voice ID do clone de ${p.name}`} />
+          <input className={`${input} flex-1`} placeholder={`Nome (ex.: Voz clonada de ${p.name})`} value={cloneName} onChange={(e) => setCloneName(e.target.value)} aria-label="Nome de exibição do clone" />
+          <button type="submit" disabled={!cloneId.trim()} className={btnDark}>
+            Salvar
+          </button>
+        </form>
+      )}
+      {confirmingReplace && (
+        <ConfirmBox
+          lines={[
+            `Substituir a voz clonada de ${p.name}?`,
+            `Voz atual: ${p.cloneName ?? "voz clonada"} (${p.cloneIdMasked}).`,
+            "Todas as falas do paciente passarão a usar o novo clone.",
+          ]}
+          confirmLabel="Substituir voz clonada"
+          onConfirm={() => void submitClone()}
+          onCancel={() => setConfirmingReplace(false)}
+        />
+      )}
+      {confirmingRemove && (
+        <ConfirmBox
+          lines={[
+            `Remover a voz clonada de ${p.name}?`,
+            "As falas do paciente passam a usar o catálogo aprovado da plataforma.",
+          ]}
+          confirmLabel="Remover voz clonada"
+          onConfirm={() => {
+            setConfirmingRemove(false);
+            void run(
+              api("/api/admin/patient-voice", "DELETE", { patientId: p.patientId }),
+              `Voz clonada removida de ${p.name}.`
+            );
+          }}
+          onCancel={() => setConfirmingRemove(false)}
+        />
       )}
     </li>
   );

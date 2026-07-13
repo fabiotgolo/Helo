@@ -12,7 +12,30 @@ import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 
-type Voice = { id: string; name: string; labels: Record<string, string> };
+// Vozes visíveis ao usuário: SOMENTE o catálogo interno aprovado pelo Admin
+// (nomes amigáveis — nenhum voiceId técnico chega ao cliente) e, quando
+// existir, a voz clonada DO paciente ativo. Nunca a biblioteca ElevenLabs.
+type PublicVoice = {
+  id: string;
+  displayName: string;
+  description: string | null;
+  isDefault: boolean;
+};
+type VoicesData = {
+  voices: PublicVoice[];
+  defaultVoiceId: string | null;
+  platformVoiceReady: boolean;
+  canSelectPlatformVoice: boolean;
+  myPlatformVoiceId: string | null;
+  patient?: {
+    patientId: number;
+    hasClone: boolean;
+    cloneName: string | null;
+    source: "clone" | "platform";
+    platformVoiceId: string | null;
+    canSelectPatientVoiceSource: boolean;
+  };
+};
 type Person = { id: number; name: string; relation: string | null };
 
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
@@ -38,9 +61,9 @@ export default function AjustesPage() {
     saveSettings,
   } = usePatient();
 
-  const [voices, setVoices] = useState<Voice[] | null>(null);
+  const [voicesData, setVoicesData] = useState<VoicesData | null>(null);
   const [voicesError, setVoicesError] = useState(false);
-  const [voiceId, setVoiceId] = useState("");
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [patientName, setPatientName] = useState("");
   const [speechStyle, setSpeechStyle] = useState("");
   const [avoidedTopics, setAvoidedTopics] = useState("");
@@ -61,7 +84,6 @@ export default function AjustesPage() {
   // O formulário espelha as configurações do paciente ativo; trocar de
   // paciente recarrega tudo — nada de um vaza para o outro.
   useEffect(() => {
-    setVoiceId(settings[PATIENT_SETTING_KEYS.voiceId] ?? "");
     setPatientName(settings[PATIENT_SETTING_KEYS.name] ?? "");
     setSpeechStyle(settings[PATIENT_SETTING_KEYS.speechStyle] ?? "");
     setAvoidedTopics(settings[PATIENT_SETTING_KEYS.avoidedTopics] ?? "");
@@ -72,12 +94,28 @@ export default function AjustesPage() {
     });
   }, [settings]);
 
+  // Estado de voz sempre no escopo do paciente ativo: trocar de paciente
+  // recarrega — o clone de um nunca aparece no contexto do outro.
+  const loadVoices = useCallback(async () => {
+    if (patientId == null) return;
+    setVoicesError(false);
+    try {
+      const r = await fetch(`/api/voices?patientId=${patientId}`);
+      if (!r.ok) throw new Error();
+      const d = (await r.json()) as VoicesData;
+      setVoicesData((current) =>
+        // Troca rápida de paciente: só aplica se a resposta é do ativo.
+        d.patient?.patientId === patientId ? d : current
+      );
+    } catch {
+      setVoicesError(true);
+    }
+  }, [patientId]);
+
   useEffect(() => {
-    void fetch("/api/voices")
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((d: { voices: Voice[] }) => setVoices(d.voices))
-      .catch(() => setVoicesError(true));
-  }, []);
+    setVoicesData(null);
+    void loadVoices();
+  }, [loadVoices]);
 
   const loadPeople = useCallback(async () => {
     if (patientId == null) return;
@@ -97,7 +135,6 @@ export default function AjustesPage() {
 
   const save = useCallback(async () => {
     const ok = await saveSettings({
-      [PATIENT_SETTING_KEYS.voiceId]: voiceId,
       [PATIENT_SETTING_KEYS.name]: patientName,
       [PATIENT_SETTING_KEYS.speechStyle]: speechStyle.trim(),
       [PATIENT_SETTING_KEYS.avoidedTopics]: avoidedTopics.trim(),
@@ -114,37 +151,23 @@ export default function AjustesPage() {
     saveSettings,
     renamePatient,
     patientId,
-    voiceId,
     patientName,
     speechStyle,
     avoidedTopics,
     gestureEmojis,
   ]);
 
-  const preview = useCallback(
-    async (id: string) => {
+  // Prévia de voz: o cliente NUNCA envia voiceId técnico — só ids do
+  // catálogo interno aprovado ou a referência ao clone do paciente ativo.
+  const playPreview = useCallback(
+    async (payload: Record<string, unknown>, text: string) => {
       setPreviewing(true);
       try {
         audioRef.current?.pause();
-        // Prévia explícita da voz DO PACIENTE (única rota em que o cliente
-        // indica uma voz). Sem voz escolhida, ouve a que valeria hoje para as
-        // falas dele (clone salvo ou fallback aprovado) — nunca a voz da Helo.
         const res = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            id
-              ? {
-                  text: `Olá${patientName ? `, ${patientName}` : ""}. Esta será a voz das suas mensagens.`,
-                  previewVoiceId: id,
-                }
-              : {
-                  text: `Olá${patientName ? `, ${patientName}` : ""}. Esta será a voz das suas mensagens.`,
-                  speakerRole: "patient",
-                  confirmationStatus: "notRequired",
-                  patientId,
-                }
-          ),
+          body: JSON.stringify({ text, ...payload }),
         });
         if (!res.ok) return;
         const url = URL.createObjectURL(await res.blob());
@@ -155,7 +178,66 @@ export default function AjustesPage() {
         setPreviewing(false);
       }
     },
-    [patientName, patientId]
+    []
+  );
+
+  const flashVoice = useCallback((msg: string) => {
+    setVoiceNotice(msg);
+    window.setTimeout(() => setVoiceNotice(null), 3000);
+  }, []);
+
+  // Preferência de voz da plataforma — do USUÁRIO logado ("" = padrão da
+  // Helo). Não altera a experiência de outros usuários.
+  const choosePlatformVoice = useCallback(
+    async (id: string) => {
+      const r = await fetch("/api/voice-preference", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platformVoiceId: id || null }),
+      });
+      if (r.ok) {
+        setVoicesData((d) => (d ? { ...d, myPlatformVoiceId: id || null } : d));
+        flashVoice("Voz da plataforma salva para você.");
+      } else {
+        flashVoice("Não foi possível salvar a voz da plataforma.");
+      }
+    },
+    [flashVoice]
+  );
+
+  // Fonte da voz das falas do paciente: "clone" ou uma voz do catálogo.
+  const choosePatientVoice = useCallback(
+    async (value: string) => {
+      if (patientId == null) return;
+      const body =
+        value === "clone"
+          ? { patientId, source: "clone" }
+          : { patientId, source: "platform", platformVoiceId: value };
+      const r = await fetch("/api/patient-voice-source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        setVoicesData((d) =>
+          d?.patient
+            ? {
+                ...d,
+                patient: {
+                  ...d.patient,
+                  source: value === "clone" ? "clone" : "platform",
+                  platformVoiceId:
+                    value === "clone" ? d.patient.platformVoiceId : value,
+                },
+              }
+            : d
+        );
+        flashVoice("Voz das falas do paciente salva.");
+      } else {
+        flashVoice("Não foi possível salvar a voz do paciente.");
+      }
+    },
+    [patientId, flashVoice]
   );
 
   const addPerson = useCallback(async () => {
@@ -351,44 +433,168 @@ export default function AjustesPage() {
         </section>
 
         {/* ——— Voz ——— */}
+        {/* Duas configurações DIFERENTES, ambas restritas ao catálogo
+            aprovado pelo Admin: a voz da plataforma (preferência do usuário
+            logado) e a voz das falas do paciente (clone dele ou catálogo).
+            Sem a permissão correspondente, o campo é somente leitura. */}
         <section className="rounded-3xl border border-line bg-card p-6">
-          <h2 className="font-semibold tracking-tight">Voz do paciente</h2>
+          <h2 className="font-semibold tracking-tight">Voz</h2>
           <p className="text-sm text-ink-soft">
-            A voz que fala EM NOME deste paciente (Emergência e mensagens
-            confirmadas) — idealmente a clonagem autorizada da voz dele na
-            ElevenLabs. A voz da plataforma Helo é separada e não muda aqui.
+            As vozes disponíveis são as aprovadas pelo administrador. A voz
+            clonada de um paciente só aparece no contexto dele.
           </p>
+          {voiceNotice && (
+            <p role="status" className="mt-3 rounded-2xl bg-sim-soft px-4 py-2 text-sm text-sim">
+              {voiceNotice}
+            </p>
+          )}
           {voicesError ? (
             <p className="mt-4 rounded-2xl bg-talvez-soft px-4 py-3 text-sm text-talvez">
-              Sem conexão com a ElevenLabs. Verifique a chave em <code>.env</code>. Enquanto
-              isso, o app usa a voz local do navegador.
+              Não foi possível carregar as vozes agora. Sem elas, o app usa a
+              voz padrão da Helo (ou a voz local do navegador, identificada).
             </p>
-          ) : voices === null ? (
+          ) : voicesData === null ? (
             <p className="mt-4 text-sm text-ink-mute">Carregando vozes…</p>
           ) : (
-            <div className="mt-4 flex flex-col gap-3">
-              <select
-                value={voiceId}
-                onChange={(e) => setVoiceId(e.target.value)}
-                aria-label="Escolher voz"
-                className="w-full rounded-2xl border border-line bg-cream px-5 py-3.5 text-lg outline-none focus:border-ink-mute"
-              >
-                <option value="">Sem voz própria — fallback neutro aprovado</option>
-                {voices.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                    {v.labels.language ? ` · ${v.labels.language}` : ""}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => void preview(voiceId)}
-                disabled={previewing}
-                className="self-start rounded-full border border-line bg-cream px-5 py-2.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40"
-              >
-                {previewing ? "Falando…" : "🔊 Ouvir prévia"}
-              </button>
+            <div className="mt-4 flex flex-col gap-6">
+              {/* Voz da plataforma — preferência do usuário logado */}
+              <div className="flex flex-col gap-2">
+                <span className="text-sm font-medium text-ink-soft">
+                  Voz da plataforma Helo (a sua preferência — não muda a dos
+                  outros usuários)
+                </span>
+                {voicesData.canSelectPlatformVoice ? (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <select
+                      value={voicesData.myPlatformVoiceId ?? ""}
+                      onChange={(e) => void choosePlatformVoice(e.target.value)}
+                      aria-label="Escolher voz da plataforma"
+                      className="w-full flex-1 rounded-2xl border border-line bg-cream px-5 py-3.5 text-lg outline-none focus:border-ink-mute"
+                    >
+                      <option value="">Voz padrão da Helo</option>
+                      {voicesData.voices.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.displayName}
+                          {v.isDefault ? " · padrão" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id =
+                          voicesData.myPlatformVoiceId ??
+                          voicesData.defaultVoiceId;
+                        if (id)
+                          void playPreview(
+                            { previewPlatformVoiceId: id },
+                            "Olá, eu sou a Helo. É assim que eu falo com vocês."
+                          );
+                      }}
+                      disabled={previewing || !voicesData.platformVoiceReady}
+                      className="self-start rounded-full border border-line bg-cream px-5 py-2.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40"
+                    >
+                      {previewing ? "Falando…" : "🔊 Ouvir"}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="rounded-2xl bg-cream px-5 py-3.5 text-ink-soft">
+                    {voicesData.voices.find(
+                      (v) => v.id === voicesData.defaultVoiceId
+                    )?.displayName ?? "Voz padrão da Helo"}
+                    <span className="mt-1 block text-xs text-ink-mute">
+                      Definida pelo administrador. Peça a permissão “escolher
+                      voz da plataforma” para personalizar.
+                    </span>
+                  </p>
+                )}
+              </div>
+
+              {/* Voz das falas do paciente — clone dele ou catálogo */}
+              {voicesData.patient && (
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm font-medium text-ink-soft">
+                    Voz para as falas de {patient?.name ?? "este paciente"}
+                    {" "}(Emergência e mensagens confirmadas)
+                  </span>
+                  {!voicesData.patient.hasClone && (
+                    <p className="text-xs text-ink-mute">
+                      Voz clonada não configurada para este paciente — a
+                      atribuição é feita pelo administrador.
+                    </p>
+                  )}
+                  {voicesData.patient.canSelectPatientVoiceSource ? (
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <select
+                        value={
+                          voicesData.patient.source === "clone"
+                            ? "clone"
+                            : voicesData.patient.platformVoiceId ??
+                              voicesData.defaultVoiceId ??
+                              ""
+                        }
+                        onChange={(e) => void choosePatientVoice(e.target.value)}
+                        aria-label="Escolher voz para as falas do paciente"
+                        className="w-full flex-1 rounded-2xl border border-line bg-cream px-5 py-3.5 text-lg outline-none focus:border-ink-mute"
+                      >
+                        {voicesData.patient.hasClone && (
+                          <option value="clone">
+                            {voicesData.patient.cloneName ??
+                              `Voz clonada de ${patient?.name ?? "paciente"}`}
+                          </option>
+                        )}
+                        {voicesData.voices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.displayName}
+                            {v.isDefault ? " · padrão" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const p = voicesData.patient!;
+                          const payload =
+                            p.source === "clone"
+                              ? { previewPatientVoice: { patientId, source: "clone" } }
+                              : {
+                                  previewPatientVoice: {
+                                    patientId,
+                                    source: "platform",
+                                    platformVoiceId:
+                                      p.platformVoiceId ?? voicesData.defaultVoiceId,
+                                  },
+                                };
+                          void playPreview(
+                            payload,
+                            `Olá${patientName ? `, eu sou ${patientName}` : ""}. Esta será a voz das minhas mensagens.`
+                          );
+                        }}
+                        disabled={previewing || !voicesData.platformVoiceReady}
+                        className="self-start rounded-full border border-line bg-cream px-5 py-2.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40"
+                      >
+                        {previewing ? "Falando…" : "🔊 Ouvir"}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="rounded-2xl bg-cream px-5 py-3.5 text-ink-soft">
+                      {voicesData.patient.source === "clone"
+                        ? voicesData.patient.cloneName ??
+                          `Voz clonada de ${patient?.name ?? "paciente"}`
+                        : voicesData.voices.find(
+                            (v) =>
+                              v.id ===
+                              (voicesData.patient!.platformVoiceId ??
+                                voicesData.defaultVoiceId)
+                          )?.displayName ?? "Voz padrão da Helo"}
+                      <span className="mt-1 block text-xs text-ink-mute">
+                        Somente leitura — a alteração exige a permissão
+                        “{"Escolher a voz das falas do paciente"}”.
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>
