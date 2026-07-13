@@ -745,13 +745,25 @@ function AccessTab({
         </button>
       </form>
 
-      <div className="flex items-center gap-2">
-        <h2 className="text-lg font-semibold">Matriz de acesso</h2>
-        <div className="ml-auto flex gap-1 rounded-full border border-line bg-card p-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0">
+          <h2
+            className="text-lg font-semibold"
+            title="Você pode visualizar os mesmos vínculos agrupados por usuário ou por paciente."
+          >
+            Matriz de acesso
+          </h2>
+          <p className="text-sm text-ink-soft">
+            {view === "porUsuario"
+              ? "Veja todos os pacientes vinculados a cada usuário."
+              : "Veja todos os usuários autorizados para cada paciente."}
+          </p>
+        </div>
+        <div className="ml-auto flex flex-wrap gap-1 rounded-full border border-line bg-card p-1">
           {(
             [
-              ["porUsuario", "Por usuário"],
-              ["porPaciente", "Por paciente"],
+              ["porUsuario", "Ver por usuário"],
+              ["porPaciente", "Ver por paciente"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -759,8 +771,8 @@ function AccessTab({
               type="button"
               aria-pressed={view === id}
               onClick={() => setView(id)}
-              className={`rounded-full px-3 py-1.5 text-sm font-medium ${
-                view === id ? "bg-ink text-white" : "text-ink-soft"
+              className={`min-h-11 rounded-full px-3 py-1.5 text-sm font-medium ${
+                view === id ? "bg-ink text-white" : "text-ink-soft hover:text-ink"
               }`}
             >
               {label}
@@ -770,8 +782,10 @@ function AccessTab({
       </div>
 
       {links.length === 0 ? (
-        <p className="rounded-3xl border border-line bg-card p-10 text-center">
-          Nenhum vínculo criado ainda.
+        <p className="rounded-3xl border border-line bg-card p-10 text-center text-ink-soft">
+          {view === "porUsuario"
+            ? "Nenhum vínculo criado ainda. Quando um usuário for vinculado a um paciente, ele aparecerá aqui com os pacientes que pode acessar."
+            : "Nenhum vínculo criado ainda. Quando um paciente receber usuários autorizados, eles aparecerão aqui."}
         </p>
       ) : view === "porUsuario" ? (
         <ul className="flex flex-col gap-3">
@@ -782,6 +796,7 @@ function AccessTab({
                 <p className="font-semibold">
                   {u.name} <span className="text-sm font-normal text-ink-soft">— {ROLE_LABELS[u.role]}</span>
                 </p>
+                <p className="mt-1 text-xs text-ink-soft">Pacientes que este usuário pode acessar</p>
                 <ul className="mt-2 flex flex-col gap-2">
                   {links
                     .filter((l) => l.userId === u.id)
@@ -799,6 +814,7 @@ function AccessTab({
             .map((p) => (
               <li key={p.id} className="rounded-3xl border border-line bg-card p-4">
                 <p className="font-semibold">{p.name}</p>
+                <p className="mt-1 text-xs text-ink-soft">Usuários autorizados para este paciente</p>
                 <ul className="mt-2 flex flex-col gap-2">
                   {links
                     .filter((l) => l.patientId === p.id)
