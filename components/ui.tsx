@@ -4,6 +4,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import type { Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
+import { useAuthUser } from "@/lib/use-auth";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
 
 // Carregado sob demanda: Three.js só entra no bundle quando há um orbe animado na tela
@@ -133,9 +134,38 @@ export function GestureTriplet({
 
 // ——— Navegação superior ———
 
-export function TopBar({ right }: { right?: React.ReactNode }) {
+/**
+ * Ação global de encerrar sessão — única fonte do "Sair" da plataforma.
+ * Renderiza-se sozinha: aparece para QUALQUER usuário autenticado (todos os
+ * papéis, admin incluído) e some quando não há sessão. O comportamento do
+ * logout (voz, sessões de modo, espelhos locais, cookie) vive em useAuthUser.
+ */
+export function LogoutButton() {
+  const { user, loading, logout } = useAuthUser();
+  if (loading || !user) return null;
   return (
-    <header className="no-print flex items-center justify-between px-6 py-4 sm:px-10">
+    <button
+      type="button"
+      onClick={() => void logout()}
+      title={`${user.name} — encerrar sessão`}
+      aria-label={`Sair — encerrar a sessão de ${user.name}`}
+      className="rounded-full border border-line bg-card px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:border-ink-mute focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:px-5"
+    >
+      Sair
+    </button>
+  );
+}
+
+export function TopBar({
+  right,
+  showLogout = true,
+}: {
+  right?: React.ReactNode;
+  /** Só a tela de login desliga — toda área autenticada mantém o Sair. */
+  showLogout?: boolean;
+}) {
+  return (
+    <header className="no-print flex items-center justify-between gap-3 px-6 py-4 sm:px-10">
       <Link href="/" className="flex items-center gap-2.5" aria-label="Helo — página inicial">
         <Orb palette="coral" className="h-6 w-6" />
         <span className="text-xl font-semibold tracking-tight">Helo</span>
@@ -146,7 +176,12 @@ export function TopBar({ right }: { right?: React.ReactNode }) {
           v{APP_VERSION}
         </span>
       </Link>
-      <nav className="flex items-center gap-2">{right}</nav>
+      {/* flex-wrap: em telas estreitas os controles quebram de linha — o
+          Sair nunca some por falta de espaço. */}
+      <nav className="flex flex-wrap items-center justify-end gap-2">
+        {right}
+        {showLogout && <LogoutButton />}
+      </nav>
     </header>
   );
 }

@@ -21,6 +21,16 @@ function activePatientId(): number | null {
   }
 }
 
+// Registro global dos stops ativos: o logout precisa silenciar QUALQUER voz
+// em curso (Helo, paciente, emergência) sem depender de qual árvore React o
+// botão Sair habita. Cada instância de useSpeech se registra aqui.
+const activeStops = new Set<() => void>();
+
+/** Interrompe toda fala em curso, em qualquer instância de voz. */
+export function stopAllSpeech(): void {
+  for (const stop of activeStops) stop();
+}
+
 // Desfecho real de uma fala, derivado dos eventos de reprodução — nunca de
 // timers estimados. "bloqueada" = política de autoplay do navegador negou
 // a reprodução sem gesto do usuário (não é erro; tentar após interação).
@@ -109,6 +119,15 @@ export function useSpeech() {
   }, [setSpeakingBoth]);
 
   useEffect(() => stop, [stop]);
+
+  // Disponível para o stopAllSpeech global (usado pelo logout) enquanto
+  // esta instância viver.
+  useEffect(() => {
+    activeStops.add(stop);
+    return () => {
+      activeStops.delete(stop);
+    };
+  }, [stop]);
 
   // Fallback aprovado: voz local do navegador em pt-BR, claramente
   // identificada — nunca apresentada como voz da Helo nem do paciente.

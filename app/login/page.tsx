@@ -134,7 +134,7 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="flex min-h-dvh flex-col">
-      <TopBar />
+      <TopBar showLogout={false} />
       <Suspense>
         <LoginForm />
       </Suspense>

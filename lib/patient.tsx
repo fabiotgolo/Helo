@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import type { HeloItemMode, ModeItem, Patient } from "@/lib/types";
-import { redirectToLogin } from "@/lib/use-auth";
+import { clearLocalMirrors, redirectToLogin } from "@/lib/use-auth";
 
 export const ACTIVE_PATIENT_KEY = "helo.patientId";
 const PATIENTS_CACHE_KEY = "helo.patients";
@@ -89,8 +89,11 @@ export function PatientProvider({ children }: { children: ReactNode }) {
       const r = await fetch("/api/patients");
       if (r.status === 401) {
         // Sem sessão: nada de cache — os pacientes visíveis dependem do
-        // usuário autenticado. Vai para o login (exceto se já está nele).
+        // usuário autenticado. Os espelhos locais também caem aqui (sessão
+        // expirada sem logout explícito não pode deixar dados para trás).
+        // Vai para o login (exceto se já está nele).
         setPatients([]);
+        clearLocalMirrors();
         redirectToLogin();
         return;
       }
@@ -122,11 +125,23 @@ export function PatientProvider({ children }: { children: ReactNode }) {
     const onVisible = () => {
       if (document.visibilityState === "visible") reload();
     };
+    // Botão voltar após logout: o navegador pode restaurar a página inteira
+    // do bfcache, com o estado React (e dados de pacientes) intacto. Aqui a
+    // restauração SEMPRE revalida no servidor — sem sessão, /api/patients
+    // responde 401 e o usuário volta ao login, sem dados expostos. Sem o
+    // dedupe de 5s: a restauração pode acontecer logo após o logout.
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      lastLoad = Date.now();
+      void reloadPatients();
+    };
     window.addEventListener("focus", reload);
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onPageShow);
     return () => {
       window.removeEventListener("focus", reload);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onPageShow);
     };
   }, [reloadPatients]);
 

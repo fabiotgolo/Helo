@@ -44,7 +44,7 @@ function relTime(iso: string | null): string {
 export default function DashboardGeralPage() {
   const router = useRouter();
   const { addPatient } = usePatient();
-  const { user, logout } = useAuthUser();
+  const { user } = useAuthUser();
   const canCreate = !user || ROLES_THAT_CREATE_PATIENTS.includes(user.role);
   const [summaries, setSummaries] = useState<PatientSummary[] | null>(null);
   const [error, setError] = useState(false);
@@ -151,16 +151,6 @@ export default function DashboardGeralPage() {
             {user?.role === "admin" && <PillLink href="/admin">Admin</PillLink>}
             <PillLink href="/ajustes">Ajustes</PillLink>
             <PillLink href="/">Início</PillLink>
-            {user && (
-              <button
-                type="button"
-                onClick={() => void logout()}
-                title={`${user.name} · ${ROLE_LABELS[user.role]}`}
-                className="rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium text-ink hover:border-ink-mute"
-              >
-                Sair
-              </button>
-            )}
           </>
         }
       />
