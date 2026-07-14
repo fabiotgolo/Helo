@@ -6,6 +6,7 @@
 // oferece edição — o modo de edição vive em /atividades/gerenciar.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ContextualEdit } from "@/components/contextual-edit";
 import type { Gesture } from "@/lib/types";
 import { useHelo } from "@/lib/helo-state";
 import { useGestures } from "@/lib/gestures";
@@ -69,7 +70,7 @@ function ImageView({
           alt={caption ?? "Imagem da atividade"}
           loading="lazy"
           onError={() => setFailed(true)}
-          className="max-h-[36vh] w-auto max-w-full rounded-2xl object-contain shadow-[var(--shadow-soft)] transition-transform group-hover:scale-[1.01]"
+          className="max-h-[36vh] w-auto max-w-full rounded-2xl object-contain shadow-soft transition-transform group-hover:scale-[1.01]"
         />
       </button>
       {caption && (
@@ -92,7 +93,7 @@ function YoutubeView({ media }: { media: ActivityMedia }) {
   }
   return (
     <div className="w-full max-w-xl">
-      <div className="aspect-video w-full overflow-hidden rounded-2xl shadow-[var(--shadow-soft)]">
+      <div className="aspect-video w-full overflow-hidden rounded-2xl shadow-soft">
         <iframe
           src={embed}
           title={media.caption ?? "Vídeo da atividade"}
@@ -285,18 +286,28 @@ export function SessionPlayer({
   run,
   patientId,
   onExit,
+  initialItemId = null,
+  canEdit = false,
 }: {
   run: ActivityRun;
   patientId: number;
   /** Chamado ao encerrar (concluída ou saída manual). */
   onExit: (summary: { status: "concluida" | "abandonada"; respondidos: number; total: number }) => void;
+  /** Abre a sessão já neste item (retomada pós-edição contextual). */
+  initialItemId?: string | null;
+  /** Exibe a ação contextual "Editar este item" (capacidade do servidor). */
+  canEdit?: boolean;
 }) {
   const { speak, stop } = useHelo();
   const items = useMemo(
     () => [...run.items].sort((a, b) => a.order - b.order),
     [run.items]
   );
-  const [idx, setIdx] = useState(0);
+  const [idx, setIdx] = useState(() => {
+    if (!initialItemId) return 0;
+    const i = items.findIndex((it) => it.id === initialItemId);
+    return i >= 0 ? i : 0;
+  });
   // answers[itemId][optionId] = gesto observado do paciente naquela opção.
   const [answers, setAnswers] = useState<Record<string, ItemAnswers>>({});
   const [saving, setSaving] = useState(false);
@@ -440,13 +451,35 @@ export function SessionPlayer({
             {idx + 1} de {items.length}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={leave}
-          className="rounded-full border border-line bg-card px-4 py-2 text-sm font-medium hover:border-ink-mute"
-        >
-          Encerrar sessão
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Edição contextual do ITEM em exibição: abre Gerenciar já nesta
+              questão. Sair encerra esta sessão (abandonada — o snapshot é
+              imutável); o retorno recomeça a atividade neste mesmo item, já
+              com o conteúdo novo. */}
+          {canEdit && (
+            <ContextualEdit
+              target={{
+                entityType: "activity",
+                activityId: run.templateId,
+                itemId: item.id,
+              }}
+              source={`/atividades?start=${run.templateId}&item=${item.id}`}
+              label={`item ${idx + 1} de ${run.templateTitle}`}
+              onNavigate={() =>
+                window.confirm(
+                  "Editar este item encerra a sessão atual (as respostas já registradas são preservadas). Depois de salvar, você volta direto a este item. Continuar?"
+                )
+              }
+            />
+          )}
+          <button
+            type="button"
+            onClick={leave}
+            className="rounded-full border border-line bg-card px-4 py-2 text-sm font-medium hover:border-ink-mute"
+          >
+            Encerrar sessão
+          </button>
+        </div>
       </header>
 
       <div key={item.id} className="fade-rise flex w-full flex-col items-center gap-5">

@@ -8,7 +8,8 @@ import {
   getItemMode,
 } from "@/lib/store";
 import { requirePatientAccess } from "@/lib/auth";
-import type { Permission } from "@/lib/access-types";
+import { logAudit } from "@/lib/access";
+import { hasPermission, type Permission } from "@/lib/access-types";
 import type { HeloItemMode, ModeItemInput } from "@/lib/types";
 
 // Itens de modo personalizados por paciente (Rotina, Emergência e
@@ -43,7 +44,12 @@ export async function GET(request: Request) {
   const auth = await requirePatientAccess(request, patientId);
   if (auth instanceof Response) return auth;
   const items = await listItems(patientId, mode);
-  return Response.json({ items });
+  // Capacidade derivada NO SERVIDOR (admin passa sem vínculo): a UI usa só
+  // para decidir se exibe a ação contextual "Editar" — a autorização real
+  // continua nas rotas de escrita.
+  const canEdit =
+    auth.link === null || hasPermission(auth.link, EDIT_PERMISSION[mode]);
+  return Response.json({ items, caps: { edit: canEdit } });
 }
 
 export async function POST(request: Request) {
@@ -69,12 +75,26 @@ export async function POST(request: Request) {
     EDIT_PERMISSION[mode]
   );
   if (auth instanceof Response) return auth;
+  // Rastreabilidade sem dados sensíveis: registra QUEM alterou O QUÊ
+  // (ação/modo/id), nunca o conteúdo das frases.
+  const audit = (action: string, entityId: string | null) =>
+    void logAudit({
+      userId: auth.user.id,
+      userName: auth.user.name,
+      patientId: body.patientId ?? null,
+      action,
+      entityType: "modeItem",
+      entityId,
+      metadata: { mode },
+    });
   if (body.action === "restore") {
     await restoreDefaults(body.patientId, mode);
+    audit("modeItem.restore", null);
     return Response.json({ ok: true });
   }
   if (body.order) {
     await reorderItems(body.patientId, body.order);
+    audit("modeItem.reorder", null);
     return Response.json({ ok: true });
   }
   if (!body.item?.label?.trim() || !body.item?.spokenText?.trim()) {
@@ -84,6 +104,7 @@ export async function POST(request: Request) {
     );
   }
   const item = await addItem(body.patientId, mode, body.item);
+  audit("modeItem.create", item.id);
   return Response.json({ item });
 }
 
@@ -114,6 +135,15 @@ export async function PATCH(request: Request) {
   } catch (e) {
     return Response.json({ error: (e as Error).message }, { status: 400 });
   }
+  void logAudit({
+    userId: auth.user.id,
+    userName: auth.user.name,
+    patientId: body.patientId,
+    action: "modeItem.update",
+    entityType: "modeItem",
+    entityId: body.itemId,
+    metadata: { mode },
+  });
   return Response.json({ ok: true });
 }
 
@@ -139,5 +169,14 @@ export async function DELETE(request: Request) {
   );
   if (auth instanceof Response) return auth;
   const result = await deleteItem(body.patientId, body.itemId);
+  void logAudit({
+    userId: auth.user.id,
+    userName: auth.user.name,
+    patientId: body.patientId,
+    action: "modeItem.delete",
+    entityType: "modeItem",
+    entityId: body.itemId,
+    metadata: { mode },
+  });
   return Response.json(result);
 }

@@ -25,6 +25,15 @@
   color-scheme: light;
 }
 
+/* Keep safe-area values out of Tailwind arbitrary utilities. */
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-area-pb-spaced {
+  padding-bottom: max(2rem, env(safe-area-inset-bottom));
+}
+
 html {
   height: 100%;
 }

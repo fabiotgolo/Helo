@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
 import { Avatar } from "@/components/dashboard-ui";
+import AdminFeedbackTab from "@/components/admin-feedback-tab";
 import { useAuthUser, redirectToLogin } from "@/lib/use-auth";
 import { usePatient } from "@/lib/patient";
 import type {
@@ -28,13 +29,14 @@ import {
 import type { Patient } from "@/lib/types";
 
 type UserWithLinks = AppUser & { links: AccessLink[] };
-type Tab = "usuarios" | "pacientes" | "acessos" | "vozes" | "auditoria";
+type Tab = "usuarios" | "pacientes" | "acessos" | "vozes" | "feedback" | "auditoria";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "usuarios", label: "Usuários" },
   { id: "pacientes", label: "Pacientes" },
   { id: "acessos", label: "Acessos" },
   { id: "vozes", label: "Vozes" },
+  { id: "feedback", label: "Feedback" },
   { id: "auditoria", label: "Auditoria" },
 ];
 
@@ -285,7 +287,9 @@ export default function AdminPage() {
         ) : tab === "acessos" ? (
           <AccessTab users={users} patients={patients} links={links} userById={userById} patientById={patientById} run={run} />
         ) : tab === "vozes" ? (
-          <VoicesTab data={voicesAdmin} users={users} run={run} />
+          <VoicesTab data={voicesAdmin} run={run} />
+        ) : tab === "feedback" ? (
+          <AdminFeedbackTab />
         ) : (
           <AuditTab audit={audit ?? []} />
         )}
@@ -479,7 +483,9 @@ function UserRow({
             "Os pacientes e seus dados NÃO serão apagados.",
             "As sessões de login serão invalidadas.",
             "Esta ação não pode ser desfeita.",
+            `Para confirmar, digite o nome do usuário: ${u.name}`,
           ]}
+          requireText={u.name}
           confirmLabel="Excluir usuário"
           onConfirm={() => void remove()}
           onCancel={() => setConfirming(false)}
@@ -931,11 +937,9 @@ function LinkRow({
 
 function VoicesTab({
   data,
-  users,
   run,
 }: {
   data: VoicesAdminData | null;
-  users: UserWithLinks[];
   run: (p: Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>;
 }) {
   const [voiceId, setVoiceId] = useState("");
@@ -1091,42 +1095,19 @@ function VoicesTab({
         </ul>
       </div>
 
-      {/* ——— Permissão: escolher voz da plataforma ——— */}
-      <div className="flex flex-col gap-3 rounded-3xl border border-line bg-card p-5">
-        <h2 className="text-lg font-semibold">Quem pode escolher a voz da plataforma</h2>
+      {/* ——— Escolha da voz da plataforma ——— */}
+      <div className="flex flex-col gap-2 rounded-3xl border border-line bg-card p-5">
+        <h2 className="text-lg font-semibold">Escolha da voz da plataforma</h2>
         <p className="text-sm text-ink-soft">
-          Sem esta concessão, o usuário ouve a voz padrão da Helo. A escolha
-          de cada usuário vale só para ele.
+          Todo usuário pode escolher, nos Ajustes, entre as vozes ativas deste
+          catálogo para a voz da própria interface — a escolha vale só para ele
+          e não altera a experiência dos outros. As vozes que aparecem são as
+          cadastradas aqui; para tirar uma de circulação, desative-a acima. A
+          voz das falas do PACIENTE é uma configuração à parte: para paciente
+          sem voz clonada, qualquer usuário vinculado escolhe uma voz do
+          catálogo; havendo clone, trocar a fonte exige a permissão “escolher
+          a voz das falas do paciente”.
         </p>
-        <ul className="flex flex-col gap-2">
-          {users
-            .filter((u) => u.status === "active" && u.role !== "admin")
-            .map((u) => (
-              <li key={u.id} className="flex items-center justify-between gap-2 rounded-2xl bg-cream px-4 py-3">
-                <span className="min-w-0 truncate text-sm font-medium">
-                  {u.name} <span className="font-normal text-ink-soft">— {ROLE_LABELS[u.role]}</span>
-                </span>
-                <button
-                  type="button"
-                  className={btnLight}
-                  aria-pressed={u.canSelectPlatformVoice}
-                  onClick={() =>
-                    void run(
-                      api("/api/admin/users", "PATCH", {
-                        id: u.id,
-                        canSelectPlatformVoice: !u.canSelectPlatformVoice,
-                      }),
-                      u.canSelectPlatformVoice
-                        ? `${u.name} não escolhe mais a voz da plataforma.`
-                        : `${u.name} agora pode escolher a voz da plataforma.`
-                    )
-                  }
-                >
-                  {u.canSelectPlatformVoice ? "✓ Pode escolher" : "Conceder"}
-                </button>
-              </li>
-            ))}
-        </ul>
       </div>
     </section>
   );
@@ -1246,13 +1227,18 @@ function CatalogVoiceRow({
           lines={[
             `Remover "${v.displayName}" do catálogo?`,
             inUse > 0
-              ? `Em uso por ${usage?.userIds.length ?? 0} usuário(s) e ${usage?.patientIds.length ?? 0} paciente(s) — a remoção será negada; desative-a ou troque as preferências antes.`
+              ? `Em uso por ${usage?.userIds.length ?? 0} usuário(s) e ${usage?.patientIds.length ?? 0} paciente(s) — quem a usava passa a ouvir a voz padrão da Helo.`
               : "Ela deixa de existir para todos os usuários.",
           ]}
           confirmLabel="Remover do catálogo"
           onConfirm={() => {
             setConfirming(false);
-            void run(api("/api/admin/voices", "DELETE", { id: v.id }), "Voz removida do catálogo.");
+            void run(
+              api("/api/admin/voices", "DELETE", { id: v.id }),
+              inUse > 0
+                ? `"${v.displayName}" removida — ${inUse} preferência(s) voltaram à voz padrão.`
+                : "Voz removida do catálogo."
+            );
           }}
           onCancel={() => setConfirming(false)}
         />

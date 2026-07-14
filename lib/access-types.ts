@@ -51,8 +51,10 @@ export const PROFESSIONAL_TYPE_LABELS: Record<ProfessionalType, string> = {
 //     FONTE da voz das falas do paciente (clone dele ou voz aprovada do
 //     catálogo). Substitui a antiga "manageVoice" (que deixava gravar um
 //     voiceId livre) — vínculos antigos com manageVoice são mapeados;
-//   - a permissão de escolher a voz da PLATAFORMA é do usuário (não do
-//     vínculo): AppUser.canSelectPlatformVoice, concedida pelo Admin;
+//   - escolher a voz da PLATAFORMA (voz da interface do próprio usuário) é
+//     liberado a todo usuário autenticado — não afeta os outros nem a voz
+//     do paciente. O campo AppUser.canSelectPlatformVoice ficou obsoleto
+//     (não gateia mais nada) e é mantido só por compatibilidade de dados;
 //   - VER o status da voz (configurada/não, nunca IDs) segue coberto pelo
 //     próprio vínculo ativo — equivale à "viewPatientVoiceStatus".
 export const PERMISSIONS = [

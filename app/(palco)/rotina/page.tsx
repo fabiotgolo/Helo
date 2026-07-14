@@ -9,6 +9,7 @@ import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { GestureTriplet } from "@/components/ui";
 import { OverlayVeil } from "@/components/overlay-panel";
+import { ContextualEdit } from "@/components/contextual-edit";
 
 // Modo rotina: as frases rápidas são DO PACIENTE (personalizáveis em
 // Ajustes), com espelho local — o modo continua funcionando sem IA e sem
@@ -26,7 +27,7 @@ export default function RotinaPage() {
   const { speak } = useHelo();
   const gestures = useGestures();
   const { patientId } = usePatient();
-  const { enabledItems, loading } = usePatientItems("rotina");
+  const { enabledItems, loading, canEdit } = usePatientItems("rotina");
   const [pending, setPending] = useState<Pending | null>(null);
   const sessionRef = useRef<number | null>(null);
   // Marcado em propose(); o valor inicial nunca é lido (onGesture exige pending)
@@ -189,14 +190,26 @@ export default function RotinaPage() {
 
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
               {items.map((item) => (
-                <button
-                  key={item.itemId ?? item.label}
-                  type="button"
-                  onClick={() => void propose(item)}
-                  className="rounded-3xl border border-line/70 bg-card/70 px-5 py-8 text-xl font-medium tracking-tight shadow-[var(--shadow-soft)] backdrop-blur-md transition-transform hover:scale-[1.03] active:scale-[0.98]"
-                >
-                  {item.label}
-                </button>
+                <div key={item.itemId ?? item.label} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => void propose(item)}
+                    className="w-full rounded-3xl border border-line/70 bg-card/70 px-5 py-8 text-xl font-medium tracking-tight shadow-soft backdrop-blur-md transition-transform hover:scale-[1.03] active:scale-[0.98]"
+                  >
+                    {item.label}
+                  </button>
+                  {/* Edição contextual: direto no item exato, em Ajustes —
+                      só com permissão do vínculo e só para itens reais do
+                      paciente (o conteúdo padrão offline não tem id). */}
+                  {canEdit && item.itemId && (
+                    <ContextualEdit
+                      target={{ entityType: "modeItem", mode: "rotina", itemId: item.itemId }}
+                      source="/rotina"
+                      label={item.label}
+                      className="absolute -right-2 -top-2"
+                    />
+                  )}
+                </div>
               ))}
             </div>
           </section>

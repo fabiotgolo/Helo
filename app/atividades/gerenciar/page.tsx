@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
 import { usePatient } from "@/lib/patient";
 import { redirectToLogin } from "@/lib/use-auth";
+import { readSearchParams, safeReturnTo } from "@/lib/edit-link";
 import { ActivityItemView, mediaSrc } from "@/components/activity-player";
 import {
   ACTIVITY_CATEGORIES,
@@ -79,6 +80,47 @@ export default function GerenciarAtividadesPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // ——— Edição contextual (deep link) ———
+  // ?activityId=…&itemId=…&returnTo=… abre a atividade exata com o editor já
+  // posicionado no item, e devolve o usuário à tela de origem ao salvar ou
+  // cancelar. A URL identifica o item de forma estável: reload reabre o
+  // mesmo contexto. A autorização continua sendo do servidor (caps/rotas).
+  const [editCtx, setEditCtx] = useState<{
+    activityId: string | null;
+    itemId: string | null;
+    returnTo: string | null;
+  } | null>(null);
+  // Lido num efeito (não no initializer): na navegação client-side a URL só
+  // é confiável depois da montagem da rota.
+  useEffect(() => {
+    const q = readSearchParams();
+    setEditCtx({
+      activityId: q.get("activityId"),
+      itemId: q.get("itemId"),
+      returnTo: safeReturnTo(q.get("returnTo")),
+    });
+  }, []);
+  const returnTo = editCtx?.returnTo ?? null;
+  const [focusItemId, setFocusItemId] = useState<string | null>(null);
+  // Abre o draft pedido pelo deep link assim que a lista chega — uma vez.
+  useEffect(() => {
+    const ctx = editCtx;
+    if (!ctx?.activityId || state !== "ok" || !templates || draft) return;
+    const wanted = ctx.activityId;
+    setEditCtx({ ...ctx, activityId: null });
+    const t = templates.find((x) => x.id === wanted);
+    if (!t) {
+      setErrorMsg("Atividade não encontrada — pode ter sido excluída.");
+      return;
+    }
+    if (!caps?.edit) {
+      setErrorMsg("Sem permissão para editar esta atividade.");
+      return;
+    }
+    setDraft(draftFrom(t));
+    setFocusItemId(ctx.itemId);
+  }, [editCtx, state, templates, caps, draft]);
+
   const load = useCallback(async () => {
     if (patientId == null) return;
     try {
@@ -135,6 +177,13 @@ export default function GerenciarAtividadesPage() {
       if (!r.ok || !d?.template) throw new Error(d?.error ?? "falha ao salvar");
       setDraft(null);
       setPreview(false);
+      setFocusItemId(null);
+      // Veio por edição contextual: salvar devolve direto à tela de origem
+      // (returnTo é sempre um caminho interno, validado por safeReturnTo).
+      if (returnTo) {
+        window.location.assign(returnTo);
+        return;
+      }
       setNotice(`"${d.template.title}" salva (versão ${d.template.version}).`);
       await load();
     } catch (e) {
@@ -142,7 +191,7 @@ export default function GerenciarAtividadesPage() {
     } finally {
       setSaving(false);
     }
-  }, [draft, patientId, saving, load]);
+  }, [draft, patientId, saving, load, returnTo]);
 
   const act = useCallback(
     async (
@@ -175,6 +224,9 @@ export default function GerenciarAtividadesPage() {
       <TopBar
         right={
           <>
+            {returnTo && returnTo !== "/atividades" && (
+              <PillLink href={returnTo}>← Voltar</PillLink>
+            )}
             <PillLink href="/atividades">← Atividades</PillLink>
             <PillLink href="/dashboard">Dashboard</PillLink>
           </>
@@ -348,10 +400,14 @@ export default function GerenciarAtividadesPage() {
             preview={preview}
             setPreview={setPreview}
             saving={saving}
+            focusItemId={focusItemId}
             onSave={() => void save()}
             onCancel={() => {
               setDraft(null);
               setPreview(false);
+              setFocusItemId(null);
+              // Cancelar também devolve à origem da edição contextual.
+              if (returnTo) window.location.assign(returnTo);
             }}
           />
         )}
@@ -393,6 +449,7 @@ function TemplateEditor({
   preview,
   setPreview,
   saving,
+  focusItemId = null,
   onSave,
   onCancel,
 }: {
@@ -402,6 +459,8 @@ function TemplateEditor({
   preview: boolean;
   setPreview: (v: boolean) => void;
   saving: boolean;
+  /** Deep link de edição contextual: rola até este item e o destaca. */
+  focusItemId?: string | null;
   onSave: () => void;
   onCancel: () => void;
 }) {
@@ -495,6 +554,7 @@ function TemplateEditor({
           index={idx}
           total={draft.items.length}
           patientId={patientId}
+          focused={item.id === focusItemId}
           onChange={(p) => patchItem(idx, p)}
           onMove={(dir) => move(idx, dir)}
           onRemove={() => patch({ items: draft.items.filter((_, i) => i !== idx) })}
@@ -547,6 +607,7 @@ function ItemEditor({
   index,
   total,
   patientId,
+  focused = false,
   onChange,
   onMove,
   onRemove,
@@ -555,11 +616,23 @@ function ItemEditor({
   index: number;
   total: number;
   patientId: number;
+  /** Item pedido pelo deep link — rola até aqui e foca o primeiro campo. */
+  focused?: boolean;
   onChange: (p: Partial<ActivityItem>) => void;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
 }) {
   const isQuestion = item.question.trim().length > 0;
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focused || !rootRef.current) return;
+    rootRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    rootRef.current
+      .querySelector<HTMLInputElement>("input, textarea")
+      ?.focus({ preventScroll: true });
+    // roda uma vez, na montagem do editor com o item pedido
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const setOption = (i: number, label: string) => {
     const options = [...item.options];
@@ -571,10 +644,20 @@ function ItemEditor({
   };
 
   return (
-    <div className="flex flex-col gap-4 rounded-3xl border border-line bg-card p-5 sm:p-6">
+    <div
+      ref={rootRef}
+      className={`flex flex-col gap-4 rounded-3xl border bg-card p-5 sm:p-6 ${
+        focused ? "border-ink ring-2 ring-ink/15" : "border-line"
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-semibold uppercase tracking-widest text-ink-soft">
           Item {index + 1}
+          {focused && (
+            <span className="ml-2 rounded-full bg-cream px-2 py-0.5 text-[10px] normal-case tracking-normal text-ink-soft">
+              item que você estava vendo
+            </span>
+          )}
         </p>
         <div className="flex gap-1.5">
           <IconBtn label="Mover para cima" disabled={index === 0} onClick={() => onMove(-1)}>

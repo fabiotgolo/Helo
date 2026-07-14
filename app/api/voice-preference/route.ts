@@ -4,19 +4,15 @@ import { getPlatformVoice } from "@/lib/voice-catalog";
 
 // Preferência de voz da PLATAFORMA do próprio usuário.
 // Escopo: SÓ a experiência dele — nunca altera a voz padrão global nem a
-// escolha de outros usuários. Exige a permissão canSelectPlatformVoice
-// (concedida pelo Admin); sem ela, o usuário segue na voz padrão da Helo.
+// escolha de outros usuários. Por ser apenas a voz da INTERFACE do próprio
+// usuário (não toca na voz/identidade do paciente, protegida à parte por
+// selectPatientVoiceSource), qualquer usuário autenticado pode escolher
+// entre as vozes ativas do catálogo aprovado pelo Admin.
 
 export async function POST(request: Request) {
   const auth = await requireUser(request);
   if (auth instanceof Response) return auth;
   const { user } = auth;
-  if (!user.canSelectPlatformVoice && user.role !== "admin") {
-    return Response.json(
-      { error: "permissão necessária: escolher voz da plataforma" },
-      { status: 403 }
-    );
-  }
   const { platformVoiceId } = (await request.json()) as {
     platformVoiceId?: string | null;
   };

@@ -217,14 +217,15 @@ export interface ResolvedVoice {
 }
 
 /**
- * Voz da PLATAFORMA para um usuário: preferência dele (se o Admin concedeu
- * canSelectPlatformVoice e a voz segue ativa no catálogo) → voz padrão da
- * Helo → null (o chamador aplica o fallback aprovado do ambiente).
+ * Voz da PLATAFORMA para um usuário: preferência dele (quando a voz segue
+ * ativa no catálogo) → voz padrão da Helo → null (o chamador aplica o
+ * fallback aprovado do ambiente). Escolher a voz da plataforma é liberado
+ * a todo usuário — é apenas a voz da interface dele.
  */
 export async function resolvePlatformVoiceForUser(
   user: AppUser
 ): Promise<ResolvedVoice> {
-  if (user.platformVoiceId && (user.canSelectPlatformVoice || user.role === "admin")) {
+  if (user.platformVoiceId) {
     const pref = await getPlatformVoice(user.platformVoiceId);
     if (pref?.enabled) {
       return { elevenLabsVoiceId: pref.elevenLabsVoiceId, source: "heloElevenLabs" };

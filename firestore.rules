@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// A Helo não expõe o Firestore diretamente ao navegador. Toda leitura e
+// escrita passa pelas rotas autenticadas do servidor, que verificam sessão,
+// papel, vínculo com paciente e autoria antes de usar o Admin SDK.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

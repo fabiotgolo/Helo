@@ -156,13 +156,23 @@ export function LogoutButton() {
   );
 }
 
+/** Acesso global ao suporte, sem interferir nos fluxos do paciente. */
+export function FeedbackLink() {
+  const { user, loading } = useAuthUser();
+  if (loading || !user) return null;
+  return <PillLink href="/feedback">Feedback e suporte</PillLink>;
+}
+
 export function TopBar({
   right,
   showLogout = true,
+  showFeedback = true,
 }: {
   right?: React.ReactNode;
   /** Só a tela de login desliga — toda área autenticada mantém o Sair. */
   showLogout?: boolean;
+  /** A própria página de feedback evita repetir o atalho. */
+  showFeedback?: boolean;
 }) {
   return (
     <header className="no-print flex items-center justify-between gap-3 px-6 py-4 sm:px-10">
@@ -180,6 +190,7 @@ export function TopBar({
           Sair nunca some por falta de espaço. */}
       <nav className="flex flex-wrap items-center justify-end gap-2">
         {right}
+        {showFeedback && <FeedbackLink />}
         {showLogout && <LogoutButton />}
       </nav>
     </header>

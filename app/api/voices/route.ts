@@ -25,8 +25,11 @@ export async function GET(request: Request) {
     getDefaultPlatformVoice(),
   ]);
 
-  const canSelectPlatformVoice =
-    user.canSelectPlatformVoice || user.role === "admin";
+  // A escolha da voz da PLATAFORMA (voz da interface do próprio usuário) é
+  // liberada para todo usuário autenticado — não afeta a experiência dos
+  // outros nem a voz/identidade do paciente (essa segue protegida por
+  // selectPatientVoiceSource).
+  const canSelectPlatformVoice = true;
 
   const payload: Record<string, unknown> = {
     voices: voices.map(toPublicVoice),
@@ -52,8 +55,13 @@ export async function GET(request: Request) {
       cloneName: state.cloneName,
       source: state.source,
       platformVoiceId: state.platformVoiceId,
+      // Paciente SEM clone: escolher uma voz do catálogo é liberado a
+      // qualquer usuário vinculado (não há voz pessoal em jogo — baixa
+      // sensibilidade). Paciente COM clone: trocar a fonte segue exigindo a
+      // permissão selectPatientVoiceSource, que protege a voz/identidade.
       canSelectPatientVoiceSource:
         user.role === "admin" ||
+        !state.hasClone ||
         hasPermission(patientAuth.link, "selectPatientVoiceSource"),
     };
   }

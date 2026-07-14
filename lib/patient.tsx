@@ -274,10 +274,18 @@ export function usePatientItems(mode: HeloItemMode): {
   /** Só os ativos, na ordem — o que as telas de uso exibem. */
   enabledItems: ModeItem[];
   loading: boolean;
+  /**
+   * O usuário pode editar os itens deste modo (permissão do vínculo,
+   * derivada no servidor). Decide só a EXIBIÇÃO da ação contextual
+   * "Editar" nas telas de uso — a autorização real é das rotas. Começa
+   * false e só vira true com resposta do servidor (offline não exibe).
+   */
+  canEdit: boolean;
   reload: () => Promise<void>;
 } {
   const { patientId } = usePatient();
   const [items, setItems] = useState<ModeItem[]>([]);
+  const [canEdit, setCanEdit] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
@@ -285,8 +293,12 @@ export function usePatientItems(mode: HeloItemMode): {
     try {
       const r = await fetch(`/api/items?patientId=${patientId}&mode=${mode}`);
       if (!r.ok) throw new Error();
-      const d = (await r.json()) as { items: ModeItem[] };
+      const d = (await r.json()) as {
+        items: ModeItem[];
+        caps?: { edit: boolean };
+      };
       setItems(d.items);
+      setCanEdit(Boolean(d.caps?.edit));
       writeCache(itemsCacheKey(patientId, mode), d.items);
     } catch {
       /* offline — o cache já exibido continua valendo */
@@ -299,6 +311,7 @@ export function usePatientItems(mode: HeloItemMode): {
     if (patientId == null) return;
     const cached = readCache<ModeItem[]>(itemsCacheKey(patientId, mode));
     setItems(cached ?? []);
+    setCanEdit(false);
     setLoading(!cached);
     void reload();
   }, [patientId, mode, reload]);
@@ -307,6 +320,7 @@ export function usePatientItems(mode: HeloItemMode): {
     items,
     enabledItems: items.filter((i) => i.enabled),
     loading,
+    canEdit,
     reload,
   };
 }

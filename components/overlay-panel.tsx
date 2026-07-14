@@ -39,7 +39,7 @@ export function OverlayPanel({
   return (
     <section
       aria-label={label}
-      className={`fade-rise pointer-events-auto mx-auto w-full max-w-3xl rounded-3xl border px-5 py-8 shadow-[var(--shadow-soft)] sm:px-8 ${skin} ${className}`}
+      className={`fade-rise pointer-events-auto mx-auto w-full max-w-3xl rounded-3xl border px-5 py-8 shadow-soft sm:px-8 ${skin} ${className}`}
     >
       {children}
     </section>

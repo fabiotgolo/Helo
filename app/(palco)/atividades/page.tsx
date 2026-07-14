@@ -14,6 +14,8 @@ import { usePatient } from "@/lib/patient";
 import { redirectToLogin } from "@/lib/use-auth";
 import { OverlayVeil } from "@/components/overlay-panel";
 import { SessionPlayer } from "@/components/activity-player";
+import { ContextualEdit } from "@/components/contextual-edit";
+import { readSearchParams } from "@/lib/edit-link";
 import {
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
@@ -24,7 +26,7 @@ import {
 
 type View =
   | { kind: "lista" }
-  | { kind: "sessao"; run: ActivityRun }
+  | { kind: "sessao"; run: ActivityRun; initialItemId: string | null }
   | { kind: "fim"; titulo: string; respondidos: number; total: number };
 
 export default function AtividadesPage() {
@@ -37,6 +39,20 @@ export default function AtividadesPage() {
   const [view, setView] = useState<View>({ kind: "lista" });
   const [starting, setStarting] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // Retomada pós-edição contextual: ?start=<templateId>&item=<itemId> inicia
+  // uma NOVA sessão da atividade (o snapshot é imutável — só uma sessão nova
+  // exibe o conteúdo recém-salvo) já posicionada no item que estava em uso.
+  const [resumeCtx, setResumeCtx] = useState<{
+    templateId: string;
+    itemId: string | null;
+  } | null>(null);
+  // Lido num efeito (não no initializer): na navegação client-side a URL só
+  // é confiável depois da montagem da rota.
+  useEffect(() => {
+    const q = readSearchParams();
+    const templateId = q.get("start");
+    if (templateId) setResumeCtx({ templateId, itemId: q.get("item") });
+  }, []);
 
   // Carga isolada por paciente: troca rápida descarta respostas antigas.
   useEffect(() => {
@@ -75,7 +91,7 @@ export default function AtividadesPage() {
   }, [patientId]);
 
   const start = useCallback(
-    async (template: ActivityTemplate) => {
+    async (template: ActivityTemplate, initialItemId: string | null = null) => {
       if (patientId == null || starting) return;
       setStarting(template.id);
       setStartError(null);
@@ -91,7 +107,7 @@ export default function AtividadesPage() {
         if (!r.ok || !d?.run) {
           throw new Error(d?.error ?? "não foi possível iniciar a sessão");
         }
-        setView({ kind: "sessao", run: d.run });
+        setView({ kind: "sessao", run: d.run, initialItemId });
       } catch (e) {
         setStartError((e as Error).message);
       } finally {
@@ -100,6 +116,17 @@ export default function AtividadesPage() {
     },
     [patientId, starting]
   );
+
+  // Consome o deep link de retomada UMA vez, quando a lista chega: inicia a
+  // sessão da atividade editada já no item de onde o usuário saiu. A URL é
+  // limpa em seguida — encerrar a sessão volta à lista, sem reiniciar.
+  useEffect(() => {
+    if (!resumeCtx || state !== "ok" || !templates || !caps?.run) return;
+    const template = templates.find((t) => t.id === resumeCtx.templateId);
+    setResumeCtx(null);
+    window.history.replaceState(null, "", "/atividades");
+    if (template) void start(template, resumeCtx.itemId);
+  }, [resumeCtx, state, templates, caps, start]);
 
   if (patientId == null) {
     return (
@@ -117,6 +144,8 @@ export default function AtividadesPage() {
           <SessionPlayer
             run={view.run}
             patientId={patientId}
+            initialItemId={view.initialItemId}
+            canEdit={Boolean(caps?.edit)}
             onExit={({ status, respondidos, total }) =>
               setView(
                 status === "concluida"
@@ -243,23 +272,33 @@ export default function AtividadesPage() {
                 </h2>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {group.map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      disabled={!caps?.run || starting != null}
-                      onClick={() => void start(t)}
-                      className="flex flex-col items-center gap-1.5 rounded-3xl border border-line/70 bg-card/70 px-5 py-7 shadow-[var(--shadow-soft)] backdrop-blur-md transition-transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-60 disabled:hover:scale-100"
-                    >
-                      <span className="text-xl font-medium tracking-tight">
-                        {starting === t.id ? "Iniciando…" : t.title}
-                      </span>
-                      {t.description && (
-                        <span className="text-sm text-ink-soft">{t.description}</span>
+                    <div key={t.id} className="relative">
+                      <button
+                        type="button"
+                        disabled={!caps?.run || starting != null}
+                        onClick={() => void start(t)}
+                        className="flex w-full flex-col items-center gap-1.5 rounded-3xl border border-line/70 bg-card/70 px-5 py-7 shadow-soft backdrop-blur-md transition-transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-60 disabled:hover:scale-100"
+                      >
+                        <span className="text-xl font-medium tracking-tight">
+                          {starting === t.id ? "Iniciando…" : t.title}
+                        </span>
+                        {t.description && (
+                          <span className="text-sm text-ink-soft">{t.description}</span>
+                        )}
+                        <span className="text-xs text-ink-mute">
+                          {t.items.length} {t.items.length === 1 ? "item" : "itens"}
+                        </span>
+                      </button>
+                      {/* Edição contextual: abre Gerenciar já NESTA atividade. */}
+                      {caps?.edit && (
+                        <ContextualEdit
+                          target={{ entityType: "activity", activityId: t.id }}
+                          source="/atividades"
+                          label={t.title}
+                          className="absolute -right-2 -top-2"
+                        />
                       )}
-                      <span className="text-xs text-ink-mute">
-                        {t.items.length} {t.items.length === 1 ? "item" : "itens"}
-                      </span>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </section>

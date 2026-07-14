@@ -10,7 +10,8 @@
     "lint": "eslint",
     "emu": "firebase emulators:start --only firestore --project helo-app-7fbf8",
     "test:access": "node scripts/test-access.mjs",
-    "test:activities": "node scripts/test-activities.mjs"
+    "test:activities": "node scripts/test-activities.mjs",
+    "test:feedback": "node scripts/test-feedback.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

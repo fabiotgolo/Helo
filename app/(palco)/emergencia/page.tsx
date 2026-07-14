@@ -6,6 +6,7 @@ import { DEFAULT_ITEMS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { OverlayVeil } from "@/components/overlay-panel";
+import { ContextualEdit } from "@/components/contextual-edit";
 
 // Modo emergência: frases críticas DO PACIENTE (editáveis em Ajustes, nunca
 // aqui), sem IA e sem etapas. O toque do assistente é a confirmação — a voz
@@ -23,7 +24,7 @@ type EmergencyAction = { itemId: string | null; label: string; phrase: string };
 export default function EmergenciaPage() {
   const { speak, prime } = useHelo();
   const { patientId } = usePatient();
-  const { enabledItems, loading } = usePatientItems("emergencia");
+  const { enabledItems, loading, canEdit } = usePatientItems("emergencia");
   const sessionRef = useRef<number | null>(null);
   const sessionPending = useRef<Promise<number | null> | null>(null);
 
@@ -188,21 +189,32 @@ export default function EmergenciaPage() {
             {actions.map((item) => {
               const isActive = feedback?.label === item.label && feedback.status === "falando";
               return (
-                <button
-                  key={item.itemId ?? item.label}
-                  type="button"
-                  onClick={() => trigger(item)}
-                  className={`rounded-3xl border-2 px-6 py-7 text-left shadow-[var(--shadow-soft)] backdrop-blur-md transition-transform hover:scale-[1.02] active:scale-[0.98] ${
-                    isActive
-                      ? "border-nao bg-nao-soft ring-4 ring-nao/40"
-                      : "border-nao/30 bg-nao-soft/90"
-                  }`}
-                >
-                  <span className="block text-2xl font-semibold tracking-tight text-nao">
-                    {item.label}
-                  </span>
-                  <span className="mt-1 block text-lg text-ink-soft">“{item.phrase}”</span>
-                </button>
+                <div key={item.itemId ?? item.label} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => trigger(item)}
+                    className={`w-full rounded-3xl border-2 px-6 py-7 text-left shadow-soft backdrop-blur-md transition-transform hover:scale-[1.02] active:scale-[0.98] ${
+                      isActive
+                        ? "border-nao bg-nao-soft ring-4 ring-nao/40"
+                        : "border-nao/30 bg-nao-soft/90"
+                    }`}
+                  >
+                    <span className="block pr-20 text-2xl font-semibold tracking-tight text-nao">
+                      {item.label}
+                    </span>
+                    <span className="mt-1 block text-lg text-ink-soft">“{item.phrase}”</span>
+                  </button>
+                  {/* Edição contextual FORA do botão de socorro: tocar em
+                      Editar nunca dispara a fala. Ajustes abre já no item. */}
+                  {canEdit && item.itemId && (
+                    <ContextualEdit
+                      target={{ entityType: "modeItem", mode: "emergencia", itemId: item.itemId }}
+                      source="/emergencia"
+                      label={item.label}
+                      className="absolute right-3 top-3"
+                    />
+                  )}
+                </div>
               );
             })}
           </div>

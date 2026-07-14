@@ -11,6 +11,7 @@ import { GESTURES, type Gesture, type HeloItemMode, type ModeItem } from "@/lib/
 import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
+import { readSearchParams, safeReturnTo } from "@/lib/edit-link";
 
 // Vozes visíveis ao usuário: SOMENTE o catálogo interno aprovado pelo Admin
 // (nomes amigáveis — nenhum voiceId técnico chega ao cliente) e, quando
@@ -78,8 +79,32 @@ export default function AjustesPage() {
   const [newPatientName, setNewPatientName] = useState("");
   const [creatingPatient, setCreatingPatient] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
+  // Qual prévia está tocando — "plataforma" | "paciente" | null. Antes era um
+  // booleano único, o que fazia os DOIS botões "Ouvir" virarem "Falando…" ao
+  // clicar em um só. Agora cada botão reflete só o próprio estado.
+  const [previewing, setPreviewing] = useState<"plataforma" | "paciente" | null>(
+    null
+  );
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // ——— Edição contextual (deep link) ———
+  // ?editMode=<rotina|emergencia|conversa>&itemId=…&returnTo=… abre a seção
+  // certa JÁ no item, com o formulário de edição aberto, e oferece o retorno
+  // à tela de origem. Lido uma vez, do lado do cliente (página client-only).
+  const [editContext, setEditContext] = useState<{
+    mode: HeloItemMode | null;
+    itemId: string | null;
+    returnTo: string | null;
+  }>({ mode: null, itemId: null, returnTo: null });
+  useEffect(() => {
+    const q = readSearchParams();
+    const mode = q.get("editMode") as HeloItemMode | null;
+    setEditContext({
+      mode: mode === "rotina" || mode === "emergencia" || mode === "conversa" ? mode : null,
+      itemId: q.get("itemId"),
+      returnTo: safeReturnTo(q.get("returnTo")),
+    });
+  }, []);
 
   // O formulário espelha as configurações do paciente ativo; trocar de
   // paciente recarrega tudo — nada de um vaza para o outro.
@@ -160,8 +185,8 @@ export default function AjustesPage() {
   // Prévia de voz: o cliente NUNCA envia voiceId técnico — só ids do
   // catálogo interno aprovado ou a referência ao clone do paciente ativo.
   const playPreview = useCallback(
-    async (payload: Record<string, unknown>, text: string) => {
-      setPreviewing(true);
+    async (which: "plataforma" | "paciente", payload: Record<string, unknown>, text: string) => {
+      setPreviewing(which);
       try {
         audioRef.current?.pause();
         const res = await fetch("/api/tts", {
@@ -175,7 +200,7 @@ export default function AjustesPage() {
         audioRef.current = audio;
         await audio.play();
       } finally {
-        setPreviewing(false);
+        setPreviewing(null);
       }
     },
     []
@@ -278,9 +303,18 @@ export default function AjustesPage() {
 
   return (
     <div className="flex min-h-dvh flex-col">
-      <TopBar right={<PillLink href="/conversa">Conversa</PillLink>} />
+      <TopBar
+        right={
+          <>
+            {editContext.returnTo && (
+              <PillLink href={editContext.returnTo}>← Voltar</PillLink>
+            )}
+            <PillLink href="/conversa">Conversa</PillLink>
+          </>
+        }
+      />
 
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-8 pb-[max(2rem,env(safe-area-inset-bottom))]">
+      <main className="safe-area-pb-spaced mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-8">
         <div>
           <h1 className="text-4xl font-medium tracking-tight">Ajustes</h1>
           <p className="mt-2 text-lg text-ink-soft">
@@ -487,14 +521,15 @@ export default function AjustesPage() {
                           voicesData.defaultVoiceId;
                         if (id)
                           void playPreview(
+                            "plataforma",
                             { previewPlatformVoiceId: id },
                             "Olá, eu sou a Helo. É assim que eu falo com vocês."
                           );
                       }}
-                      disabled={previewing || !voicesData.platformVoiceReady}
+                      disabled={previewing !== null || !voicesData.platformVoiceReady}
                       className="self-start rounded-full border border-line bg-cream px-5 py-2.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40"
                     >
-                      {previewing ? "Falando…" : "🔊 Ouvir"}
+                      {previewing === "plataforma" ? "Falando…" : "🔊 Ouvir"}
                     </button>
                   </div>
                 ) : (
@@ -566,14 +601,15 @@ export default function AjustesPage() {
                                   },
                                 };
                           void playPreview(
+                            "paciente",
                             payload,
                             `Olá${patientName ? `, eu sou ${patientName}` : ""}. Esta será a voz das minhas mensagens.`
                           );
                         }}
-                        disabled={previewing || !voicesData.platformVoiceReady}
+                        disabled={previewing !== null || !voicesData.platformVoiceReady}
                         className="self-start rounded-full border border-line bg-cream px-5 py-2.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40"
                       >
-                        {previewing ? "Falando…" : "🔊 Ouvir"}
+                        {previewing === "paciente" ? "Falando…" : "🔊 Ouvir"}
                       </button>
                     </div>
                   ) : (
@@ -659,6 +695,8 @@ export default function AjustesPage() {
 
         {/* ——— Frases por modo ——— */}
         <ModeItemsEditor
+          focusItemId={editContext.mode === "rotina" ? editContext.itemId : null}
+          returnTo={editContext.mode === "rotina" ? editContext.returnTo : null}
           mode="rotina"
           title="Frases da Rotina"
           description="As frases rápidas do dia a dia deste paciente. Ficam disponíveis mesmo sem internet e sem IA."
@@ -666,6 +704,8 @@ export default function AjustesPage() {
           spokenPlaceholder="Frase falada (ex.: Quero ajustar minha cadeira, por favor.)"
         />
         <ModeItemsEditor
+          focusItemId={editContext.mode === "emergencia" ? editContext.itemId : null}
+          returnTo={editContext.mode === "emergencia" ? editContext.returnTo : null}
           mode="emergencia"
           title="Ações de Emergência"
           description="Mensagens críticas deste paciente. O toque fala na hora — edite com cuidado. Itens padrão podem ser desativados, mas não excluídos."
@@ -673,6 +713,8 @@ export default function AjustesPage() {
           spokenPlaceholder="Frase falada (ex.: Preciso de ajuda com a aspiração agora.)"
         />
         <ModeItemsEditor
+          focusItemId={editContext.mode === "conversa" ? editContext.itemId : null}
+          returnTo={editContext.mode === "conversa" ? editContext.returnTo : null}
           mode="conversa"
           title="Expressões preferidas na Conversa"
           description="O jeito típico deste paciente dizer as coisas. A IA usa como referência de estilo e as expressões aparecem primeiro ao montar mensagens."
@@ -684,7 +726,7 @@ export default function AjustesPage() {
           <button
             type="button"
             onClick={() => void save()}
-            className="rounded-full bg-ink px-8 py-3.5 font-medium text-white shadow-[var(--shadow-soft)] hover:bg-black"
+            className="rounded-full bg-ink px-8 py-3.5 font-medium text-white shadow-soft hover:bg-black"
           >
             Salvar ajustes
           </button>
@@ -705,12 +747,18 @@ function ModeItemsEditor({
   description,
   labelPlaceholder,
   spokenPlaceholder,
+  focusItemId = null,
+  returnTo = null,
 }: {
   mode: HeloItemMode;
   title: string;
   description: string;
   labelPlaceholder: string;
   spokenPlaceholder: string;
+  /** Deep link de edição contextual: abre este item já em edição. */
+  focusItemId?: string | null;
+  /** Tela de origem do deep link — oferecida de volta depois de salvar. */
+  returnTo?: string | null;
 }) {
   const { patientId } = usePatient();
   const { items, reload, loading } = usePatientItems(mode);
@@ -721,6 +769,21 @@ function ModeItemsEditor({
   const [newSpoken, setNewSpoken] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Deep link: quando o item pedido chega na lista, abre a edição dele e
+  // rola a seção até aqui — uma única vez (o usuário segue livre depois).
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const focusApplied = useRef(false);
+  const [savedFromContext, setSavedFromContext] = useState(false);
+  useEffect(() => {
+    if (!focusItemId || focusApplied.current) return;
+    const item = items.find((i) => i.id === focusItemId);
+    if (!item) return;
+    focusApplied.current = true;
+    setEditing(item.id);
+    setEditLabel(item.label);
+    setEditSpoken(item.spokenText);
+    sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [focusItemId, items]);
 
   const api = useCallback(
     async (init: RequestInit): Promise<boolean> => {
@@ -780,8 +843,13 @@ function ModeItemsEditor({
         item: { label: editLabel, spokenText: editSpoken },
       }),
     });
-    if (ok) setEditing(null);
-  }, [api, editing, editLabel, editSpoken, patientId]);
+    if (ok) {
+      // Veio por edição contextual e salvou o item pedido: oferece o
+      // retorno claro à tela de origem (sem navegar sozinho).
+      if (returnTo && editing === focusItemId) setSavedFromContext(true);
+      setEditing(null);
+    }
+  }, [api, editing, editLabel, editSpoken, patientId, returnTo, focusItemId]);
 
   const toggle = useCallback(
     (item: ModeItem) =>
@@ -838,7 +906,7 @@ function ModeItemsEditor({
   }, [api, patientId, mode]);
 
   return (
-    <section className="rounded-3xl border border-line bg-card p-6">
+    <section ref={sectionRef} className="rounded-3xl border border-line bg-card p-6">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="font-semibold tracking-tight">{title}</h2>
@@ -857,6 +925,21 @@ function ModeItemsEditor({
       {notice && (
         <p role="alert" className="mt-3 rounded-2xl bg-talvez-soft px-4 py-2 text-sm text-talvez">
           {notice}
+        </p>
+      )}
+
+      {savedFromContext && returnTo && (
+        <p
+          role="status"
+          className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-sim-soft px-4 py-2.5 text-sm text-sim"
+        >
+          <span>✓ Alteração salva.</span>
+          <a
+            href={returnTo}
+            className="rounded-full border border-sim/40 bg-white px-4 py-1.5 font-medium text-sim hover:border-sim"
+          >
+            ← Voltar para onde eu estava
+          </a>
         </p>
       )}
 

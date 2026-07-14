@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/auth";
-import { logAudit } from "@/lib/access";
-import { listPatients, getPatientSettings } from "@/lib/store";
+import { logAudit, setUserPlatformVoice } from "@/lib/access";
+import { listPatients, getPatientSettings, setPatientSettings } from "@/lib/store";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import {
   addPlatformVoice,
@@ -172,17 +172,21 @@ export async function DELETE(request: Request) {
       { status: 400 }
     );
   }
-  // Remoção só quando segura: nenhuma preferência de usuário nem fala de
-  // paciente pode ficar apontando para uma voz inexistente.
+  // O Admin pode remover mesmo em uso: as preferências que apontavam para
+  // esta voz caem para a voz padrão da Helo. Nada pode ficar apontando para
+  // uma voz inexistente — por isso zeramos as referências ANTES de apagar.
+  //   - usuário: preferência de voz da plataforma volta ao padrão;
+  //   - paciente: a voz do catálogo escolhida para as falas é limpa; com a
+  //     fonte ainda "platform" mas sem id, a resolução usa a voz padrão.
   const usage = await getVoiceUsage(id, await listPatients(true));
-  if (usage.userIds.length > 0 || usage.patientIds.length > 0) {
-    return Response.json(
-      {
-        error: `voz em uso por ${usage.userIds.length} usuário(s) e ${usage.patientIds.length} paciente(s) — desative-a ou troque as preferências antes de remover`,
-      },
-      { status: 409 }
-    );
-  }
+  await Promise.all([
+    ...usage.userIds.map((uid) => setUserPlatformVoice(uid, null)),
+    ...usage.patientIds.map((pid) =>
+      setPatientSettings(pid, {
+        [PATIENT_SETTING_KEYS.patientVoicePlatformId]: "",
+      })
+    ),
+  ]);
   await removePlatformVoice(id);
   await logAudit({
     userId: auth.user.id,
@@ -190,7 +194,14 @@ export async function DELETE(request: Request) {
     action: "voice.catalog.remove",
     entityType: "platformVoice",
     entityId: id,
-    metadata: { displayName: voice.displayName },
+    metadata: {
+      displayName: voice.displayName,
+      reassignedUsers: String(usage.userIds.length),
+      reassignedPatients: String(usage.patientIds.length),
+    },
   });
-  return Response.json({ ok: true });
+  return Response.json({
+    ok: true,
+    reassigned: { users: usage.userIds.length, patients: usage.patientIds.length },
+  });
 }
