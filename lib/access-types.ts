@@ -151,6 +151,14 @@ export interface AppUser {
   canSelectPlatformVoice: boolean;
   /** Preferência do usuário: id de voz do CATÁLOGO (nunca voiceId técnico). */
   platformVoiceId: string | null;
+  /**
+   * Preferência VISUAL do usuário (tema de cores). Pertence ao usuário, nunca
+   * ao paciente — dois usuários no mesmo paciente mantêm temas próprios.
+   * null = ainda não escolheu (usa o padrão/armazenamento local).
+   */
+  themePreference: string | null;
+  /** Escala de fonte POR TEMA (temaId → 1..1.5). null = tudo no padrão. */
+  themeFontScales: Record<string, number> | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -178,6 +186,43 @@ export interface AuditEvent {
   entityId: string | null;
   ts: string;
   metadata: Record<string, string> | null;
+}
+
+// Temas visuais disponíveis (id canônico). Módulo neutro: validado no servidor
+// e consumido pelo cliente.
+export const THEME_IDS = [
+  "helo-original",
+  "alto-contraste",
+  "suave",
+  "quente",
+  "frio",
+  "escuro",
+] as const;
+
+export type ThemeId = (typeof THEME_IDS)[number];
+
+export function isThemeId(value: unknown): value is ThemeId {
+  return typeof value === "string" && (THEME_IDS as readonly string[]).includes(value);
+}
+
+// Escala de fonte POR TEMA (preferência do usuário): 1 = padrão, até 1.5.
+// Guardada como mapa temaId → escala; valores fora da faixa são descartados.
+export const FONT_SCALE_MIN = 1;
+export const FONT_SCALE_MAX = 1.5;
+
+/** Sanitiza um mapa temaId → escala vindo do cliente ou do armazenamento. */
+export function sanitizeFontScales(value: unknown): Record<string, number> | null {
+  if (typeof value !== "object" || value === null) return null;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (!isThemeId(k)) continue;
+    const n = typeof v === "number" ? v : NaN;
+    if (!Number.isFinite(n)) continue;
+    const clamped = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, n));
+    // Escala padrão (1) não precisa ser guardada.
+    if (clamped > FONT_SCALE_MIN) out[k] = Math.round(clamped * 100) / 100;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export function hasPermission(

@@ -12,7 +12,7 @@ import type {
 const input =
   "min-h-11 w-full rounded-2xl border border-line bg-card px-4 py-2.5 outline-none focus:border-ink-mute";
 const action =
-  "min-h-11 rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-40";
+  "min-h-11 rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40";
 const secondary =
   "min-h-11 rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40";
 
@@ -195,15 +195,15 @@ export function FeedbackConversation({
             const admin = message.senderRole === "admin";
             const system = message.senderRole === "system";
             return (
-              <li key={message.id} className={`rounded-2xl border p-4 ${admin ? "border-ink bg-ink text-white" : system ? "border-sim bg-sim-soft" : "border-line bg-card"}`}>
+              <li key={message.id} className={`rounded-2xl border p-4 ${admin ? "border-accent bg-accent text-on-accent" : system ? "border-sim bg-sim-soft" : "border-line bg-card"}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="font-semibold">{system ? "Sistema Helo" : admin ? "Admin Helo" : message.senderName}</span>
-                  <span className={admin ? "text-white/75" : "text-ink-mute"}>{displayDate(message.createdAt)}</span>
+                  <span className={admin ? "text-on-accent/75" : "text-ink-mute"}>{displayDate(message.createdAt)}</span>
                 </div>
                 {system ? (
                   <p className="mt-0.5 text-xs text-ink-mute">Atualização automática da conversa</p>
                 ) : (
-                  <p className={`mt-0.5 text-xs ${admin ? "text-white/75" : "text-ink-mute"}`}>
+                  <p className={`mt-0.5 text-xs ${admin ? "text-on-accent/75" : "text-ink-mute"}`}>
                     {admin ? "Resposta oficial" : (message.senderAppRole ? ROLE_LABELS[message.senderAppRole] : "Usuário")} · {message.visibility === "public" ? "Mensagem pública" : "Mensagem privada"}
                   </p>
                 )}

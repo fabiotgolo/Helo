@@ -187,7 +187,7 @@ export default function AtividadesPage() {
           <button
             type="button"
             onClick={() => setView({ kind: "lista" })}
-            className="rounded-full bg-ink px-8 py-3 font-medium text-white hover:bg-black"
+            className="rounded-full bg-accent px-8 py-3 font-medium text-on-accent hover:bg-accent-strong"
           >
             Voltar às atividades
           </button>
@@ -242,7 +242,7 @@ export default function AtividadesPage() {
           {caps?.create && (
             <Link
               href="/atividades/gerenciar"
-              className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+              className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
             >
               Criar sessão
             </Link>

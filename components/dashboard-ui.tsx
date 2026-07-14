@@ -7,12 +7,14 @@
 import { type Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 
-export const SERIES = "#7f78ce"; // série única — validada contra a superfície clara
+// Cores do gráfico via tokens de tema (var --color-*): acompanham o tema
+// escolhido (inclusive Escuro e Alto Contraste) sem hardcode por componente.
+export const SERIES = "var(--color-series)"; // série única — validada por tema
 
 const GESTURE_COLORS: Record<Gesture, string> = {
-  sim: "#2f9e6e",
-  talvez: "#b9822f",
-  nao: "#c25b4e",
+  sim: "var(--color-sim)",
+  talvez: "var(--color-talvez)",
+  nao: "var(--color-nao)",
 };
 
 export function fmtDia(iso: string): string {
@@ -38,7 +40,7 @@ export function Avatar({ name, size = "md" }: { name: string; size?: "md" | "lg"
   return (
     <span
       aria-hidden="true"
-      className={`flex shrink-0 items-center justify-center rounded-full bg-ink font-semibold text-white ${
+      className={`flex shrink-0 items-center justify-center rounded-full bg-accent font-semibold text-on-accent ${
         size === "lg" ? "h-14 w-14 text-xl" : "h-11 w-11 text-base"
       }`}
     >

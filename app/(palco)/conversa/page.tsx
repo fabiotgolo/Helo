@@ -687,7 +687,7 @@ export default function ConversaPage() {
                   setConfirm(null);
                   enterNode(START_NODE);
                 }}
-                className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+                className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
               >
                 Continuar a conversa
               </button>
@@ -739,7 +739,7 @@ export default function ConversaPage() {
           <button
             type="button"
             onClick={togglePause}
-            className="rounded-full bg-ink px-8 py-4 text-lg font-medium text-white hover:bg-black"
+            className="rounded-full bg-accent px-8 py-4 text-lg font-medium text-on-accent hover:bg-accent-strong"
           >
             ▶ Retomar conversa
           </button>
@@ -839,7 +839,7 @@ function Intro({
         type="button"
         onClick={onBegin}
         disabled={!ready || starting}
-        className="rounded-full bg-ink px-10 py-4 text-lg font-medium text-white transition-transform hover:scale-[1.02] hover:bg-black disabled:cursor-not-allowed disabled:opacity-40"
+        className="rounded-full bg-accent px-10 py-4 text-lg font-medium text-on-accent transition-transform hover:scale-[1.02] hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
       >
         {starting ? "Iniciando…" : "Começar"}
       </button>

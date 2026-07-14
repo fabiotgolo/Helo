@@ -320,7 +320,7 @@ export default function MensagemPage() {
             <button
               type="button"
               onClick={() => void begin()}
-              className="rounded-full bg-ink px-10 py-4 text-lg font-medium text-white hover:bg-black"
+              className="rounded-full bg-accent px-10 py-4 text-lg font-medium text-on-accent hover:bg-accent-strong"
             >
               Começar
             </button>
@@ -459,7 +459,7 @@ export default function MensagemPage() {
               <button
                 type="button"
                 onClick={() => void begin()}
-                className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+                className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
               >
                 Nova mensagem
               </button>

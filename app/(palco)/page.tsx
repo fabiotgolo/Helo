@@ -56,7 +56,7 @@ export default function Home() {
         <button
           type="button"
           onClick={() => advance(activeMode)}
-          className="rounded-full bg-ink px-8 py-3.5 font-medium text-white transition-transform hover:scale-[1.02] hover:bg-black"
+          className="rounded-full bg-accent px-8 py-3.5 font-medium text-on-accent transition-transform hover:scale-[1.02] hover:bg-accent-strong"
         >
           {activeMode === "conversar" ? "Iniciar conversa" : `Abrir ${info.title.toLowerCase()}`}
         </button>

@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { PatientProvider } from "@/lib/patient";
 import { HeloProvider } from "@/lib/helo-state";
+import { ThemeProvider, THEME_INIT_SCRIPT } from "@/lib/theme";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -28,11 +29,20 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR" className={`${inter.variable} h-full antialiased`}>
+    <html
+      lang="pt-BR"
+      className={`${inter.variable} h-full antialiased`}
+      suppressHydrationWarning
+    >
       <body className="min-h-full flex flex-col">
-        <PatientProvider>
-          <HeloProvider>{children}</HeloProvider>
-        </PatientProvider>
+        {/* Anti-flash: aplica o tema salvo antes da primeira pintura. Precisa
+            ser o primeiro nó do body e rodar de forma síncrona. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <ThemeProvider>
+          <PatientProvider>
+            <HeloProvider>{children}</HeloProvider>
+          </PatientProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

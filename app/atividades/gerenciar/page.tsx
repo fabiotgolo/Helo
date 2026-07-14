@@ -271,7 +271,7 @@ export default function GerenciarAtividadesPage() {
             <button
               type="button"
               onClick={() => void load()}
-              className="mt-3 rounded-full bg-ink px-6 py-2.5 font-medium text-white"
+              className="mt-3 rounded-full bg-accent px-6 py-2.5 font-medium text-on-accent"
             >
               Tentar de novo
             </button>
@@ -284,7 +284,7 @@ export default function GerenciarAtividadesPage() {
               <button
                 type="button"
                 onClick={() => setDraft(draftFrom(null))}
-                className="w-fit rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+                className="w-fit rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
               >
                 + Nova atividade
               </button>
@@ -533,7 +533,7 @@ function TemplateEditor({
                 title={ACTIVITY_CATEGORY_HINTS[c]}
                 className={`rounded-full border px-4 py-2 text-sm font-medium ${
                   draft.category === c
-                    ? "border-ink bg-ink text-white"
+                    ? "border-accent bg-accent text-on-accent"
                     : "border-line bg-card hover:border-ink-mute"
                 }`}
               >
@@ -574,7 +574,7 @@ function TemplateEditor({
           type="button"
           onClick={onSave}
           disabled={saving || !draft.title.trim()}
-          className="rounded-full bg-ink px-8 py-3 font-medium text-white hover:bg-black disabled:opacity-50"
+          className="rounded-full bg-accent px-8 py-3 font-medium text-on-accent hover:bg-accent-strong disabled:opacity-50"
         >
           {saving ? "Salvando…" : draft.id ? "Salvar alterações" : "Criar atividade"}
         </button>
@@ -647,7 +647,7 @@ function ItemEditor({
     <div
       ref={rootRef}
       className={`flex flex-col gap-4 rounded-3xl border bg-card p-5 sm:p-6 ${
-        focused ? "border-ink ring-2 ring-ink/15" : "border-line"
+        focused ? "border-accent ring-2 ring-ink/15" : "border-line"
       }`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">

@@ -16,7 +16,7 @@ import type {
   ProfessionalType,
   UserRole,
 } from "@/lib/access-types";
-import { PERMISSIONS } from "@/lib/access-types";
+import { PERMISSIONS, sanitizeFontScales } from "@/lib/access-types";
 
 const col = {
   users: () => firestore.collection("users"),
@@ -55,6 +55,8 @@ function toUser(id: string, v: FirebaseFirestore.DocumentData): AppUser {
     status: v.status === "inactive" ? "inactive" : "active",
     canSelectPlatformVoice: v.canSelectPlatformVoice === true,
     platformVoiceId: v.platformVoiceId ? String(v.platformVoiceId) : null,
+    themePreference: v.themePreference ? String(v.themePreference) : null,
+    themeFontScales: sanitizeFontScales(v.themeFontScales),
     createdAt: String(v.createdAt ?? ""),
     updatedAt: String(v.updatedAt ?? ""),
   };
@@ -166,6 +168,25 @@ export async function setUserPlatformVoice(
     { platformVoiceId, updatedAt: new Date().toISOString() },
     { merge: true }
   );
+}
+
+/**
+ * Preferências VISUAIS do usuário (tema de cores e escala de fonte por tema).
+ * Escopo estritamente pessoal: nunca toca no paciente nem na experiência de
+ * outros usuários. Campos omitidos ficam como estão; null limpa (volta ao
+ * padrão/armazenamento local).
+ */
+export async function setUserTheme(
+  userId: string,
+  prefs: {
+    themePreference?: string | null;
+    themeFontScales?: Record<string, number> | null;
+  }
+): Promise<void> {
+  const data: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if (prefs.themePreference !== undefined) data.themePreference = prefs.themePreference;
+  if (prefs.themeFontScales !== undefined) data.themeFontScales = prefs.themeFontScales;
+  await col.users().doc(userId).set(data, { merge: true });
 }
 
 // ---------- Sessões de autenticação ----------

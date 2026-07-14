@@ -226,7 +226,7 @@ export default function DashboardIndividualPage() {
           </p>
           <Link
             href="/dashboard"
-            className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+            className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
           >
             Voltar aos meus pacientes
           </Link>
@@ -250,7 +250,7 @@ export default function DashboardIndividualPage() {
           </p>
           <Link
             href="/dashboard"
-            className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+            className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
           >
             Voltar aos pacientes
           </Link>
@@ -268,7 +268,7 @@ export default function DashboardIndividualPage() {
             <button
               type="button"
               onClick={() => window.print()}
-              className="rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-white hover:bg-black"
+              className="rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-strong"
             >
               Gerar PDF
             </button>
@@ -333,7 +333,7 @@ export default function DashboardIndividualPage() {
               type="button"
               onClick={() => setPeriod(p.id)}
               className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-                period === p.id ? "bg-ink text-white" : "text-ink-soft hover:text-ink"
+                period === p.id ? "bg-accent text-on-accent" : "text-ink-soft hover:text-ink"
               }`}
             >
               {p.label}
@@ -350,7 +350,7 @@ export default function DashboardIndividualPage() {
                 let stale = false;
                 void load(() => stale);
               }}
-              className="mt-4 rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+              className="mt-4 rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
             >
               Tentar de novo
             </button>

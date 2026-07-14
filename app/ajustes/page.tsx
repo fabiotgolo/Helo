@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
+import { AppearanceSettings } from "@/components/appearance-settings";
 import { GESTURES, type Gesture, type HeloItemMode, type ModeItem } from "@/lib/types";
 import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
@@ -322,6 +323,9 @@ export default function AjustesPage() {
           </p>
         </div>
 
+        {/* ——— Aparência (preferência do USUÁRIO, não do paciente) ——— */}
+        <AppearanceSettings />
+
         {/* ——— Paciente ativo ——— */}
         <section className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Paciente</h2>
@@ -342,7 +346,7 @@ export default function AjustesPage() {
                 aria-pressed={p.id === patientId}
                 className={`rounded-full border px-5 py-2.5 text-sm font-medium transition-colors ${
                   p.id === patientId
-                    ? "border-ink bg-ink text-white"
+                    ? "border-accent bg-accent text-on-accent"
                     : "border-line bg-cream hover:border-ink-mute"
                 }`}
               >
@@ -452,7 +456,7 @@ export default function AjustesPage() {
                         aria-label={`Usar ${e} para ${GESTURES[g].label}`}
                         className={`flex h-10 w-10 items-center justify-center rounded-xl border text-xl transition-colors ${
                           selected === e
-                            ? "border-ink bg-cream"
+                            ? "border-accent bg-cream"
                             : "border-line hover:border-ink-mute"
                         }`}
                       >
@@ -686,7 +690,7 @@ export default function AjustesPage() {
             <button
               type="button"
               onClick={() => void addPerson()}
-              className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+              className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
             >
               Adicionar
             </button>
@@ -726,7 +730,7 @@ export default function AjustesPage() {
           <button
             type="button"
             onClick={() => void save()}
-            className="rounded-full bg-ink px-8 py-3.5 font-medium text-white shadow-soft hover:bg-black"
+            className="rounded-full bg-accent px-8 py-3.5 font-medium text-on-accent shadow-soft hover:bg-accent-strong"
           >
             Salvar ajustes
           </button>
@@ -975,7 +979,7 @@ function ModeItemsEditor({
                   type="button"
                   onClick={() => void saveEdit()}
                   disabled={busy || !editLabel.trim() || !editSpoken.trim()}
-                  className="rounded-full bg-ink px-5 py-2 text-sm font-medium text-white hover:bg-black disabled:opacity-40"
+                  className="rounded-full bg-accent px-5 py-2 text-sm font-medium text-on-accent hover:bg-accent-strong disabled:opacity-40"
                 >
                   Salvar
                 </button>
@@ -1083,7 +1087,7 @@ function ModeItemsEditor({
             type="button"
             onClick={() => void add()}
             disabled={busy || !newLabel.trim() || !newSpoken.trim()}
-            className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black disabled:opacity-40"
+            className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong disabled:opacity-40"
           >
             Adicionar
           </button>

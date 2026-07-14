@@ -187,7 +187,7 @@ export default function DashboardGeralPage() {
           <button
             type="submit"
             disabled={creating || !newName.trim()}
-            className="min-h-12 rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black disabled:opacity-40"
+            className="min-h-12 rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong disabled:opacity-40"
           >
             {creating ? "Criando…" : "+ Novo paciente"}
           </button>
@@ -219,7 +219,7 @@ export default function DashboardGeralPage() {
                   aria-pressed={filter === f.id}
                   className={`min-h-10 rounded-full px-4 py-2 text-sm font-medium transition-colors ${
                     filter === f.id
-                      ? "bg-ink text-white"
+                      ? "bg-accent text-on-accent"
                       : "border border-line bg-card text-ink-soft hover:border-ink-mute"
                   }`}
                 >
@@ -249,7 +249,7 @@ export default function DashboardGeralPage() {
             <button
               type="button"
               onClick={() => void load()}
-              className="mt-4 rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+              className="mt-4 rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
             >
               Tentar de novo
             </button>
@@ -289,7 +289,7 @@ export default function DashboardGeralPage() {
               <li key={s.patientId}>
                 <Link
                   href={`/dashboard/${s.patientId}`}
-                  className="flex h-full flex-col gap-4 rounded-3xl border border-line bg-card p-5 transition-transform hover:scale-[1.01] hover:border-ink-mute focus-visible:border-ink"
+                  className="flex h-full flex-col gap-4 rounded-3xl border border-line bg-card p-5 transition-transform hover:scale-[1.01] hover:border-ink-mute focus-visible:border-accent"
                 >
                   <div className="flex items-center gap-3">
                     <Avatar name={s.name} />

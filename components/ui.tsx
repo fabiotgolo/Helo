@@ -50,11 +50,14 @@ export function Orb({
   palette,
   className = "",
   breathe = false,
+  getAmplitude,
   children,
 }: {
   palette: OrbPalette;
   className?: string;
   breathe?: boolean;
+  /** Fonte de amplitude 0–1 para o orbe reagir à voz em curso (só com breathe). */
+  getAmplitude?: () => number;
   children?: React.ReactNode;
 }) {
   return (
@@ -64,7 +67,7 @@ export function Orb({
       style={{ background: PALETTES[palette] }}
     >
       {/* Orbes "vivos" ganham a versão 3D; o gradiente CSS fica por baixo como fallback */}
-      {breathe && <Orb3D palette={palette} />}
+      {breathe && <Orb3D palette={palette} getAmplitude={getAmplitude} />}
       {children && <span className="relative z-[1]">{children}</span>}
     </div>
   );
@@ -248,7 +251,7 @@ export function PillLink({
       href={href}
       className={`rounded-full px-5 py-2.5 text-sm font-medium transition-colors ${
         dark
-          ? "bg-ink text-white hover:bg-black"
+          ? "bg-accent text-on-accent hover:bg-accent-strong"
           : "bg-card text-ink border border-line hover:border-ink-mute"
       }`}
     >

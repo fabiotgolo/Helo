@@ -19,7 +19,7 @@ type Sort = "recent" | "votes";
 const input =
   "min-h-11 w-full rounded-2xl border border-line bg-card px-4 py-2.5 outline-none focus:border-ink-mute";
 const action =
-  "min-h-11 rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-40";
+  "min-h-11 rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40";
 const secondary =
   "min-h-11 rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40";
 
@@ -236,7 +236,7 @@ export default function FeedbackPage() {
             type="button"
             role="tab"
             aria-selected={tab === "closed"}
-            className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "closed" ? "bg-ink text-white" : "text-ink-soft hover:text-ink"}`}
+            className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "closed" ? "bg-accent text-on-accent" : "text-ink-soft hover:text-ink"}`}
             onClick={() => setTab("closed")}
           >
             Solicitações encerradas
@@ -245,7 +245,7 @@ export default function FeedbackPage() {
             type="button"
             role="tab"
             aria-selected={tab === "requests"}
-            className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "requests" ? "bg-ink text-white" : "text-ink-soft hover:text-ink"}`}
+            className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "requests" ? "bg-accent text-on-accent" : "text-ink-soft hover:text-ink"}`}
             onClick={() => setTab("requests")}
           >
             Solicitações
@@ -254,7 +254,7 @@ export default function FeedbackPage() {
             type="button"
             role="tab"
             aria-selected={tab === "new"}
-            className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "new" ? "bg-ink text-white" : "text-ink-soft hover:text-ink"}`}
+            className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "new" ? "bg-accent text-on-accent" : "text-ink-soft hover:text-ink"}`}
             onClick={startNew}
           >
             Nova solicitação
@@ -282,7 +282,7 @@ export default function FeedbackPage() {
                     role="radio"
                     aria-checked={type === item}
                     onClick={() => setType(item)}
-                    className={`min-h-11 rounded-full border px-4 py-2 text-sm font-medium ${type === item ? "border-ink bg-ink text-white" : "border-line text-ink hover:border-ink-mute"}`}
+                    className={`min-h-11 rounded-full border px-4 py-2 text-sm font-medium ${type === item ? "border-accent bg-accent text-on-accent" : "border-line text-ink hover:border-ink-mute"}`}
                   >
                     {item === "feature" ? "Solicitar recurso" : "Reportar bug"}
                   </button>
@@ -396,7 +396,7 @@ export default function FeedbackPage() {
                           aria-label={request.hasVoted ? `Remover voto de ${request.title}` : `Votar em ${request.title}`}
                           onClick={() => void vote(request.id)}
                           disabled={votingId === request.id}
-                          className={`min-h-11 shrink-0 rounded-full border px-3 py-2 text-sm font-semibold disabled:opacity-40 ${request.hasVoted ? "border-ink bg-ink text-white" : "border-line hover:border-ink-mute"}`}
+                          className={`min-h-11 shrink-0 rounded-full border px-3 py-2 text-sm font-semibold disabled:opacity-40 ${request.hasVoted ? "border-accent bg-accent text-on-accent" : "border-line hover:border-ink-mute"}`}
                         >
                           ▲ {request.votesCount}
                         </button>

@@ -538,7 +538,7 @@ export function SessionPlayer({
           <button
             type="button"
             onClick={finish}
-            className="min-h-12 rounded-full bg-ink px-8 py-2.5 font-medium text-white hover:bg-black"
+            className="min-h-12 rounded-full bg-accent px-8 py-2.5 font-medium text-on-accent hover:bg-accent-strong"
           >
             Concluir sessão
           </button>
@@ -546,7 +546,7 @@ export function SessionPlayer({
           <button
             type="button"
             onClick={() => setIdx((i) => Math.min(items.length - 1, i + 1))}
-            className="min-h-12 rounded-full bg-ink px-8 py-2.5 font-medium text-white hover:bg-black"
+            className="min-h-12 rounded-full bg-accent px-8 py-2.5 font-medium text-on-accent hover:bg-accent-strong"
           >
             Próximo →
           </button>
