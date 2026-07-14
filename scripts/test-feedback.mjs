@@ -150,6 +150,51 @@ async function main() {
   check("Admin vê feature e bug", adminList.status === 200 && adminList.json?.requests?.length === 2, JSON.stringify(adminList.json));
   const adminBug = adminList.json?.requests?.find((item) => item.id === bugId);
   check("Admin recebe contexto técnico mínimo do bug", Boolean(adminBug?.metadata?.browser) && adminBug?.route === "/ajustes");
+  const adminFeedbackList = await admin.get("/api/feedback");
+  check("Admin vê o bug privado também no Feedback", adminFeedbackList.status === 200 && adminFeedbackList.json?.requests?.some((item) => item.id === bugId), JSON.stringify(adminFeedbackList.json));
+
+  console.log("\nConversas vinculadas e privacidade:");
+  check("anônimo não lê mensagens", (await anon.get(`/api/feedback/${featureId}/messages`)).status === 401);
+  const publicReply = await admin.post(`/api/feedback/${featureId}/messages`, {
+    message: "Este recurso está em análise.", visibility: "public",
+  });
+  check("Admin responde publicamente à feature", publicReply.status === 201 && publicReply.json?.message?.visibility === "public", JSON.stringify(publicReply.json));
+  const privateReply = await admin.post(`/api/feedback/${featureId}/messages`, {
+    message: "Precisamos confirmar detalhes da sua conta.", visibility: "private",
+  });
+  check("Admin envia complemento privado à feature", privateReply.status === 201 && privateReply.json?.message?.visibility === "private", JSON.stringify(privateReply.json));
+  const brunoFeatureMessages = await bruno.get(`/api/feedback/${featureId}/messages`);
+  check("outro usuário vê somente resposta pública", brunoFeatureMessages.status === 200 && brunoFeatureMessages.json?.messages?.length === 1 && brunoFeatureMessages.json?.messages?.[0]?.visibility === "public", JSON.stringify(brunoFeatureMessages.json));
+  const anaWithUnread = await ana.get("/api/feedback");
+  check("autora recebe contador de duas novas respostas", anaWithUnread.json?.requests?.find((item) => item.id === featureId)?.unreadMessagesCount === 2, JSON.stringify(anaWithUnread.json));
+  const anaFeatureMessages = await ana.get(`/api/feedback/${featureId}/messages`);
+  check("autora vê mensagens pública e privada", anaFeatureMessages.status === 200 && anaFeatureMessages.json?.messages?.length === 2, JSON.stringify(anaFeatureMessages.json));
+  const anaAfterReading = await ana.get("/api/feedback");
+  check("leitura da thread zera o contador da autora", anaAfterReading.json?.requests?.find((item) => item.id === featureId)?.unreadMessagesCount === 0, JSON.stringify(anaAfterReading.json));
+  check("outro usuário não responde feature alheia", (await bruno.post(`/api/feedback/${featureId}/messages`, { message: "Tentativa" })).status === 403);
+
+  const adminBugReply = await admin.post(`/api/feedback/${bugId}/messages`, {
+    message: "Em qual navegador isso está acontecendo?", visibility: "public",
+  });
+  check("resposta de bug é sempre privada", adminBugReply.status === 201 && adminBugReply.json?.message?.visibility === "private", JSON.stringify(adminBugReply.json));
+  const anaBugMessages = await ana.get(`/api/feedback/${bugId}/messages`);
+  check("autora vê resposta privada do bug", anaBugMessages.status === 200 && anaBugMessages.json?.messages?.length === 1, JSON.stringify(anaBugMessages.json));
+  const anaReply = await ana.post(`/api/feedback/${bugId}/messages`, {
+    message: "iPhone 15 usando Safari.", senderUserId: "forjado", senderRole: "admin",
+  });
+  check("autor responde no mesmo bug sem forjar remetente", anaReply.status === 201 && anaReply.json?.message?.senderUserId !== "forjado" && anaReply.json?.message?.senderRole === "user", JSON.stringify(anaReply.json));
+  const anaSecondReply = await ana.post(`/api/feedback/${bugId}/messages`, {
+    message: "Também testei em outra rede e o erro permanece.",
+  });
+  check("autor adiciona uma segunda mensagem ao bug", anaSecondReply.status === 201, JSON.stringify(anaSecondReply.json));
+  check("outro usuário recebe acesso negado ao bug", (await bruno.get(`/api/feedback/${bugId}/messages`)).status === 403);
+  const adminAfterReply = await admin.get("/api/admin/feedback");
+  check("Admin recebe contador de duas novas mensagens", adminAfterReply.json?.requests?.find((item) => item.id === bugId)?.unreadMessagesCount === 2, JSON.stringify(adminAfterReply.json));
+  const adminBugMessages = await admin.get(`/api/feedback/${bugId}/messages`);
+  check("Admin vê thread completa e marca como lida", adminBugMessages.status === 200 && adminBugMessages.json?.messages?.length === 3, JSON.stringify(adminBugMessages.json));
+  const adminAfterReading = await admin.get("/api/admin/feedback");
+  check("leitura da thread zera o contador do Admin", adminAfterReading.json?.requests?.find((item) => item.id === bugId)?.unreadMessagesCount === 0, JSON.stringify(adminAfterReading.json));
+
   check("Admin atualiza status", (await admin.patch("/api/admin/feedback", {
     id: featureId, status: "planned",
   })).status === 200);

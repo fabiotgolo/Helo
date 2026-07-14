@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
+import { useEffect, useState } from "react";
 import type { Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { useAuthUser } from "@/lib/use-auth";
@@ -159,8 +160,44 @@ export function LogoutButton() {
 /** Acesso global ao suporte, sem interferir nos fluxos do paciente. */
 export function FeedbackLink() {
   const { user, loading } = useAuthUser();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (!user) {
+      setUnreadCount(0);
+      return;
+    }
+    const controller = new AbortController();
+    const endpoint = user.role === "admin" ? "/api/admin/feedback" : "/api/feedback";
+    void fetch(endpoint, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("não foi possível carregar o feedback");
+        const data = (await response.json()) as { requests?: Array<{ unreadMessagesCount?: number }> };
+        setUnreadCount(data.requests?.reduce((total, request) => total + (request.unreadMessagesCount ?? 0), 0) ?? 0);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setUnreadCount(0);
+      });
+    return () => controller.abort();
+  }, [user?.id, user?.role]);
+
   if (loading || !user) return null;
-  return <PillLink href="/feedback">Feedback e suporte</PillLink>;
+  const unreadLabel = unreadCount === 1 ? "1 mensagem não lida" : `${unreadCount} mensagens não lidas`;
+  return (
+    <Link
+      href="/feedback"
+      aria-label={unreadCount ? `Feedback e suporte — ${unreadLabel}` : "Feedback e suporte"}
+      className="relative rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium text-ink transition-colors hover:border-ink-mute"
+    >
+      Feedback e suporte
+      {unreadCount > 0 && (
+        <span aria-hidden="true" className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm">
+          {unreadCount > 99 ? "99+" : unreadCount}
+        </span>
+      )}
+    </Link>
+  );
 }
 
 export function TopBar({

@@ -10,6 +10,7 @@ import {
   type FeedbackType,
 } from "@/lib/feedback-types";
 import { ROLE_LABELS } from "@/lib/access-types";
+import { FeedbackConversation } from "@/components/feedback-conversation";
 
 const input =
   "min-h-10 rounded-2xl border border-line bg-card px-3 py-2 text-sm outline-none focus:border-ink-mute";
@@ -43,6 +44,7 @@ export default function AdminFeedbackTab() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -60,6 +62,14 @@ export default function AdminFeedbackTab() {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  const markConversationRead = useCallback((id: string) => {
+    setRequests((current) =>
+      current?.map((request) =>
+        request.id === id ? { ...request, hasUnreadMessages: false, unreadMessagesCount: 0 } : request
+      ) ?? null
+    );
+  }, []);
 
   const update = async (id: string, body: Record<string, unknown>, success: string) => {
     setBusyId(id);
@@ -105,6 +115,11 @@ export default function AdminFeedbackTab() {
       <div>
         <h2 className="text-xl font-semibold">Feedback e suporte</h2>
         <p className="mt-1 text-sm text-ink-soft">Solicitações públicas, bugs privados e sua moderação.</p>
+        {!!requests?.filter((request) => request.hasUnreadMessages).length && (
+          <p className="mt-2 text-sm font-medium text-sim">
+            {requests.filter((request) => request.hasUnreadMessages).length} solicitação(ões) com nova mensagem.
+          </p>
+        )}
       </div>
 
       {notice && <p role="status" className="rounded-2xl bg-sim-soft px-4 py-3 text-sm text-sim">{notice}</p>}
@@ -137,6 +152,7 @@ export default function AdminFeedbackTab() {
                     <span className="rounded-full border border-line px-2.5 py-1">{FEEDBACK_TYPE_LABELS[request.type]}</span>
                     <span className="rounded-full bg-ink-soft/10 px-2.5 py-1 text-ink-soft">{request.visibility === "public" ? "Público" : "Privado"}</span>
                     {request.archived && <span className="rounded-full bg-nao-soft px-2.5 py-1 text-nao">Arquivada</span>}
+                    {request.hasUnreadMessages && <span className="rounded-full bg-sim-soft px-2.5 py-1 text-sim">Nova mensagem</span>}
                   </div>
                   <h3 className="mt-3 text-lg font-semibold">{request.title}</h3>
                   <p className="mt-1 whitespace-pre-wrap text-sm text-ink-soft">{request.description}</p>
@@ -154,7 +170,7 @@ export default function AdminFeedbackTab() {
                   >
                     {FEEDBACK_STATUSES.map((item) => <option key={item} value={item}>{FEEDBACK_STATUS_LABELS[item]}</option>)}
                   </select>
-                  <select
+                  {request.type === "feature" && <select
                     className={input}
                     value={request.visibility}
                     disabled={busyId === request.id}
@@ -163,7 +179,7 @@ export default function AdminFeedbackTab() {
                   >
                     <option value="public">Público</option>
                     <option value="private">Privado</option>
-                  </select>
+                  </select>}
                 </div>
               </div>
 
@@ -186,9 +202,23 @@ export default function AdminFeedbackTab() {
                 </div>
               ) : (
                 <div className="mt-4 flex flex-wrap gap-2">
+                  <div className="relative inline-flex">
+                    <button type="button" className={secondary} disabled={busyId === request.id} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Fechar conversa" : "Abrir conversa"}</button>
+                    {request.hasUnreadMessages && <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm" aria-label={`${request.unreadMessagesCount} mensagens não lidas`}>{request.unreadMessagesCount > 99 ? "99+" : request.unreadMessagesCount}</span>}
+                  </div>
                   <button type="button" className={secondary} disabled={busyId === request.id} onClick={() => void update(request.id, { archived: !request.archived }, request.archived ? "Solicitação desarquivada." : "Solicitação arquivada.")}>{request.archived ? "Desarquivar" : "Arquivar"}</button>
                   <button type="button" className="min-h-10 rounded-full px-4 py-2 text-sm font-medium text-nao hover:bg-nao-soft" disabled={busyId === request.id} onClick={() => setConfirmDelete(request.id)}>Excluir</button>
                 </div>
+              )}
+              {conversationId === request.id && (
+                <FeedbackConversation
+                  requestId={request.id}
+                  type={request.type}
+                  canReply
+                  isAdmin
+                  onRead={() => markConversationRead(request.id)}
+                  onMessageSent={load}
+                />
               )}
             </article>
           ))}

@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PillLink, TopBar } from "@/components/ui";
+import { FeedbackConversation } from "@/components/feedback-conversation";
 import { usePatient } from "@/lib/patient";
-import { redirectToLogin } from "@/lib/use-auth";
+import { redirectToLogin, useAuthUser } from "@/lib/use-auth";
 import {
   FEEDBACK_STATUS_LABELS,
   FEEDBACK_TYPE_LABELS,
@@ -36,6 +37,8 @@ async function responseError(response: Response): Promise<string> {
 
 export default function FeedbackPage() {
   const { patient, patientId } = usePatient();
+  const { user } = useAuthUser();
+  const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState<Tab>("requests");
   const [requests, setRequests] = useState<FeedbackRequest[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,6 +55,7 @@ export default function FeedbackPage() {
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [votingId, setVotingId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,6 +80,14 @@ export default function FeedbackPage() {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  const markConversationRead = useCallback((id: string) => {
+    setRequests((current) =>
+      current?.map((request) =>
+        request.id === id ? { ...request, hasUnreadMessages: false, unreadMessagesCount: 0 } : request
+      ) ?? null
+    );
+  }, []);
 
   const shown = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("pt-BR");
@@ -352,7 +364,8 @@ export default function FeedbackPage() {
                         <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
                           <span className="rounded-full border border-line px-2.5 py-1">{FEEDBACK_TYPE_LABELS[request.type]}</span>
                           <span className="rounded-full bg-ink-soft/10 px-2.5 py-1 text-ink-soft">{FEEDBACK_STATUS_LABELS[request.status]}</span>
-                          {request.isOwner && request.type === "bug" && <span className="rounded-full bg-talvez-soft px-2.5 py-1 text-talvez">Privado</span>}
+                          {request.type === "bug" && <span className="rounded-full bg-talvez-soft px-2.5 py-1 text-talvez">Privado</span>}
+                          {request.hasUnreadMessages && <span className="rounded-full bg-sim-soft px-2.5 py-1 text-sim">Nova resposta</span>}
                           {request.archived && <span className="rounded-full bg-nao-soft px-2.5 py-1 text-nao">Arquivada</span>}
                         </div>
                         <h2 className="mt-3 text-lg font-semibold">{request.title}</h2>
@@ -372,8 +385,8 @@ export default function FeedbackPage() {
                         </button>
                       )}
                     </div>
-                    {request.isOwner && (
-                      confirmingDeleteId === request.id ? (
+                    {(request.isOwner || isAdmin) && (
+                      request.isOwner && confirmingDeleteId === request.id ? (
                         <div role="alertdialog" aria-label={`Excluir ${request.title}`} className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-nao-soft p-4 text-sm">
                           <span className="mr-auto">Excluir esta solicitação? Esta ação não pode ser desfeita.</span>
                           <button type="button" className="min-h-10 rounded-full bg-nao px-4 py-2 font-medium text-white disabled:opacity-40" disabled={sending} onClick={() => void remove(request.id)}>Excluir</button>
@@ -381,10 +394,34 @@ export default function FeedbackPage() {
                         </div>
                       ) : (
                         <div className="mt-4 flex flex-wrap gap-2">
-                          <button type="button" className={secondary} onClick={() => startEdit(request)}>Editar</button>
-                          <button type="button" className="min-h-10 rounded-full px-4 py-2 text-sm font-medium text-nao hover:bg-nao-soft" onClick={() => setConfirmingDeleteId(request.id)}>Excluir</button>
+                          <div className="relative inline-flex">
+                            <button type="button" className={secondary} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Fechar conversa" : "Abrir conversa"}</button>
+                            {request.hasUnreadMessages && <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm" aria-label={`${request.unreadMessagesCount} mensagens não lidas`}>{request.unreadMessagesCount > 99 ? "99+" : request.unreadMessagesCount}</span>}
+                          </div>
+                          {request.isOwner && <>
+                            <button type="button" className={secondary} onClick={() => startEdit(request)}>Editar</button>
+                            <button type="button" className="min-h-10 rounded-full px-4 py-2 text-sm font-medium text-nao hover:bg-nao-soft" onClick={() => setConfirmingDeleteId(request.id)}>Excluir</button>
+                          </>}
                         </div>
                       )
+                    )}
+                    {!request.isOwner && !isAdmin && request.type === "feature" && request.visibility === "public" && (
+                      <div className="mt-4">
+                        <div className="relative inline-flex">
+                          <button type="button" className={secondary} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Fechar conversa" : "Ver respostas"}</button>
+                          {request.hasUnreadMessages && <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm" aria-label={`${request.unreadMessagesCount} mensagens não lidas`}>{request.unreadMessagesCount > 99 ? "99+" : request.unreadMessagesCount}</span>}
+                        </div>
+                      </div>
+                    )}
+                    {conversationId === request.id && (
+                      <FeedbackConversation
+                        requestId={request.id}
+                        type={request.type}
+                        canReply={request.isOwner || isAdmin}
+                        isAdmin={isAdmin}
+                        onRead={() => markConversationRead(request.id)}
+                        onMessageSent={load}
+                      />
                     )}
                   </article>
                 ))}
