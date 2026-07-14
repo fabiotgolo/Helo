@@ -55,3 +55,6 @@ next-env.d.ts
 
 # dados do paciente — nunca versionar
 /data
+
+# arquivos temporários/locais fora de versionamento
+/private
