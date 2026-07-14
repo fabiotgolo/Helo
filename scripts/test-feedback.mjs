@@ -173,6 +173,23 @@ async function main() {
   check("leitura da thread zera o contador da autora", anaAfterReading.json?.requests?.find((item) => item.id === featureId)?.unreadMessagesCount === 0, JSON.stringify(anaAfterReading.json));
   check("outro usuário não responde feature alheia", (await bruno.post(`/api/feedback/${featureId}/messages`, { message: "Tentativa" })).status === 403);
 
+  console.log("\nEncerramento pelo autor:");
+  const resolveFeature = await ana.post(`/api/feedback/${featureId}/resolve`);
+  check("Ana encerra a própria feature", resolveFeature.status === 200 && resolveFeature.json?.systemMessage?.senderRole === "system", JSON.stringify(resolveFeature.json));
+  const anaFeatureAfterResolution = await ana.get("/api/feedback");
+  const resolvedFeature = anaFeatureAfterResolution.json?.requests?.find((item) => item.id === featureId);
+  check("encerramento não muda status de desenvolvimento", resolvedFeature?.status === "new" && resolvedFeature?.conversationStatus === "resolved", JSON.stringify(resolvedFeature));
+  check("feature resolvida continua pública", (await bruno.get("/api/feedback")).json?.requests?.some((item) => item.id === featureId));
+  const voteAfterResolution = await bruno.post(`/api/feedback/${featureId}/vote`);
+  check("feature resolvida continua recebendo votos", voteAfterResolution.status === 200 && voteAfterResolution.json?.hasVoted, JSON.stringify(voteAfterResolution.json));
+  check("autor não envia mensagem após encerrar feature", (await ana.post(`/api/feedback/${featureId}/messages`, { message: "Não deveria enviar" })).status === 400);
+  check("outro usuário não encerra feature de Ana", (await bruno.post(`/api/feedback/${featureId}/resolve`)).status === 403);
+  const closedDraft = await ana.post("/api/feedback", {
+    title: "Rascunho encerrado", description: "Teste de exclusão após encerrar.", type: "feature", route: "/feedback",
+  });
+  const closedDraftId = closedDraft.json?.feedback?.id;
+  check("autor exclui a própria solicitação encerrada", (await ana.post(`/api/feedback/${closedDraftId}/resolve`)).status === 200 && (await ana.del(`/api/feedback/${closedDraftId}`)).status === 200);
+
   const adminBugReply = await admin.post(`/api/feedback/${bugId}/messages`, {
     message: "Em qual navegador isso está acontecendo?", visibility: "public",
   });
@@ -194,6 +211,27 @@ async function main() {
   check("Admin vê thread completa e marca como lida", adminBugMessages.status === 200 && adminBugMessages.json?.messages?.length === 3, JSON.stringify(adminBugMessages.json));
   const adminAfterReading = await admin.get("/api/admin/feedback");
   check("leitura da thread zera o contador do Admin", adminAfterReading.json?.requests?.find((item) => item.id === bugId)?.unreadMessagesCount === 0, JSON.stringify(adminAfterReading.json));
+
+  const [resolveBugA, resolveBugB] = await Promise.all([
+    admin.post(`/api/feedback/${bugId}/resolve`),
+    admin.post(`/api/feedback/${bugId}/resolve`),
+  ]);
+  const resolvedBug = [resolveBugA, resolveBugB].find((result) => result.status === 200);
+  check(
+    "Admin encerra bug de outro usuário somente uma vez",
+    resolvedBug?.json?.systemMessage?.message?.includes("administrador") && [resolveBugA.status, resolveBugB.status].sort().join(",") === "200,409",
+    JSON.stringify({ resolveBugA, resolveBugB })
+  );
+  const anaResolvedBugMessages = await ana.get(`/api/feedback/${bugId}/messages`);
+  check("thread preserva mensagem de sistema de encerramento", anaResolvedBugMessages.status === 200 && anaResolvedBugMessages.json?.messages?.length === 4 && anaResolvedBugMessages.json?.messages?.at(-1)?.senderRole === "system", JSON.stringify(anaResolvedBugMessages.json));
+  check("autor não envia mensagem após encerrar bug", (await ana.post(`/api/feedback/${bugId}/messages`, { message: "Não deveria enviar" })).status === 400);
+  const adminWithResolvedBug = await admin.get("/api/admin/feedback");
+  const resolvedBugForAdmin = adminWithResolvedBug.json?.requests?.find((item) => item.id === bugId);
+  check("Admin vê resolução administrativa sem criar alerta próprio", resolvedBugForAdmin?.conversationStatus === "resolved" && resolvedBugForAdmin?.resolutionSource === "admin" && resolvedBugForAdmin?.unreadMessagesCount === 0, JSON.stringify(resolvedBugForAdmin));
+  const adminResolvedBugMessages = await admin.get(`/api/feedback/${bugId}/messages`);
+  check("Admin consulta histórico completo encerrado", adminResolvedBugMessages.status === 200 && adminResolvedBugMessages.json?.messages?.length === 4, JSON.stringify(adminResolvedBugMessages.json));
+  const adminAfterResolvedBugRead = await admin.get("/api/admin/feedback");
+  check("leitura do encerramento zera indicador do Admin", adminAfterResolvedBugRead.json?.requests?.find((item) => item.id === bugId)?.unreadMessagesCount === 0, JSON.stringify(adminAfterResolvedBugRead.json));
 
   check("Admin atualiza status", (await admin.patch("/api/admin/feedback", {
     id: featureId, status: "planned",

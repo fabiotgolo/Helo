@@ -7,6 +7,8 @@ import type {
   FeedbackMetadata,
   FeedbackMessage,
   FeedbackMessageSenderRole,
+  FeedbackConversationStatus,
+  FeedbackResolutionSource,
   FeedbackRequest,
   FeedbackStatus,
   FeedbackType,
@@ -31,6 +33,12 @@ type StoredFeedback = {
   votesCount: number;
   metadata: FeedbackMetadata | null;
   archived: boolean;
+  conversationStatus: FeedbackConversationStatus;
+  resolvedAt: string | null;
+  resolvedByUserId: string | null;
+  resolvedByName: string | null;
+  resolvedByRole: AppUser["role"] | null;
+  resolutionSource: FeedbackResolutionSource | null;
   ownerLastReadAt: string | null;
   adminLastReadAt: string | null;
   lastMessageAt: string | null;
@@ -87,22 +95,31 @@ function toStored(id: string, data: FirebaseFirestore.DocumentData): StoredFeedb
     adminLastReadAt: typeof data.adminLastReadAt === "string" ? data.adminLastReadAt : null,
     lastMessageAt: typeof data.lastMessageAt === "string" ? data.lastMessageAt : null,
     lastMessageSenderRole:
-      data.lastMessageSenderRole === "admin" || data.lastMessageSenderRole === "user"
+      data.lastMessageSenderRole === "admin" || data.lastMessageSenderRole === "user" || data.lastMessageSenderRole === "system"
         ? data.lastMessageSenderRole
+        : null,
+    conversationStatus: data.conversationStatus === "resolved" ? "resolved" : "open",
+    resolvedAt: typeof data.resolvedAt === "string" ? data.resolvedAt : null,
+    resolvedByUserId: typeof data.resolvedByUserId === "string" ? data.resolvedByUserId : null,
+    resolvedByName: typeof data.resolvedByName === "string" ? data.resolvedByName : null,
+    resolvedByRole: typeof data.resolvedByRole === "string" ? data.resolvedByRole as AppUser["role"] : null,
+    resolutionSource:
+      data.resolutionSource === "admin" || data.resolutionSource === "user"
+        ? data.resolutionSource
         : null,
   };
 }
 
 async function unreadMessagesCount(request: StoredFeedback, user: Pick<AppUser, "id" | "role">): Promise<number> {
-  const recipient =
-    user.role === "admin" ? { senderRole: "user" as const, lastReadAt: request.adminLastReadAt } :
-      request.createdByUserId === user.id ? { senderRole: "admin" as const, lastReadAt: request.ownerLastReadAt } :
+  const recipient: { senderRoles: FeedbackMessageSenderRole[]; lastReadAt: string | null } | null =
+    user.role === "admin" ? { senderRoles: ["user", "system"], lastReadAt: request.adminLastReadAt } :
+      request.createdByUserId === user.id ? { senderRoles: ["admin"], lastReadAt: request.ownerLastReadAt } :
         null;
-  if (!recipient || request.lastMessageSenderRole !== recipient.senderRole || !request.lastMessageAt) return 0;
+  if (!recipient || !request.lastMessageSenderRole || !recipient.senderRoles.includes(request.lastMessageSenderRole) || !request.lastMessageAt) return 0;
   const snapshot = await messages(request.id).orderBy("createdAt", "asc").get();
   return snapshot.docs.filter((doc) => {
     const data = doc.data();
-    return data.senderRole === recipient.senderRole && asString(data.createdAt) > (recipient.lastReadAt ?? "");
+    return recipient.senderRoles.includes(data.senderRole) && asString(data.createdAt) > (recipient.lastReadAt ?? "");
   }).length;
 }
 
@@ -125,6 +142,9 @@ async function toUserRequest(
     hasVoted: voted.has(request.id),
     isOwner: request.createdByUserId === user.id,
     archived: request.archived,
+    conversationStatus: request.conversationStatus,
+    resolvedAt: request.resolvedAt,
+    resolutionSource: request.resolutionSource,
     hasUnreadMessages: unreadCount > 0,
     unreadMessagesCount: unreadCount,
   };
@@ -143,6 +163,9 @@ async function toAdminRequest(request: StoredFeedback): Promise<AdminFeedbackReq
     updatedAt: request.updatedAt,
     votesCount: request.votesCount,
     archived: request.archived,
+    conversationStatus: request.conversationStatus,
+    resolvedAt: request.resolvedAt,
+    resolutionSource: request.resolutionSource,
     createdByUserId: request.createdByUserId,
     createdByName: request.createdByName,
     createdByRole: request.createdByRole,
@@ -150,6 +173,9 @@ async function toAdminRequest(request: StoredFeedback): Promise<AdminFeedbackReq
     appVersion: request.appVersion,
     route: request.route,
     metadata: request.metadata,
+    resolvedByUserId: request.resolvedByUserId,
+    resolvedByName: request.resolvedByName,
+    resolvedByRole: request.resolvedByRole,
     hasUnreadMessages: unreadCount > 0,
     unreadMessagesCount: unreadCount,
   };
@@ -185,6 +211,12 @@ export async function createFeedback(input: {
     votesCount: 0,
     metadata: input.metadata,
     archived: false,
+    conversationStatus: "open",
+    resolvedAt: null,
+    resolvedByUserId: null,
+    resolvedByName: null,
+    resolvedByRole: null,
+    resolutionSource: null,
     ownerLastReadAt: now,
     adminLastReadAt: null,
     lastMessageAt: null,
@@ -296,8 +328,9 @@ function toFeedbackMessage(
     requestId,
     senderUserId: asString(data.senderUserId),
     senderName: asString(data.senderName, "Usuário"),
-    senderRole: data.senderRole === "admin" ? "admin" : "user",
-    senderAppRole: data.senderAppRole as AppUser["role"],
+    senderRole:
+      data.senderRole === "admin" || data.senderRole === "system" ? data.senderRole : "user",
+    senderAppRole: data.senderRole === "system" ? null : data.senderAppRole as AppUser["role"],
     message: asString(data.message),
     visibility: data.visibility === "public" ? "public" : "private",
     createdAt: asString(data.createdAt),
@@ -341,6 +374,9 @@ export async function createFeedbackMessage(input: {
   const requestDoc = await requestRef.get();
   if (!requestDoc.exists) throw new Error("solicitação não encontrada");
   const request = toStored(requestDoc.id, requestDoc.data()!);
+  if (request.conversationStatus !== "open") {
+    throw new Error("esta conversa está encerrada");
+  }
   const isAdmin = input.user.role === "admin";
   if (!isAdmin && request.createdByUserId !== input.user.id) {
     throw new Error("acesso negado");
@@ -379,6 +415,72 @@ export async function createFeedbackMessage(input: {
     senderAppRole: input.user.role,
     message: input.message,
     visibility,
+    createdAt: now,
+    editedAt: null,
+  };
+}
+
+/**
+ * O autor ou um Admin encerram a conversa. A mensagem de sistema e o bloqueio
+ * de novas respostas são gravados na mesma transação para não haver estado parcial.
+ */
+export async function resolveFeedbackConversation(input: {
+  requestId: string;
+  user: AppUser;
+}): Promise<FeedbackMessage> {
+  const requestRef = requests().doc(input.requestId);
+  const messageRef = messages(input.requestId).doc();
+  const now = new Date().toISOString();
+  const resolutionSource: FeedbackResolutionSource = input.user.role === "admin" ? "admin" : "user";
+  const message = resolutionSource === "admin"
+    ? "Esta questão foi marcada como resolvida pelo administrador e a conversa foi encerrada."
+    : "Esta questão foi marcada como resolvida pelo usuário e a conversa foi encerrada.";
+
+  await firestore.runTransaction(async (transaction) => {
+    const requestDoc = await transaction.get(requestRef);
+    if (!requestDoc.exists) throw new Error("solicitação não encontrada");
+    const feedback = toStored(requestDoc.id, requestDoc.data()!);
+    if (feedback.createdByUserId !== input.user.id && input.user.role !== "admin") {
+      throw new Error("acesso negado");
+    }
+    if (feedback.conversationStatus !== "open") throw new Error("esta conversa já está encerrada");
+
+    transaction.set(messageRef, {
+      requestId: input.requestId,
+      senderUserId: "",
+      senderName: "Sistema Helo",
+      senderRole: "system",
+      senderAppRole: null,
+      message,
+      // A resolução é um evento da conversa autor/Admin; não expõe o autor
+      // na thread pública de uma feature.
+      visibility: "private",
+      createdAt: now,
+      editedAt: null,
+    });
+    transaction.update(requestRef, {
+      conversationStatus: "resolved",
+      resolvedAt: now,
+      resolvedByUserId: input.user.id,
+      resolvedByName: input.user.name,
+      resolvedByRole: input.user.role,
+      resolutionSource,
+      updatedAt: now,
+      lastMessageAt: now,
+      lastMessageSenderRole: "system",
+      ...(input.user.role === "admin" ? { adminLastReadAt: now } : { ownerLastReadAt: now }),
+    });
+  });
+
+  return {
+    id: messageRef.id,
+    requestId: input.requestId,
+    senderUserId: "",
+    senderName: "Sistema Helo",
+    senderRole: "system",
+    senderAppRole: null,
+    message,
+    visibility: "private",
     createdAt: now,
     editedAt: null,
   };

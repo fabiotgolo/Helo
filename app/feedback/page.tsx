@@ -12,7 +12,7 @@ import {
   type FeedbackType,
 } from "@/lib/feedback-types";
 
-type Tab = "requests" | "new";
+type Tab = "requests" | "closed" | "new";
 type Filter = "all" | FeedbackType;
 type Sort = "recent" | "votes";
 
@@ -92,6 +92,10 @@ export default function FeedbackPage() {
   const shown = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("pt-BR");
     return (requests ?? [])
+      .filter((request) =>
+        tab === "closed" ? request.conversationStatus === "resolved" :
+          tab === "requests" ? request.conversationStatus === "open" : true
+      )
       .filter((request) => filter === "all" || request.type === filter)
       .filter(
         (request) =>
@@ -104,7 +108,7 @@ export default function FeedbackPage() {
           ? b.votesCount - a.votesCount || b.createdAt.localeCompare(a.createdAt)
           : b.createdAt.localeCompare(a.createdAt)
       );
-  }, [filter, query, requests, sort]);
+  }, [filter, query, requests, sort, tab]);
 
   const submit = async () => {
     if (!title.trim() || !description.trim()) {
@@ -231,6 +235,15 @@ export default function FeedbackPage() {
           <button
             type="button"
             role="tab"
+            aria-selected={tab === "closed"}
+            className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "closed" ? "bg-ink text-white" : "text-ink-soft hover:text-ink"}`}
+            onClick={() => setTab("closed")}
+          >
+            Solicitações encerradas
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={tab === "requests"}
             className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === "requests" ? "bg-ink text-white" : "text-ink-soft hover:text-ink"}`}
             onClick={() => setTab("requests")}
@@ -331,7 +344,10 @@ export default function FeedbackPage() {
             </div>
           </form>
         ) : (
-          <section className="flex flex-col gap-4" aria-label="Solicitações enviadas e públicas">
+          <section className="flex flex-col gap-4" aria-label={tab === "closed" ? "Solicitações encerradas" : "Solicitações enviadas e públicas"}>
+            {tab === "closed" && (
+              <p className="text-sm text-ink-soft">Conversas resolvidas permanecem disponíveis para consulta e podem ser excluídas pelo autor ou pela administração.</p>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
               <label className="sr-only" htmlFor="feedback-search">Buscar solicitações</label>
               <input id="feedback-search" className={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar solicitações" />
@@ -353,7 +369,7 @@ export default function FeedbackPage() {
             ) : shown.length === 0 ? (
               <div className="border-y border-line py-16 text-center">
                 <p className="font-medium">Nenhuma solicitação encontrada.</p>
-                <p className="mt-1 text-sm text-ink-soft">Seja o primeiro a sugerir uma melhoria.</p>
+                <p className="mt-1 text-sm text-ink-soft">{tab === "closed" ? "Nenhuma conversa foi encerrada ainda." : "Seja o primeiro a sugerir uma melhoria."}</p>
               </div>
             ) : (
               <div className="flex flex-col gap-3">
@@ -364,6 +380,7 @@ export default function FeedbackPage() {
                         <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
                           <span className="rounded-full border border-line px-2.5 py-1">{FEEDBACK_TYPE_LABELS[request.type]}</span>
                           <span className="rounded-full bg-ink-soft/10 px-2.5 py-1 text-ink-soft">{FEEDBACK_STATUS_LABELS[request.status]}</span>
+                          {request.conversationStatus === "resolved" && <span className="rounded-full bg-sim-soft px-2.5 py-1 text-sim">Conversa resolvida</span>}
                           {request.type === "bug" && <span className="rounded-full bg-talvez-soft px-2.5 py-1 text-talvez">Privado</span>}
                           {request.hasUnreadMessages && <span className="rounded-full bg-sim-soft px-2.5 py-1 text-sim">Nova resposta</span>}
                           {request.archived && <span className="rounded-full bg-nao-soft px-2.5 py-1 text-nao">Arquivada</span>}
@@ -386,7 +403,7 @@ export default function FeedbackPage() {
                       )}
                     </div>
                     {(request.isOwner || isAdmin) && (
-                      request.isOwner && confirmingDeleteId === request.id ? (
+                      (request.isOwner || isAdmin) && confirmingDeleteId === request.id ? (
                         <div role="alertdialog" aria-label={`Excluir ${request.title}`} className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-nao-soft p-4 text-sm">
                           <span className="mr-auto">Excluir esta solicitação? Esta ação não pode ser desfeita.</span>
                           <button type="button" className="min-h-10 rounded-full bg-nao px-4 py-2 font-medium text-white disabled:opacity-40" disabled={sending} onClick={() => void remove(request.id)}>Excluir</button>
@@ -395,11 +412,13 @@ export default function FeedbackPage() {
                       ) : (
                         <div className="mt-4 flex flex-wrap gap-2">
                           <div className="relative inline-flex">
-                            <button type="button" className={secondary} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Fechar conversa" : "Abrir conversa"}</button>
+                            <button type="button" className={secondary} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Ocultar conversa" : "Abrir conversa"}</button>
                             {request.hasUnreadMessages && <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm" aria-label={`${request.unreadMessagesCount} mensagens não lidas`}>{request.unreadMessagesCount > 99 ? "99+" : request.unreadMessagesCount}</span>}
                           </div>
                           {request.isOwner && <>
                             <button type="button" className={secondary} onClick={() => startEdit(request)}>Editar</button>
+                          </>}
+                          {(request.isOwner || isAdmin) && <>
                             <button type="button" className="min-h-10 rounded-full px-4 py-2 text-sm font-medium text-nao hover:bg-nao-soft" onClick={() => setConfirmingDeleteId(request.id)}>Excluir</button>
                           </>}
                         </div>
@@ -408,7 +427,7 @@ export default function FeedbackPage() {
                     {!request.isOwner && !isAdmin && request.type === "feature" && request.visibility === "public" && (
                       <div className="mt-4">
                         <div className="relative inline-flex">
-                          <button type="button" className={secondary} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Fechar conversa" : "Ver respostas"}</button>
+                          <button type="button" className={secondary} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Ocultar conversa" : "Ver respostas"}</button>
                           {request.hasUnreadMessages && <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm" aria-label={`${request.unreadMessagesCount} mensagens não lidas`}>{request.unreadMessagesCount > 99 ? "99+" : request.unreadMessagesCount}</span>}
                         </div>
                       </div>
@@ -418,9 +437,14 @@ export default function FeedbackPage() {
                         requestId={request.id}
                         type={request.type}
                         canReply={request.isOwner || isAdmin}
+                        conversationStatus={request.conversationStatus}
+                        resolvedAt={request.resolvedAt}
+                        resolutionSource={request.resolutionSource}
+                        canResolve={request.isOwner || isAdmin}
                         isAdmin={isAdmin}
                         onRead={() => markConversationRead(request.id)}
                         onMessageSent={load}
+                        onConversationResolved={() => void load()}
                       />
                     )}
                   </article>

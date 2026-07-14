@@ -17,7 +17,9 @@ export const FEEDBACK_STATUSES = [
 export type FeedbackStatus = (typeof FEEDBACK_STATUSES)[number];
 
 export type FeedbackVisibility = "public" | "private";
-export type FeedbackMessageSenderRole = "user" | "admin";
+export type FeedbackConversationStatus = "open" | "resolved";
+export type FeedbackResolutionSource = "user" | "admin";
+export type FeedbackMessageSenderRole = "user" | "admin" | "system";
 
 export const FEEDBACK_TYPE_LABELS: Record<FeedbackType, string> = {
   feature: "Recurso",
@@ -61,6 +63,10 @@ export interface FeedbackRequest {
   hasVoted: boolean;
   isOwner: boolean;
   archived: boolean;
+  /** Independente do andamento da solicitação (status). */
+  conversationStatus: FeedbackConversationStatus;
+  resolvedAt: string | null;
+  resolutionSource: FeedbackResolutionSource | null;
   hasUnreadMessages: boolean;
   unreadMessagesCount: number;
 }
@@ -73,6 +79,9 @@ export interface AdminFeedbackRequest extends Omit<FeedbackRequest, "hasVoted" |
   appVersion: string;
   route: string;
   metadata: FeedbackMetadata | null;
+  resolvedByUserId: string | null;
+  resolvedByName: string | null;
+  resolvedByRole: UserRole | null;
 }
 
 /** Mensagem imutável da conversa vinculada a uma solicitação de feedback. */
@@ -82,7 +91,7 @@ export interface FeedbackMessage {
   senderUserId: string;
   senderName: string;
   senderRole: FeedbackMessageSenderRole;
-  senderAppRole: UserRole;
+  senderAppRole: UserRole | null;
   message: string;
   visibility: FeedbackVisibility;
   createdAt: string;

@@ -6,6 +6,7 @@ import {
   FEEDBACK_STATUS_LABELS,
   FEEDBACK_TYPE_LABELS,
   type AdminFeedbackRequest,
+  type FeedbackConversationStatus,
   type FeedbackStatus,
   type FeedbackType,
 } from "@/lib/feedback-types";
@@ -40,6 +41,7 @@ export default function AdminFeedbackTab() {
   const [query, setQuery] = useState("");
   const [type, setType] = useState<"all" | FeedbackType>("all");
   const [status, setStatus] = useState<"all" | FeedbackStatus>("all");
+  const [conversationStatus, setConversationStatus] = useState<"all" | FeedbackConversationStatus>("all");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -103,12 +105,13 @@ export default function AdminFeedbackTab() {
       (request) =>
         (type === "all" || request.type === type) &&
         (status === "all" || request.status === status) &&
+        (conversationStatus === "all" || request.conversationStatus === conversationStatus) &&
         (!q ||
           request.title.toLocaleLowerCase("pt-BR").includes(q) ||
           request.description.toLocaleLowerCase("pt-BR").includes(q) ||
           request.createdByName.toLocaleLowerCase("pt-BR").includes(q))
     );
-  }, [query, requests, status, type]);
+  }, [conversationStatus, query, requests, status, type]);
 
   return (
     <section className="flex flex-col gap-5" aria-label="Feedback e suporte">
@@ -125,7 +128,7 @@ export default function AdminFeedbackTab() {
       {notice && <p role="status" className="rounded-2xl bg-sim-soft px-4 py-3 text-sm text-sim">{notice}</p>}
       {error && <p role="alert" className="rounded-2xl bg-nao-soft px-4 py-3 text-sm text-nao">{error}</p>}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         <input className={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar título ou autor" aria-label="Buscar feedback" />
         <select className={input} value={type} onChange={(event) => setType(event.target.value as "all" | FeedbackType)} aria-label="Filtrar por tipo">
           <option value="all">Todos os tipos</option>
@@ -135,6 +138,11 @@ export default function AdminFeedbackTab() {
         <select className={input} value={status} onChange={(event) => setStatus(event.target.value as "all" | FeedbackStatus)} aria-label="Filtrar por status">
           <option value="all">Todos os status</option>
           {FEEDBACK_STATUSES.map((item) => <option key={item} value={item}>{FEEDBACK_STATUS_LABELS[item]}</option>)}
+        </select>
+        <select className={input} value={conversationStatus} onChange={(event) => setConversationStatus(event.target.value as "all" | FeedbackConversationStatus)} aria-label="Filtrar por conversa">
+          <option value="all">Todas as conversas</option>
+          <option value="open">Conversa aberta</option>
+          <option value="resolved">Conversa resolvida</option>
         </select>
       </div>
 
@@ -152,6 +160,7 @@ export default function AdminFeedbackTab() {
                     <span className="rounded-full border border-line px-2.5 py-1">{FEEDBACK_TYPE_LABELS[request.type]}</span>
                     <span className="rounded-full bg-ink-soft/10 px-2.5 py-1 text-ink-soft">{request.visibility === "public" ? "Público" : "Privado"}</span>
                     {request.archived && <span className="rounded-full bg-nao-soft px-2.5 py-1 text-nao">Arquivada</span>}
+                    {request.conversationStatus === "resolved" && <span className="rounded-full bg-sim-soft px-2.5 py-1 text-sim">Resolvida pelo {request.resolutionSource === "admin" ? "Admin" : "usuário"}</span>}
                     {request.hasUnreadMessages && <span className="rounded-full bg-sim-soft px-2.5 py-1 text-sim">Nova mensagem</span>}
                   </div>
                   <h3 className="mt-3 text-lg font-semibold">{request.title}</h3>
@@ -159,6 +168,11 @@ export default function AdminFeedbackTab() {
                   <p className="mt-3 text-xs text-ink-mute">
                     {request.createdByName} · {ROLE_LABELS[request.createdByRole]} · {new Date(request.createdAt).toLocaleString("pt-BR")} · {request.votesCount} voto(s)
                   </p>
+                  {request.conversationStatus === "resolved" && (
+                    <p className="mt-1 text-xs text-sim">
+                      Encerrada por {request.resolvedByName ?? request.createdByName}{request.resolvedAt ? ` em ${new Date(request.resolvedAt).toLocaleString("pt-BR")}` : ""}.
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <select
@@ -203,7 +217,7 @@ export default function AdminFeedbackTab() {
               ) : (
                 <div className="mt-4 flex flex-wrap gap-2">
                   <div className="relative inline-flex">
-                    <button type="button" className={secondary} disabled={busyId === request.id} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Fechar conversa" : "Abrir conversa"}</button>
+                    <button type="button" className={secondary} disabled={busyId === request.id} onClick={() => setConversationId((current) => current === request.id ? null : request.id)}>{conversationId === request.id ? "Ocultar conversa" : "Abrir conversa"}</button>
                     {request.hasUnreadMessages && <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm" aria-label={`${request.unreadMessagesCount} mensagens não lidas`}>{request.unreadMessagesCount > 99 ? "99+" : request.unreadMessagesCount}</span>}
                   </div>
                   <button type="button" className={secondary} disabled={busyId === request.id} onClick={() => void update(request.id, { archived: !request.archived }, request.archived ? "Solicitação desarquivada." : "Solicitação arquivada.")}>{request.archived ? "Desarquivar" : "Arquivar"}</button>
@@ -215,6 +229,10 @@ export default function AdminFeedbackTab() {
                   requestId={request.id}
                   type={request.type}
                   canReply
+                  conversationStatus={request.conversationStatus}
+                  resolvedAt={request.resolvedAt}
+                  resolutionSource={request.resolutionSource}
+                  canResolve
                   isAdmin
                   onRead={() => markConversationRead(request.id)}
                   onMessageSent={load}
