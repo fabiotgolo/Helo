@@ -54,7 +54,7 @@ export const HELO_MODES: Record<HeloMode, HeloModeInfo> = {
     description: "Ajuda imediata, sempre disponível. Não depende de IA.",
     palette: "ambar",
     href: "/emergencia",
-    spoken: "Emergência: um toque fala na hora, em voz alta.",
+    spoken: "Emergência. Pedido de ajuda urgente do paciente.",
   },
   atividades: {
     id: "atividades",
@@ -159,8 +159,11 @@ export function HeloProvider({ children }: { children: ReactNode }) {
       setActiveMode(mode);
       // A Helo se apresenta e a experiência abre em seguida — a voz atravessa
       // a transição porque o provider (e o palco) nunca desmontam.
-      // Emergência entra em silêncio: nada pode atrasar o socorro.
-      if (opts?.silent || mode === "emergencia") stop();
+      // Emergência também anuncia (voz da plataforma): identifica o pedido de
+      // socorro em voz alta. Não atrasa o socorro — os botões da página já
+      // estão ativos, e qualquer toque numa frase chama stop() e interrompe o
+      // anúncio na hora (ver speak() em useSpeech).
+      if (opts?.silent) stop();
       else void speak(HELO_MODES[mode].spoken);
       router.push(HELO_MODES[mode].href);
     },
