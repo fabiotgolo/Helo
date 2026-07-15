@@ -2,10 +2,58 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
+import type { Conversation as ElevenLabsConversation } from "@elevenlabs/client";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
+import { GestureTriplet } from "@/components/ui";
 import { useHelo } from "@/lib/helo-state";
+import type { Gesture } from "@/lib/types";
 
 type SessionError = string | null;
+type ActivitySource = "control" | "gesture" | "typing" | "field-focus" | "heartbeat";
+
+const ACTIVITY_THROTTLE_MS = 3000;
+const ACTIVITY_HEARTBEAT_MS = 15000;
+const ACTIVE_WINDOW_MS = 60000;
+const ACTIVITY_DEBUG = process.env.NODE_ENV !== "production";
+
+type ElevenLabsErrorEvent = {
+  error_event?: {
+    error_type?: string;
+    message?: string;
+    reason?: string;
+    code?: unknown;
+    debug_message?: unknown;
+    details?: unknown;
+  };
+};
+type PatchableConversation = ElevenLabsConversation & {
+  handleErrorEvent?: (event: ElevenLabsErrorEvent) => void;
+  __heloIncompleteErrorEventPatch?: boolean;
+};
+
+function patchIncompleteElevenLabsErrorEvent(conversation: ElevenLabsConversation) {
+  const patched = conversation as PatchableConversation;
+  if (patched.__heloIncompleteErrorEventPatch || typeof patched.handleErrorEvent !== "function") return;
+  const handleErrorEvent = patched.handleErrorEvent.bind(patched);
+  patched.handleErrorEvent = (event) => {
+    if (event.error_event) {
+      handleErrorEvent(event);
+      return;
+    }
+    if (ACTIVITY_DEBUG) {
+      console.warn("[HELO AGENT] ignored incomplete ElevenLabs error event", event);
+    }
+  };
+  patched.__heloIncompleteErrorEventPatch = true;
+}
+
+function isBenignLiveKitDataChannelError(value: unknown) {
+  return (
+    typeof value === "string" &&
+    (value === "Unknown DataChannel error on lossy" ||
+      value === "Unknown DataChannel error on reliable")
+  );
+}
 
 function HeloSession({ onError }: { onError: (message: string) => void }) {
   const { stop, setAgentAmplitude } = useHelo();
@@ -15,11 +63,99 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     status,
     isSpeaking,
     isListening,
+    sendUserActivity,
     getOutputByteFrequencyData,
-  } = useConversation();
+  } = useConversation({
+    onConversationCreated: patchIncompleteElevenLabsErrorEvent,
+    onInterruption: () => setInterruptionDetected(true),
+  });
   const [starting, setStarting] = useState(false);
+  const [lastGesture, setLastGesture] = useState<Gesture | null>(null);
+  const [note, setNote] = useState("");
+  const [noteFocused, setNoteFocused] = useState(false);
+  const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
+  const [interruptionDetected, setInterruptionDetected] = useState(false);
   const startedRef = useRef(false);
   const startingRef = useRef(false);
+  const connectedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const activeUntilRef = useRef(0);
+  const lastActivitySentAtRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ACTIVITY_DEBUG) return;
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      if (isBenignLiveKitDataChannelError(args[0])) {
+        console.debug("[HELO AGENT]", ...args);
+        return;
+      }
+      originalError(...args);
+    };
+    return () => {
+      console.error = originalError;
+    };
+  }, []);
+
+  useEffect(() => {
+    connectedRef.current = status === "connected";
+    if (status !== "connected") {
+      activeUntilRef.current = 0;
+      lastActivitySentAtRef.current = 0;
+    }
+  }, [status]);
+
+  const logActivity = useCallback((message: string, source?: ActivitySource) => {
+    if (!ACTIVITY_DEBUG) return;
+    console.info(`[HELO ACTIVITY] ${message}${source ? ` - source: ${source}` : ""}`);
+  }, []);
+
+  const sendActivity = useCallback(
+    (source: ActivitySource, options?: { immediate?: boolean; extendActiveWindow?: boolean }) => {
+      if (!mountedRef.current) return false;
+      if (!connectedRef.current) {
+        logActivity("skipped - disconnected", source);
+        return false;
+      }
+
+      const now = Date.now();
+      if (!options?.immediate && now - lastActivitySentAtRef.current < ACTIVITY_THROTTLE_MS) {
+        logActivity("throttled", source);
+        if (options?.extendActiveWindow) activeUntilRef.current = now + ACTIVE_WINDOW_MS;
+        return false;
+      }
+
+      try {
+        sendUserActivity();
+        lastActivitySentAtRef.current = now;
+        if (options?.extendActiveWindow) activeUntilRef.current = now + ACTIVE_WINDOW_MS;
+        setLastActivityAt(now);
+        logActivity("sent", source);
+        return true;
+      } catch {
+        logActivity("skipped - no active conversation", source);
+        return false;
+      }
+    },
+    [logActivity, sendUserActivity, setLastActivityAt]
+  );
+
+  useEffect(() => {
+    if (status !== "connected") return;
+    const interval = window.setInterval(() => {
+      if (Date.now() <= activeUntilRef.current) {
+        sendActivity("heartbeat");
+      }
+    }, ACTIVITY_HEARTBEAT_MS);
+    return () => window.clearInterval(interval);
+  }, [sendActivity, status]);
 
   useEffect(() => {
     let frame = 0;
@@ -38,6 +174,7 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
   useEffect(() => {
     return () => {
       setAgentAmplitude(null);
+      activeUntilRef.current = 0;
       if (startedRef.current) endSession();
     };
   }, [endSession, setAgentAmplitude]);
@@ -46,6 +183,9 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     if (startingRef.current || status !== "disconnected") return;
     startingRef.current = true;
     setStarting(true);
+    setLastActivityAt(null);
+    setLastGesture(null);
+    setInterruptionDetected(false);
     stop(); // evita sobreposição com a camada TTS existente da plataforma
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -80,13 +220,44 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
       startingRef.current = false;
       setStarting(false);
     }
-  }, [onError, startSession, status, stop]);
+  }, [
+    onError,
+    setInterruptionDetected,
+    setLastActivityAt,
+    setLastGesture,
+    setStarting,
+    startSession,
+    status,
+    stop,
+  ]);
 
   const end = useCallback(() => {
+    activeUntilRef.current = 0;
     if (status !== "disconnected" || startedRef.current) endSession();
     startedRef.current = false;
     setAgentAmplitude(null);
   }, [endSession, setAgentAmplitude, status]);
+
+  const markGesture = useCallback(
+    (gesture: Gesture) => {
+      setLastGesture(gesture);
+      sendActivity("gesture", { immediate: true, extendActiveWindow: true });
+    },
+    [sendActivity, setLastGesture]
+  );
+
+  const handlePanelPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!connectedRef.current) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("[data-helo-gesture-controls]")) return;
+      if (target.closest("button,a,input,textarea,select,[role='button']")) {
+        sendActivity("control");
+      }
+    },
+    [sendActivity]
+  );
 
   const label =
     starting || status === "connecting"
@@ -98,10 +269,28 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
           : status === "connected"
             ? "Conectada"
             : "Desconectada";
+  const waitingLabel =
+    status === "connected" && isListening
+      ? "Aguardando sua resposta"
+      : status === "connected" && !isSpeaking
+        ? "Helo está aguardando"
+        : null;
+  const lastActivityLabel = lastActivityAt
+    ? `Atividade registrada às ${new Date(lastActivityAt).toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`
+    : "Nenhuma atividade de interface registrada nesta sessão.";
+  const interruptionLabel = interruptionDetected ? "Interrupção natural detectada nesta sessão." : null;
 
   return (
-    <div className="flex flex-col items-center gap-5 text-center">
+    <div className="flex flex-col items-center gap-5 text-center" onPointerDownCapture={handlePanelPointerDown}>
       <div aria-live="polite" className="text-lg font-medium text-ink">{label}</div>
+      {waitingLabel && (
+        <div aria-live="polite" className="rounded-full border border-line bg-card/70 px-4 py-1.5 text-sm text-ink-soft">
+          {waitingLabel}
+        </div>
+      )}
       <p className="max-w-md text-sm text-ink-soft">
         A conversa usa a voz oficial da Helo. O microfone só será solicitado ao conectar.
       </p>
@@ -113,6 +302,40 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
         <button type="button" onClick={end} className="rounded-full border border-line bg-card px-7 py-3 font-medium text-ink hover:border-ink-mute">
           Encerrar conversa
         </button>
+      )}
+      {status === "connected" && (
+        <section className="flex w-full flex-col items-center gap-4 pt-2" aria-label="Atividade do paciente">
+          <div data-helo-gesture-controls>
+            <GestureTriplet onGesture={markGesture} size="compacto" />
+          </div>
+          <div className="min-h-5 text-sm text-ink-soft" aria-live="polite">
+            {lastGesture ? "Gesto registrado como atividade." : lastActivityLabel}
+          </div>
+          <label className="flex w-full max-w-md flex-col gap-2 text-left text-sm text-ink-soft">
+            Observação em andamento
+            <textarea
+              value={note}
+              onFocus={() => {
+                setNoteFocused(true);
+                if (note.trim()) sendActivity("field-focus", { extendActiveWindow: true });
+              }}
+              onBlur={() => setNoteFocused(false)}
+              onChange={(event) => {
+                setNote(event.target.value);
+                sendActivity("typing", { extendActiveWindow: true });
+              }}
+              placeholder="Anote apenas para orientar o cuidado nesta tela."
+              rows={3}
+              className="w-full resize-none rounded-2xl border border-line bg-card/80 px-4 py-3 text-base text-ink outline-none transition-colors placeholder:text-ink-mute focus:border-ink-mute"
+            />
+          </label>
+          {noteFocused && (
+            <p className="max-w-md text-xs text-ink-mute">
+              Enquanto há edição real, a Helo recebe apenas sinal de atividade.
+            </p>
+          )}
+          {interruptionLabel && <p className="text-xs text-ink-mute">{interruptionLabel}</p>}
+        </section>
       )}
     </div>
   );
