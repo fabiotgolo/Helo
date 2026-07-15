@@ -1,9 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
+import { useEffect, useState } from "react";
 import type { Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
+import { useAuthUser } from "@/lib/use-auth";
+import { ThemeDots } from "@/components/theme-dots";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
+
+// Carregado sob demanda: Three.js só entra no bundle quando há um orbe animado na tela
+const Orb3D = dynamic(() => import("./orb-3d"), { ssr: false });
 
 // ——— Orbe: forma orgânica circular em gradiente, marca visual do Helo ———
 
@@ -44,11 +51,14 @@ export function Orb({
   palette,
   className = "",
   breathe = false,
+  getAmplitude,
   children,
 }: {
   palette: OrbPalette;
   className?: string;
   breathe?: boolean;
+  /** Fonte de amplitude 0–1 para o orbe reagir à voz em curso (só com breathe). */
+  getAmplitude?: () => number;
   children?: React.ReactNode;
 }) {
   return (
@@ -57,7 +67,9 @@ export function Orb({
       className={`orb ${breathe ? "orb-breathe" : ""} flex items-center justify-center ${className}`}
       style={{ background: PALETTES[palette] }}
     >
-      {children}
+      {/* Orbes "vivos" ganham a versão 3D; o gradiente CSS fica por baixo como fallback */}
+      {breathe && <Orb3D palette={palette} getAmplitude={getAmplitude} />}
+      {children && <span className="relative z-[1]">{children}</span>}
     </div>
   );
 }
@@ -127,9 +139,87 @@ export function GestureTriplet({
 
 // ——— Navegação superior ———
 
-export function TopBar({ right }: { right?: React.ReactNode }) {
+/**
+ * Ação global de encerrar sessão — única fonte do "Sair" da plataforma.
+ * Renderiza-se sozinha: aparece para QUALQUER usuário autenticado (todos os
+ * papéis, admin incluído) e some quando não há sessão. O comportamento do
+ * logout (voz, sessões de modo, espelhos locais, cookie) vive em useAuthUser.
+ */
+export function LogoutButton() {
+  const { user, loading, logout } = useAuthUser();
+  if (loading || !user) return null;
   return (
-    <header className="no-print flex items-center justify-between px-6 py-4 sm:px-10">
+    <button
+      type="button"
+      onClick={() => void logout()}
+      title={`${user.name} — encerrar sessão`}
+      aria-label={`Sair — encerrar a sessão de ${user.name}`}
+      className="rounded-full border border-line bg-card px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:border-ink-mute focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:px-5"
+    >
+      Sair
+    </button>
+  );
+}
+
+/** Acesso global ao suporte, sem interferir nos fluxos do paciente. */
+export function FeedbackLink() {
+  const { user, loading } = useAuthUser();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (!user) {
+      setUnreadCount(0);
+      return;
+    }
+    const controller = new AbortController();
+    const endpoint = user.role === "admin" ? "/api/admin/feedback" : "/api/feedback";
+    void fetch(endpoint, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("não foi possível carregar o feedback");
+        const data = (await response.json()) as { requests?: Array<{ unreadMessagesCount?: number }> };
+        setUnreadCount(data.requests?.reduce((total, request) => total + (request.unreadMessagesCount ?? 0), 0) ?? 0);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setUnreadCount(0);
+      });
+    return () => controller.abort();
+  }, [user?.id, user?.role]);
+
+  if (loading || !user) return null;
+  const unreadLabel = unreadCount === 1 ? "1 mensagem não lida" : `${unreadCount} mensagens não lidas`;
+  return (
+    <Link
+      href="/feedback"
+      aria-label={unreadCount ? `Feedback e suporte — ${unreadLabel}` : "Feedback e suporte"}
+      className="relative rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium text-ink transition-colors hover:border-ink-mute"
+    >
+      Feedback e suporte
+      {unreadCount > 0 && (
+        <span aria-hidden="true" className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-nao text-xs font-bold text-white shadow-sm">
+          {unreadCount > 99 ? "99+" : unreadCount}
+        </span>
+      )}
+    </Link>
+  );
+}
+
+export function TopBar({
+  right,
+  showLogout = true,
+  showFeedback = true,
+  showThemeDots = true,
+}: {
+  right?: React.ReactNode;
+  /** Só a tela de login desliga — toda área autenticada mantém o Sair. */
+  showLogout?: boolean;
+  /** A própria página de feedback evita repetir o atalho. */
+  showFeedback?: boolean;
+  /** Atalho rápido de temas — indicador + troca. Ligado em todo o app. */
+  showThemeDots?: boolean;
+}) {
+  return (
+    <header className="no-print flex items-center justify-between gap-3 px-6 py-4 sm:px-10">
       <Link href="/" className="flex items-center gap-2.5" aria-label="Helo — página inicial">
         <Orb palette="coral" className="h-6 w-6" />
         <span className="text-xl font-semibold tracking-tight">Helo</span>
@@ -140,7 +230,14 @@ export function TopBar({ right }: { right?: React.ReactNode }) {
           v{APP_VERSION}
         </span>
       </Link>
-      <nav className="flex items-center gap-2">{right}</nav>
+      {/* flex-wrap: em telas estreitas os controles quebram de linha — o
+          Sair nunca some por falta de espaço. */}
+      <nav className="flex flex-wrap items-center justify-end gap-2">
+        {showThemeDots && <ThemeDots className="mr-1" />}
+        {right}
+        {showFeedback && <FeedbackLink />}
+        {showLogout && <LogoutButton />}
+      </nav>
     </header>
   );
 }
@@ -159,7 +256,7 @@ export function PillLink({
       href={href}
       className={`rounded-full px-5 py-2.5 text-sm font-medium transition-colors ${
         dark
-          ? "bg-ink text-white hover:bg-black"
+          ? "bg-accent text-on-accent hover:bg-accent-strong"
           : "bg-card text-ink border border-line hover:border-ink-mute"
       }`}
     >

@@ -1,4 +1,8 @@
 {
+  "firestore": {
+    "database": "helo-db",
+    "rules": "firestore.rules"
+  },
   "hosting": {
     "site": "heloapp",
     "public": "firebase-hosting-empty",

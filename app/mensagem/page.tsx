@@ -5,6 +5,8 @@ import Link from "next/link";
 import { MENSAGEM_POOL, type Frase } from "@/lib/frases";
 import { type Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
+import { usePatient, usePatientItems } from "@/lib/patient";
+import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useSpeech } from "@/lib/useSpeech";
 import { Orb, GestureTriplet, TopBar } from "@/components/ui";
@@ -21,6 +23,10 @@ type Phase = "intro" | "escolha" | "confirma_frase" | "continuar" | "final" | "d
 export default function MensagemPage() {
   const { speak, engine } = useSpeech();
   const gestures = useGestures();
+  const { patientId, settings } = usePatient();
+  // As expressões preferidas do paciente entram ANTES do banco curado —
+  // as primeiras opções apresentadas são as do jeito de falar dele.
+  const { enabledItems: preferredExpressions } = usePatientItems("conversa");
 
   const [phase, setPhase] = useState<Phase>("intro");
   const [sessionId, setSessionId] = useState<number | null>(null);
@@ -33,11 +39,20 @@ export default function MensagemPage() {
   const rejected = useRef<string[]>([]);
   const shownAt = useRef(Date.now());
 
+  const pool: Frase[] = useMemo(() => {
+    const custom = preferredExpressions.map((e) => ({
+      label: e.label,
+      phrase: e.spokenText,
+    }));
+    const known = new Set(custom.map((f) => f.phrase));
+    return [...custom, ...MENSAGEM_POOL.filter((f) => !known.has(f.phrase))];
+  }, [preferredExpressions]);
+
   const batchOptions: Frase[] = useMemo(() => {
     if (aiOptions) return aiOptions;
-    const start = (batch * LOTE) % MENSAGEM_POOL.length;
-    return MENSAGEM_POOL.slice(start, start + LOTE);
-  }, [batch, aiOptions]);
+    const start = (batch * LOTE) % pool.length;
+    return pool.slice(start, start + LOTE);
+  }, [batch, aiOptions, pool]);
 
   useEffect(() => {
     const handler = () => endSession(sessionId);
@@ -46,7 +61,7 @@ export default function MensagemPage() {
   }, [sessionId]);
 
   const begin = useCallback(async () => {
-    const id = await startSession("mensagem");
+    const { id } = await startSession("mensagem", patientId);
     setSessionId(id);
     setDraft([]);
     setBatch(0);
@@ -57,12 +72,13 @@ export default function MensagemPage() {
     shownAt.current = Date.now();
     logEvent({
       sessionId: id,
+      patientId,
       type: "pergunta_apresentada",
       category: "mensagem",
       question: "O que você quer dizer nesta mensagem?",
     });
     void speak("Vamos montar a mensagem, uma frase de cada vez. O que você quer dizer?");
-  }, [speak]);
+  }, [speak, patientId]);
 
   const trySuggestions = useCallback(async () => {
     setAiLoading(true);
@@ -76,6 +92,12 @@ export default function MensagemPage() {
           rejected: rejected.current.slice(-9),
           path: [],
           draft,
+          profile: {
+            name: settings[PATIENT_SETTING_KEYS.name] || undefined,
+            speechStyle: settings[PATIENT_SETTING_KEYS.speechStyle] || undefined,
+            avoidedTopics: settings[PATIENT_SETTING_KEYS.avoidedTopics] || undefined,
+            preferredExpressions: preferredExpressions.slice(0, 12).map((e) => e.spokenText),
+          },
         }),
       });
       if (!res.ok) return false;
@@ -93,7 +115,7 @@ export default function MensagemPage() {
     } finally {
       setAiLoading(false);
     }
-  }, [draft, speak]);
+  }, [draft, speak, settings, preferredExpressions]);
 
   const advanceBatch = useCallback(async () => {
     if (aiOptions) {
@@ -106,7 +128,7 @@ export default function MensagemPage() {
       return;
     }
     const nextBatch = batch + 1;
-    if (nextBatch * LOTE >= MENSAGEM_POOL.length) {
+    if (nextBatch * LOTE >= pool.length) {
       const gotAI = await trySuggestions();
       if (gotAI) return;
     }
@@ -114,7 +136,7 @@ export default function MensagemPage() {
     setMarks({});
     shownAt.current = Date.now();
     void speak("Vou mostrar outras opções.");
-  }, [batch, aiOptions, trySuggestions, speak]);
+  }, [batch, pool.length, aiOptions, trySuggestions, speak]);
 
   const onOptionGesture = useCallback(
     (idx: number, g: Gesture) => {
@@ -122,6 +144,7 @@ export default function MensagemPage() {
       if (!option || marks[idx]) return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: "mensagem",
         question: option.label,
@@ -141,7 +164,7 @@ export default function MensagemPage() {
       setMarks(newMarks);
       if (batchOptions.every((_, i) => newMarks[i])) void advanceBatch();
     },
-    [batchOptions, marks, aiOptions, sessionId, speak, advanceBatch]
+    [batchOptions, marks, aiOptions, sessionId, patientId, speak, advanceBatch]
   );
 
   const onConfirmFrase = useCallback(
@@ -149,6 +172,7 @@ export default function MensagemPage() {
       if (!pending) return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: "mensagem",
         question: `Confirma frase: ${pending.phrase}`,
@@ -157,7 +181,7 @@ export default function MensagemPage() {
       });
       if (g === "sim") {
         setDraft((d) => [...d, pending.phrase]);
-        logEvent({ sessionId, type: "confirmacao", category: "mensagem", detail: pending.phrase });
+        logEvent({ sessionId, patientId, type: "confirmacao", category: "mensagem", detail: pending.phrase });
         setPending(null);
         setPhase("continuar");
         shownAt.current = Date.now();
@@ -165,6 +189,7 @@ export default function MensagemPage() {
       } else {
         logEvent({
           sessionId,
+          patientId,
           type: g === "talvez" ? "reformulacao" : "descarte",
           category: "mensagem",
           detail: pending.phrase,
@@ -175,7 +200,7 @@ export default function MensagemPage() {
         void speak("Tudo bem, vamos escolher outra frase.");
       }
     },
-    [pending, sessionId, speak]
+    [pending, sessionId, patientId, speak]
   );
 
   const fullMessage = draft.join(" ");
@@ -184,6 +209,7 @@ export default function MensagemPage() {
     (g: Gesture) => {
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: "mensagem",
         question: "Quer acrescentar mais uma frase?",
@@ -205,13 +231,14 @@ export default function MensagemPage() {
         void speak(`A mensagem ficou assim: ${fullMessage} — Confirma esta mensagem?`);
       }
     },
-    [sessionId, fullMessage, speak]
+    [sessionId, patientId, fullMessage, speak]
   );
 
   const onFinal = useCallback(
     (g: Gesture) => {
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: "mensagem",
         question: `Confirma mensagem final`,
@@ -219,37 +246,48 @@ export default function MensagemPage() {
         responseMs: Date.now() - shownAt.current,
       });
       if (g === "sim") {
-        logEvent({ sessionId, type: "confirmacao", category: "mensagem", detail: fullMessage });
+        logEvent({ sessionId, patientId, type: "confirmacao", category: "mensagem", detail: fullMessage });
         void saveMessage({
           sessionId,
+          patientId,
           text: fullMessage,
           category: "mensagem",
           status: "confirmada",
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
         });
         setPhase("done");
-        void speak(fullMessage);
+        // Mensagem confirmada em nome do PACIENTE — voz clonada dele quando houver.
+        void speak(fullMessage, {
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
+          patientId,
+        });
       } else if (g === "talvez") {
         // Reformular: remove a última frase e volta a perguntar
         const removed = draft[draft.length - 1];
-        logEvent({ sessionId, type: "reformulacao", category: "mensagem", detail: removed });
+        logEvent({ sessionId, patientId, type: "reformulacao", category: "mensagem", detail: removed });
         setDraft((d) => d.slice(0, -1));
         setPhase(draft.length <= 1 ? "escolha" : "continuar");
         shownAt.current = Date.now();
         void speak("Removi a última frase. Quer acrescentar outra?");
       } else {
-        logEvent({ sessionId, type: "descarte", category: "mensagem", detail: fullMessage });
+        logEvent({ sessionId, patientId, type: "descarte", category: "mensagem", detail: fullMessage });
         void saveMessage({
           sessionId,
+          patientId,
           text: fullMessage,
           category: "mensagem",
           status: "descartada",
+          speakerRole: "patient",
+          confirmationStatus: "rejected",
         });
         setDraft([]);
         setPhase("intro");
         void speak("Mensagem descartada.");
       }
     },
-    [sessionId, fullMessage, draft, speak]
+    [sessionId, patientId, fullMessage, draft, speak]
   );
 
   // Parágrafos de no máximo 3 frases, como no descritivo
@@ -282,7 +320,7 @@ export default function MensagemPage() {
             <button
               type="button"
               onClick={() => void begin()}
-              className="rounded-full bg-ink px-10 py-4 text-lg font-medium text-white hover:bg-black"
+              className="rounded-full bg-accent px-10 py-4 text-lg font-medium text-on-accent hover:bg-accent-strong"
             >
               Começar
             </button>
@@ -407,7 +445,13 @@ export default function MensagemPage() {
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => void speak(fullMessage)}
+                onClick={() =>
+                  void speak(fullMessage, {
+                    speakerRole: "patient",
+                    confirmationStatus: "confirmed",
+                    patientId,
+                  })
+                }
                 className="rounded-full border border-line bg-card px-6 py-3 font-medium hover:border-ink-mute"
               >
                 🔊 Repetir
@@ -415,7 +459,7 @@ export default function MensagemPage() {
               <button
                 type="button"
                 onClick={() => void begin()}
-                className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+                className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
               >
                 Nova mensagem
               </button>

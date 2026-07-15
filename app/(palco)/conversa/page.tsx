@@ -5,9 +5,18 @@ import Link from "next/link";
 import { flow, compose, START_NODE, type FlowNode, type Option } from "@/lib/flow";
 import { GESTURES, type Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
+import { usePatient, usePatientItems } from "@/lib/patient";
+import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
-import { useSpeech } from "@/lib/useSpeech";
-import { Orb, GestureTriplet, TopBar } from "@/components/ui";
+import { useAuthUser, redirectToLogin } from "@/lib/use-auth";
+import {
+  ROLE_LABELS,
+  PROFESSIONAL_TYPE_LABELS,
+  type AppUser,
+} from "@/lib/access-types";
+import { useHelo } from "@/lib/helo-state";
+import { GestureTriplet } from "@/components/ui";
+import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 
 const LOTE = 3; // nunca mais de 3 opções na tela
 
@@ -27,14 +36,23 @@ type Phase = "intro" | "node" | "confirm" | "done";
 type Person = { id: number; name: string; relation: string | null };
 
 export default function ConversaPage() {
-  const { speak, speaking, engine } = useSpeech();
+  // Voz global da Helo — a mesma do palco; o orbe reage a esta fala
+  const { speak, speaking } = useHelo();
 
   const gestures = useGestures();
+  // Perfil do paciente ativo: nome, estilo de fala, temas evitados e
+  // expressões preferidas alimentam a conversa e as sugestões da IA.
+  const { patient, patientId, settings, loading: patientLoading } = usePatient();
+  const { enabledItems: preferredExpressions } = usePatientItems("conversa");
+  const patientName = settings[PATIENT_SETTING_KEYS.name] ?? patient?.name ?? "";
+  // Operador = usuário autenticado. Nenhum nome digitado define identidade;
+  // o servidor ignora qualquer nome vindo do cliente ao criar a sessão.
+  const { user, loading: authLoading, logout } = useAuthUser();
   const [phase, setPhase] = useState<Phase>("intro");
   const [paused, setPaused] = useState(false);
-  const [operator, setOperator] = useState("");
+  const [startError, setStartError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const [sessionId, setSessionId] = useState<number | null>(null);
-  const [patientName, setPatientName] = useState("");
   const [people, setPeople] = useState<Person[]>([]);
 
   const [nodeId, setNodeId] = useState(START_NODE);
@@ -74,18 +92,21 @@ export default function ConversaPage() {
     [effectiveOptions, batch]
   );
 
+  // Sem usuário autenticado não há operador — a tela não pergunta nome,
+  // ela exige login antes de qualquer sessão.
   useEffect(() => {
-    const saved = localStorage.getItem("helo.operator");
-    if (saved) setOperator(saved);
-    void fetch("/api/settings")
+    if (!authLoading && !user) redirectToLogin();
+  }, [authLoading, user]);
+
+  // Rede de pessoas DO paciente ativo — troca de paciente, troca a rede.
+  useEffect(() => {
+    if (patientId == null) return;
+    setPeople([]);
+    void fetch(`/api/people?patientId=${patientId}`)
       .then((r) => r.json())
-      .then((s: Record<string, string>) => setPatientName(s.patient_name ?? ""))
+      .then((d: { people: Person[] }) => setPeople(d.people ?? []))
       .catch(() => {});
-    void fetch("/api/people")
-      .then((r) => r.json())
-      .then((d: { people: Person[] }) => setPeople(d.people))
-      .catch(() => {});
-  }, []);
+  }, [patientId]);
 
   // ——— Navegação entre nós ———
 
@@ -102,13 +123,14 @@ export default function ConversaPage() {
       shownAt.current = Date.now();
       logEvent({
         sessionId,
+        patientId,
         type: "pergunta_apresentada",
         category: n.category,
         question: n.question,
       });
       void speak(n.question);
     },
-    [sessionId, speak]
+    [sessionId, patientId, speak]
   );
 
   const toConfirm = useCallback(
@@ -135,6 +157,18 @@ export default function ConversaPage() {
             category: n.category,
             rejected: rejectedLog.current,
             path: pathLog.current.slice(-8),
+            // Perfil do paciente: adapta estilo e vocabulário das sugestões.
+            // A confirmação por gesto continua obrigatória — perfil não é
+            // consentimento.
+            profile: {
+              name: patientName || undefined,
+              speechStyle: settings[PATIENT_SETTING_KEYS.speechStyle] || undefined,
+              avoidedTopics: settings[PATIENT_SETTING_KEYS.avoidedTopics] || undefined,
+              preferredExpressions: preferredExpressions
+                .slice(0, 12)
+                .map((e) => e.spokenText),
+              people: people.map((p) => ({ name: p.name, relation: p.relation })),
+            },
           }),
         });
         if (!res.ok) return false;
@@ -145,6 +179,7 @@ export default function ConversaPage() {
         shownAt.current = Date.now();
         logEvent({
           sessionId,
+          patientId,
           type: "opcao_apresentada",
           category: n.category,
           question: n.question,
@@ -159,7 +194,7 @@ export default function ConversaPage() {
         setAiLoading(false);
       }
     },
-    [sessionId, speak]
+    [sessionId, patientId, speak, patientName, settings, preferredExpressions, people]
   );
 
   const goBackToPrevious = useCallback(() => {
@@ -183,6 +218,7 @@ export default function ConversaPage() {
         // Nem as sugestões da IA serviram — devolve a direção ao paciente
         logEvent({
           sessionId,
+          patientId,
           type: "opcao_apresentada",
           category: n.category,
           question: n.question,
@@ -198,6 +234,7 @@ export default function ConversaPage() {
         shownAt.current = Date.now();
         logEvent({
           sessionId,
+          patientId,
           type: "opcao_apresentada",
           category: n.category,
           question: n.question,
@@ -211,6 +248,7 @@ export default function ConversaPage() {
         if (!gotAI) {
           logEvent({
             sessionId,
+            patientId,
             type: "opcao_apresentada",
             category: n.category,
             question: n.question,
@@ -220,7 +258,7 @@ export default function ConversaPage() {
         }
       }
     },
-    [batch, effectiveOptions, aiOptions, sessionId, speak, trySuggestions, goBackToPrevious]
+    [batch, effectiveOptions, aiOptions, sessionId, patientId, speak, trySuggestions, goBackToPrevious]
   );
 
   // ——— Gestos ———
@@ -230,6 +268,7 @@ export default function ConversaPage() {
       if (node.kind !== "pergunta") return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: node.category,
         question: node.question,
@@ -244,7 +283,7 @@ export default function ConversaPage() {
         toConfirm(compose(target.phrase, ctx), node.category, Boolean(node.sensitive), node.id);
       }
     },
-    [node, batch, ctx, sessionId, enterNode, toConfirm]
+    [node, batch, ctx, sessionId, patientId, enterNode, toConfirm]
   );
 
   const onOptionGesture = useCallback(
@@ -255,6 +294,7 @@ export default function ConversaPage() {
       if (!option || marks[idx]) return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: node.category,
         question: option.label,
@@ -289,7 +329,7 @@ export default function ConversaPage() {
         void advanceBatch(node);
       }
     },
-    [node, batchOptions, aiOptions, marks, ctx, batch, sessionId, enterNode, toConfirm, advanceBatch]
+    [node, batchOptions, aiOptions, marks, ctx, batch, sessionId, patientId, enterNode, toConfirm, advanceBatch]
   );
 
   const onConfirmGesture = useCallback(
@@ -297,6 +337,7 @@ export default function ConversaPage() {
       if (!confirm) return;
       logEvent({
         sessionId,
+        patientId,
         type: "gesto",
         category: confirm.category,
         question:
@@ -315,26 +356,38 @@ export default function ConversaPage() {
         }
         logEvent({
           sessionId,
+          patientId,
           type: "confirmacao",
           category: confirm.category,
           detail: confirm.fromAI ? `${confirm.phrase} (sugestão IA)` : confirm.phrase,
         });
         void saveMessage({
           sessionId,
+          patientId,
           text: confirm.phrase,
           category: confirm.category,
           sensitive: confirm.sensitive,
           status: "confirmada",
           confirmations: confirm.sensitive ? 2 : 1,
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
         });
         setPhase("done");
-        void speak(confirm.phrase);
+        // Frase confirmada em nome do PACIENTE: sai na voz clonada dele
+        // (quando configurada) — a condução da conversa segue na voz da Helo.
+        void speak(confirm.phrase, {
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
+          patientId,
+          mode: "conversa",
+        });
         return;
       }
 
       if (g === "talvez") {
         logEvent({
           sessionId,
+          patientId,
           type: "reformulacao",
           category: confirm.category,
           detail: confirm.phrase,
@@ -348,29 +401,49 @@ export default function ConversaPage() {
       // ✊ descartar — nada é dito em nome do paciente
       logEvent({
         sessionId,
+        patientId,
         type: "descarte",
         category: confirm.category,
         detail: confirm.phrase,
       });
       void saveMessage({
         sessionId,
+        patientId,
         text: confirm.phrase,
         category: confirm.category,
         sensitive: confirm.sensitive,
         status: "descartada",
+        speakerRole: "patient",
+        confirmationStatus: "rejected",
       });
       void speak("Mensagem descartada.");
       setConfirm(null);
       enterNode(START_NODE);
     },
-    [confirm, sessionId, speak, enterNode]
+    [confirm, sessionId, patientId, speak, enterNode]
   );
 
   // ——— Controles do assistente ———
 
   const begin = useCallback(async () => {
-    localStorage.setItem("helo.operator", operator);
-    const id = await startSession("conversa", operator || undefined);
+    if (!user) {
+      redirectToLogin();
+      return;
+    }
+    if (patientId == null) {
+      setStartError("Nenhum paciente selecionado. Escolha um paciente no Dashboard.");
+      return;
+    }
+    setStartError(null);
+    setStarting(true);
+    // A identidade do operador é resolvida no servidor a partir do cookie de
+    // sessão — aqui só vai o modo e o paciente ativo.
+    const { id, error } = await startSession("conversa", patientId);
+    setStarting(false);
+    if (id == null) {
+      setStartError(error ?? "Não foi possível iniciar a conversa. Tente novamente.");
+      return;
+    }
     setSessionId(id);
     setPhase("node");
     setNodeId(START_NODE);
@@ -384,6 +457,7 @@ export default function ConversaPage() {
     shownAt.current = Date.now();
     logEvent({
       sessionId: id,
+      patientId,
       type: "pergunta_apresentada",
       category: "geral",
       question: flow[START_NODE].question,
@@ -391,7 +465,7 @@ export default function ConversaPage() {
     // Vocativo com o nome do paciente: "Dr. Fábio, o que você quer comunicar?"
     const q = flow[START_NODE].question;
     void speak(patientName ? `${patientName}, ${q.charAt(0).toLowerCase()}${q.slice(1)}` : q);
-  }, [operator, patientName, speak]);
+  }, [user, patientName, patientId, speak]);
 
   const repeat = useCallback(() => {
     if (phase === "confirm" && confirm) {
@@ -404,24 +478,25 @@ export default function ConversaPage() {
   const uncertain = useCallback(() => {
     logEvent({
       sessionId,
+      patientId,
       type: "gesto_incerto",
       category: node.category,
       question: phase === "confirm" ? confirm?.phrase : node.question,
     });
     void speak("Sem problema. Vou repetir.");
     setTimeout(repeat, 400);
-  }, [sessionId, node, phase, confirm, speak, repeat]);
+  }, [sessionId, patientId, node, phase, confirm, speak, repeat]);
 
   const togglePause = useCallback(() => {
     if (paused) {
-      logEvent({ sessionId, type: "retomada" });
+      logEvent({ sessionId, patientId, type: "retomada" });
       setPaused(false);
       shownAt.current = Date.now();
     } else {
-      logEvent({ sessionId, type: "pausa" });
+      logEvent({ sessionId, patientId, type: "pausa" });
       setPaused(true);
     }
-  }, [paused, sessionId]);
+  }, [paused, sessionId, patientId]);
 
   const goBack = useCallback(() => {
     const prev = history[history.length - 1];
@@ -468,23 +543,35 @@ export default function ConversaPage() {
     : batchOptions.map((o) => ({ label: o.label, ai: false }));
 
   return (
-    <div className="relative flex min-h-dvh flex-col overflow-hidden">
-      <Backdrop />
-
-      <TopBar
-        right={
-          <span className="rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft">
-            voz: {engine === "elevenlabs" ? "ElevenLabs" : "navegador"}
-          </span>
-        }
-      />
-
-      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-8">
-        {phase === "intro" && <Intro operator={operator} setOperator={setOperator} onBegin={begin} />}
-
+    <div className="relative flex flex-1 flex-col">
+      {/* Fase 6 — conversa ativa: um véu leve cobre o palco e a pergunta
+          flutua DIRETO sobre o orbe Conversar, que segue central, visível e
+          animado através da camada. Só o conteúdo troca (com fade) — o palco
+          nunca desmonta. A intro mantém o painel translúcido da Fase 5. */}
+      {phase !== "intro" && <OverlayVeil />}
+      <main className="relative flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-6">
+        {phase === "intro" ? (
+          <OverlayPanel label="Conversa guiada" variant="imersivo">
+            <Intro
+              user={user}
+              loading={authLoading || patientLoading}
+              patientName={patientName}
+              hasPatient={patientId != null}
+              starting={starting}
+              error={startError}
+              onBegin={begin}
+              onSwitchOperator={logout}
+            />
+          </OverlayPanel>
+        ) : (
+        <section
+          key={`${phase}-${nodeId}-${batch}-${aiOptions ? "ai" : "curadas"}`}
+          aria-label="Conversa guiada"
+          className="fade-rise pointer-events-auto mx-auto w-full max-w-3xl py-8"
+        >
         {phase === "node" && node.kind === "pergunta" && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-12">
-            <h1 className="text-center text-5xl font-medium tracking-tight sm:text-6xl">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-12">
+            <h1 className="text-center text-4xl font-medium tracking-tight sm:text-5xl">
               {node.question}
             </h1>
             <GestureTriplet onGesture={onQuestionGesture} disabled={paused} />
@@ -492,7 +579,7 @@ export default function ConversaPage() {
         )}
 
         {phase === "node" && node.kind === "opcoes" && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-8">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-8">
             <h1 className="text-center text-3xl font-medium tracking-tight text-ink-soft sm:text-4xl">
               {node.question}
             </h1>
@@ -553,7 +640,7 @@ export default function ConversaPage() {
         )}
 
         {phase === "confirm" && confirm && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-10">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-10">
             <p className="text-sm font-semibold uppercase tracking-widest text-ink-soft">
               {confirm.step === 2 ? "Confirmação reforçada — assunto importante" : "Confirmar mensagem"}
               {confirm.fromAI && " · frase sugerida por IA"}
@@ -574,8 +661,7 @@ export default function ConversaPage() {
         )}
 
         {phase === "done" && confirm && (
-          <section aria-live="polite" className="flex w-full max-w-3xl flex-col items-center gap-8">
-            <Orb palette="coral" breathe className="h-28 w-28" />
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-8">
             <blockquote className="text-center text-4xl font-medium leading-snug tracking-tight sm:text-5xl">
               “{confirm.phrase}”
             </blockquote>
@@ -583,7 +669,14 @@ export default function ConversaPage() {
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => void speak(confirm.phrase)}
+                onClick={() =>
+                  void speak(confirm.phrase, {
+                    speakerRole: "patient",
+                    confirmationStatus: "confirmed",
+                    patientId,
+                    mode: "conversa",
+                  })
+                }
                 className="rounded-full border border-line bg-card px-6 py-3 font-medium hover:border-ink-mute"
               >
                 🔊 Repetir
@@ -594,7 +687,7 @@ export default function ConversaPage() {
                   setConfirm(null);
                   enterNode(START_NODE);
                 }}
-                className="rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black"
+                className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
               >
                 Continuar a conversa
               </button>
@@ -608,10 +701,11 @@ export default function ConversaPage() {
             </div>
           </section>
         )}
-      </main>
+        </section>
+        )}
 
       {phase !== "intro" && phase !== "done" && (
-        <footer className="no-print relative z-10 flex flex-wrap items-center justify-center gap-2 px-6 pb-6">
+        <footer className="no-print pointer-events-auto flex flex-wrap items-center justify-center gap-2 px-6 py-4">
           <Control onClick={repeat} disabled={speaking}>
             🔊 Repetir
           </Control>
@@ -629,14 +723,15 @@ export default function ConversaPage() {
           </Link>
         </footer>
       )}
+      </main>
 
+      {/* Pausa cobre só a área de conteúdo — os orbes seguem visíveis acima */}
       {paused && (
         <div
           role="dialog"
           aria-label="Conversa pausada"
-          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 bg-cream/90 backdrop-blur-sm"
+          className="pointer-events-auto absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 rounded-3xl bg-cream/70 backdrop-blur-md"
         >
-          <Orb palette="ceu" breathe className="h-32 w-32" />
           <p className="text-3xl font-medium">Conversa pausada</p>
           <p className="max-w-md text-center text-ink-soft">
             O silêncio também é uma resposta. Retome quando o paciente quiser.
@@ -644,7 +739,7 @@ export default function ConversaPage() {
           <button
             type="button"
             onClick={togglePause}
-            className="rounded-full bg-ink px-8 py-4 text-lg font-medium text-white hover:bg-black"
+            className="rounded-full bg-accent px-8 py-4 text-lg font-medium text-on-accent hover:bg-accent-strong"
           >
             ▶ Retomar conversa
           </button>
@@ -654,19 +749,37 @@ export default function ConversaPage() {
   );
 }
 
+/** Rótulo humano do papel — profissionais mostram a especialidade. */
+function operatorRoleLabel(user: AppUser): string {
+  if (user.role === "profissional" && user.professionalType) {
+    return PROFESSIONAL_TYPE_LABELS[user.professionalType];
+  }
+  return ROLE_LABELS[user.role];
+}
+
 function Intro({
-  operator,
-  setOperator,
+  user,
+  loading,
+  patientName,
+  hasPatient,
+  starting,
+  error,
   onBegin,
+  onSwitchOperator,
 }: {
-  operator: string;
-  setOperator: (v: string) => void;
+  user: AppUser | null;
+  loading: boolean;
+  patientName: string;
+  hasPatient: boolean;
+  starting: boolean;
+  error: string | null;
   onBegin: () => void;
+  onSwitchOperator: () => void;
 }) {
   const gestures = useGestures();
+  const ready = !loading && user != null && hasPatient;
   return (
-    <section className="flex w-full max-w-xl flex-col items-center gap-8 text-center">
-      <Orb palette="coral" breathe className="h-32 w-32" />
+    <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-8 text-center">
       <div>
         <h1 className="text-4xl font-medium tracking-tight">Iniciar conversa</h1>
         <p className="mt-3 text-lg text-ink-soft">
@@ -679,23 +792,66 @@ function Intro({
         <span>{gestures.talvez.emoji} Talvez</span>
         <span>{gestures.nao.emoji} Não</span>
       </div>
-      <label className="flex w-full flex-col gap-2 text-left">
-        <span className="text-sm font-medium text-ink-soft">Quem está operando o Helo?</span>
-        <input
-          type="text"
-          value={operator}
-          onChange={(e) => setOperator(e.target.value)}
-          placeholder="Nome do assistente ou familiar"
-          className="w-full rounded-2xl border border-line bg-card px-5 py-4 text-lg outline-none focus:border-ink-mute"
-        />
-      </label>
+
+      {/* Identificação somente leitura: operador = usuário autenticado,
+          paciente = seleção feita no Dashboard. Nada é digitado aqui. */}
+      {loading ? (
+        <p className="text-ink-mute animate-pulse">Identificando operador…</p>
+      ) : user ? (
+        <div className="flex w-full flex-col gap-4 sm:flex-row sm:justify-center sm:gap-8">
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-ink-mute">
+              Você está acompanhando como:
+            </span>
+            <span className="text-xl font-medium">{user.name}</span>
+            <span className="text-sm text-ink-soft">{operatorRoleLabel(user)}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-ink-mute">Paciente:</span>
+            <span className="text-xl font-medium">
+              {hasPatient ? patientName || "Paciente sem nome" : "—"}
+            </span>
+            {!hasPatient && (
+              <span className="text-sm text-ink-soft">
+                Selecione um paciente no{" "}
+                <Link href="/dashboard" className="underline">
+                  Dashboard
+                </Link>
+                .
+              </span>
+            )}
+          </div>
+        </div>
+      ) : (
+        <p className="text-ink-soft" role="alert">
+          É preciso entrar na plataforma para operar o Helo. Redirecionando para
+          o login…
+        </p>
+      )}
+
+      {error && (
+        <p role="alert" className="w-full rounded-2xl bg-nao-soft px-5 py-3 text-nao">
+          {error}
+        </p>
+      )}
+
       <button
         type="button"
         onClick={onBegin}
-        className="rounded-full bg-ink px-10 py-4 text-lg font-medium text-white transition-transform hover:scale-[1.02] hover:bg-black"
+        disabled={!ready || starting}
+        className="rounded-full bg-accent px-10 py-4 text-lg font-medium text-on-accent transition-transform hover:scale-[1.02] hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Começar
+        {starting ? "Iniciando…" : "Começar"}
       </button>
+      {user && (
+        <button
+          type="button"
+          onClick={onSwitchOperator}
+          className="text-sm text-ink-mute underline-offset-4 hover:underline"
+        >
+          Trocar operador (sair e entrar com outra conta)
+        </button>
+      )}
       <p className="text-sm text-ink-mute">
         O Helo nunca fala pelo paciente. Toda mensagem é confirmada antes de ser comunicada.
       </p>
@@ -721,15 +877,5 @@ function Control({
     >
       {children}
     </button>
-  );
-}
-
-function Backdrop() {
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-[0.14]">
-      <Orb palette="lilas" className="absolute left-[8%] top-[22%] h-72 w-72 blur-[2px]" />
-      <Orb palette="coral" className="absolute left-1/2 top-[16%] h-96 w-96 -translate-x-1/2 blur-[2px]" />
-      <Orb palette="oliva" className="absolute right-[6%] top-[24%] h-72 w-72 blur-[2px]" />
-    </div>
   );
 }

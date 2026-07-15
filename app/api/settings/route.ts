@@ -1,12 +1,70 @@
-import { getSettings, setSettings } from "@/lib/store";
+import { getPatientSettings, setPatientSettings } from "@/lib/store";
+import { requirePatientAccess } from "@/lib/auth";
+import { PATIENT_SETTING_KEYS, VOICE_SETTING_KEYS } from "@/lib/defaults";
+import type { Permission } from "@/lib/access-types";
 
-export async function GET() {
-  const settings = await getSettings();
+// Configurações do paciente (nome, gestos, estilo de fala…).
+// Sempre com escopo de patientId — não existe mais configuração global.
+// Escrita exige a permissão da área correspondente:
+//   gestos → editGestures · demais → editProfile.
+//
+// VOZ não passa por aqui (nem leitura do id técnico, nem escrita):
+//   - clone do paciente → /api/admin/patient-voice (Admin);
+//   - fonte da voz do paciente → /api/patient-voice-source (permissão
+//     selectPatientVoiceSource);
+//   - estado visível (status, nomes) → /api/voices.
+// Isso garante que nenhum voiceId ElevenLabs seja gravado ou lido pelo
+// fluxo genérico de settings, mesmo por requisição direta.
+
+function permissionForKey(key: string): Permission {
+  if (
+    key === PATIENT_SETTING_KEYS.gestureSim ||
+    key === PATIENT_SETTING_KEYS.gestureTalvez ||
+    key === PATIENT_SETTING_KEYS.gestureNao
+  ) {
+    return "editGestures";
+  }
+  return "editProfile";
+}
+
+export async function GET(request: Request) {
+  const patientId = Number(new URL(request.url).searchParams.get("patientId"));
+  if (!patientId) {
+    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+  }
+  // Leitura exige vínculo ativo — mínimo para operar a Helo.
+  const auth = await requirePatientAccess(request, patientId);
+  if (auth instanceof Response) return auth;
+  const settings = await getPatientSettings(patientId);
+  // O voiceId técnico do clone nunca sai para o cliente; o restante do
+  // estado de voz (existe clone? qual fonte?) vem de /api/voices.
+  delete settings[PATIENT_SETTING_KEYS.voiceId];
   return Response.json(settings);
 }
 
 export async function POST(request: Request) {
-  const updates = (await request.json()) as Record<string, string>;
-  await setSettings(updates);
+  const { patientId, ...updates } = (await request.json()) as {
+    patientId?: number;
+  } & Record<string, string>;
+  if (!patientId) {
+    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+  }
+  const keys = Object.keys(updates);
+  if (keys.some((k) => VOICE_SETTING_KEYS.includes(k))) {
+    return Response.json(
+      { error: "configuração de voz só pelas rotas dedicadas de voz" },
+      { status: 403 }
+    );
+  }
+  const needed = new Set(keys.map((k) => permissionForKey(k)));
+  for (const permission of needed) {
+    const auth = await requirePatientAccess(
+      request,
+      Number(patientId),
+      permission
+    );
+    if (auth instanceof Response) return auth;
+  }
+  await setPatientSettings(Number(patientId), updates as Record<string, string>);
   return Response.json({ ok: true });
 }

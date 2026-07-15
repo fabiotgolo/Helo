@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// A Helo não expõe o Firestore diretamente ao navegador. Toda leitura e
+// escrita, inclusive em feedbackRequests/{id}/messages, passa pelas rotas
+// autenticadas do servidor. Elas verificam sessão, papel, autoria, a
+// visibilidade e o estado da conversa antes de usar o Admin SDK; portanto,
+// cliente algum consegue ler mensagens privadas, forjar senderUserId/
+// senderRole, marcar resolução ou gravar mensagens após o encerramento.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

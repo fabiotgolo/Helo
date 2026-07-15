@@ -21,20 +21,25 @@ export async function saveMessage(m: HeloMessage): Promise<void> {
   }).catch(() => {});
 }
 
+// O operador NÃO é enviado pelo cliente: o servidor deriva operatorId,
+// nome e papel da sessão autenticada (cookie) em /api/sessions.
 export async function startSession(
   mode: string,
-  operator?: string
-): Promise<number | null> {
+  patientId?: number | null
+): Promise<{ id: number | null; error: string | null }> {
   try {
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, operator }),
+      body: JSON.stringify({ mode, patientId }),
     });
-    const data = (await res.json()) as { id: number };
-    return data.id;
+    const data = (await res.json()) as { id?: number; error?: string };
+    if (!res.ok || !data.id) {
+      return { id: null, error: data.error ?? "falha ao criar a sessão" };
+    }
+    return { id: data.id, error: null };
   } catch {
-    return null;
+    return { id: null, error: "sem conexão com o servidor" };
   }
 }
 
