@@ -15,10 +15,7 @@
 
 # next.js
 /.next/
-/.next-preview/
-/.next-verify/
-/.next-check/
-/.next-sair/
+/.next-*/
 /out/
 
 # production
