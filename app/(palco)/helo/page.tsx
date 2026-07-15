@@ -5,7 +5,14 @@ import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import type { Conversation as ElevenLabsConversation } from "@elevenlabs/client";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 import { GestureTriplet } from "@/components/ui";
+import { GESTURE_SEMANTIC_INTENTS, GESTURE_SEMANTIC_MESSAGES } from "@/lib/gestures";
 import { useHelo } from "@/lib/helo-state";
+import { usePatient } from "@/lib/patient";
+import {
+  endSession as endLoggedSession,
+  logEvent,
+  startSession as startLoggedSession,
+} from "@/lib/log";
 import type { Gesture } from "@/lib/types";
 
 type SessionError = string | null;
@@ -14,6 +21,7 @@ type ActivitySource = "control" | "gesture" | "typing" | "field-focus" | "heartb
 const ACTIVITY_THROTTLE_MS = 3000;
 const ACTIVITY_HEARTBEAT_MS = 15000;
 const ACTIVE_WINDOW_MS = 60000;
+const GESTURE_RESPONSE_LOCK_MS = 1200;
 const ACTIVITY_DEBUG = process.env.NODE_ENV !== "production";
 
 type ElevenLabsErrorEvent = {
@@ -57,12 +65,14 @@ function isBenignLiveKitDataChannelError(value: unknown) {
 
 function HeloSession({ onError }: { onError: (message: string) => void }) {
   const { stop, setAgentAmplitude } = useHelo();
+  const { patientId } = usePatient();
   const {
     startSession,
     endSession,
     status,
     isSpeaking,
     isListening,
+    sendUserMessage,
     sendUserActivity,
     getOutputByteFrequencyData,
   } = useConversation({
@@ -75,12 +85,16 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
   const [noteFocused, setNoteFocused] = useState(false);
   const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
   const [interruptionDetected, setInterruptionDetected] = useState(false);
+  const [gestureResponsePending, setGestureResponsePending] = useState(false);
   const startedRef = useRef(false);
   const startingRef = useRef(false);
   const connectedRef = useRef(false);
   const mountedRef = useRef(true);
   const activeUntilRef = useRef(0);
   const lastActivitySentAtRef = useRef(0);
+  const gestureResponseLockedRef = useRef(false);
+  const gestureResponseUnlockRef = useRef<number | null>(null);
+  const loggedSessionIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -111,6 +125,15 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
       lastActivitySentAtRef.current = 0;
     }
   }, [status]);
+
+  useEffect(() => {
+    return () => {
+      if (gestureResponseUnlockRef.current != null) {
+        window.clearTimeout(gestureResponseUnlockRef.current);
+      }
+      gestureResponseLockedRef.current = false;
+    };
+  }, []);
 
   const logActivity = useCallback((message: string, source?: ActivitySource) => {
     if (!ACTIVITY_DEBUG) return;
@@ -175,6 +198,8 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     return () => {
       setAgentAmplitude(null);
       activeUntilRef.current = 0;
+      endLoggedSession(loggedSessionIdRef.current);
+      loggedSessionIdRef.current = null;
       if (startedRef.current) endSession();
     };
   }, [endSession, setAgentAmplitude]);
@@ -200,8 +225,15 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
       if (!response.ok || !data?.conversationToken) {
         throw new Error(data?.error ?? "Não foi possível preparar a conversa.");
       }
+      if (patientId != null) {
+        const loggedSession = await startLoggedSession("helo", patientId);
+        loggedSessionIdRef.current = loggedSession.id;
+      }
       startedRef.current = true;
-      startSession({ conversationToken: data.conversationToken, connectionType: "webrtc" });
+      startSession({
+        conversationToken: data.conversationToken,
+        connectionType: "webrtc",
+      });
     } catch (error) {
       startedRef.current = false;
       const name = error instanceof DOMException ? error.name : "";
@@ -226,6 +258,7 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     setLastActivityAt,
     setLastGesture,
     setStarting,
+    patientId,
     startSession,
     status,
     stop,
@@ -233,6 +266,14 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
 
   const end = useCallback(() => {
     activeUntilRef.current = 0;
+    gestureResponseLockedRef.current = false;
+    setGestureResponsePending(false);
+    if (gestureResponseUnlockRef.current != null) {
+      window.clearTimeout(gestureResponseUnlockRef.current);
+      gestureResponseUnlockRef.current = null;
+    }
+    endLoggedSession(loggedSessionIdRef.current);
+    loggedSessionIdRef.current = null;
     if (status !== "disconnected" || startedRef.current) endSession();
     startedRef.current = false;
     setAgentAmplitude(null);
@@ -240,10 +281,44 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
 
   const markGesture = useCallback(
     (gesture: Gesture) => {
+      if (!connectedRef.current || gestureResponseLockedRef.current) return;
+      gestureResponseLockedRef.current = true;
+      setGestureResponsePending(true);
+      if (gestureResponseUnlockRef.current != null) {
+        window.clearTimeout(gestureResponseUnlockRef.current);
+      }
+      gestureResponseUnlockRef.current = window.setTimeout(() => {
+        gestureResponseLockedRef.current = false;
+        gestureResponseUnlockRef.current = null;
+        setGestureResponsePending(false);
+      }, GESTURE_RESPONSE_LOCK_MS);
+
       setLastGesture(gesture);
       sendActivity("gesture", { immediate: true, extendActiveWindow: true });
+      try {
+        // `user_message` é a via oficial do SDK para uma resposta do usuário.
+        // O texto preserva a autoria observada e a intenção, não o emoji visual.
+        sendUserMessage(GESTURE_SEMANTIC_MESSAGES[gesture]);
+        if (patientId != null) {
+          logEvent({
+            sessionId: loggedSessionIdRef.current,
+            patientId,
+            type:
+              gesture === "sim"
+                ? "confirmacao"
+                : gesture === "talvez"
+                  ? "reformulacao"
+                  : "descarte",
+            category: "helo",
+            gesture,
+            detail: `semanticIntent=${GESTURE_SEMANTIC_INTENTS[gesture]}; inputMethod=gesture`,
+          });
+        }
+      } catch {
+        onError("Não foi possível registrar a resposta por gesto. Tente novamente.");
+      }
     },
-    [sendActivity, setLastGesture]
+    [onError, patientId, sendActivity, sendUserMessage, setLastGesture]
   );
 
   const handlePanelPointerDown = useCallback(
@@ -306,10 +381,18 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
       {status === "connected" && (
         <section className="flex w-full flex-col items-center gap-4 pt-2" aria-label="Atividade do paciente">
           <div data-helo-gesture-controls>
-            <GestureTriplet onGesture={markGesture} size="compacto" />
+            <GestureTriplet
+              onGesture={markGesture}
+              size="compacto"
+              disabled={gestureResponsePending}
+            />
           </div>
           <div className="min-h-5 text-sm text-ink-soft" aria-live="polite">
-            {lastGesture ? "Gesto registrado como atividade." : lastActivityLabel}
+            {gestureResponsePending
+              ? "Registrando resposta..."
+              : lastGesture
+              ? `Resposta registrada: ${GESTURE_SEMANTIC_INTENTS[lastGesture]}.`
+              : lastActivityLabel}
           </div>
           <label className="flex w-full max-w-md flex-col gap-2 text-left text-sm text-ink-soft">
             Observação em andamento

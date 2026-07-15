@@ -11,6 +11,24 @@ import { usePatient } from "@/lib/patient";
 
 export type GestureInfo = { emoji: string; label: string; hint: string };
 export type GestureMap = Record<Gesture, GestureInfo>;
+export type GestureSemanticIntent = "confirm" | "reformulate" | "reject";
+
+// O contrato conversacional é estável e independente do emoji escolhido pelo
+// paciente. O Agent recebe esta intenção, nunca precisa inferi-la do símbolo.
+export const GESTURE_SEMANTIC_INTENTS: Record<Gesture, GestureSemanticIntent> = {
+  sim: "confirm",
+  talvez: "reformulate",
+  nao: "reject",
+};
+
+export const GESTURE_SEMANTIC_MESSAGES: Record<Gesture, string> = {
+  sim:
+    "Resposta observada do paciente por gesto: intenção semântica confirm. O paciente confirmou positivamente a pergunta ou proposta atual. Esta resposta foi registrada por um cuidador ou profissional na interface.",
+  talvez:
+    "Resposta observada do paciente por gesto: intenção semântica reformulate. O paciente indicou que não é bem assim e solicita reformulação, esclarecimento ou outra alternativa para a pergunta ou proposta atual. Esta resposta foi registrada por um cuidador ou profissional na interface.",
+  nao:
+    "Resposta observada do paciente por gesto: intenção semântica reject. O paciente rejeitou a pergunta ou proposta atual e não confirmou nem autorizou prosseguir. Esta resposta foi registrada por um cuidador ou profissional na interface.",
+};
 
 // Chaves usadas no settings do paciente (patients/{id}/settings).
 export const GESTURE_EMOJI_KEYS: Record<Gesture, string> = {
