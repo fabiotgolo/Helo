@@ -36,6 +36,9 @@ Copie `.env.example` para `.env` e preencha:
 
 - `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` — síntese de voz. Sem chave, o
   app usa a voz local do navegador em pt-BR.
+- `ELEVENLABS_HELO_AGENT_ID` — Agent privado (`agent_...`) usado somente pelo
+  Orb Helo. A chave da API fica no servidor; o navegador recebe apenas um
+  conversation token WebRTC temporário.
 - `ANTHROPIC_API_KEY` — habilita as sugestões dinâmicas de opções por IA. Sem
   chave, o app funciona apenas com a árvore de conversa curada.
 
@@ -66,6 +69,7 @@ Segredos (uma vez):
 ```bash
 firebase apphosting:secrets:set ELEVENLABS_API_KEY --project helo-app-7fbf8
 firebase apphosting:secrets:set ELEVENLABS_VOICE_ID --project helo-app-7fbf8
+firebase apphosting:secrets:set ELEVENLABS_HELO_AGENT_ID --project helo-app-7fbf8
 firebase apphosting:secrets:set ANTHROPIC_API_KEY --project helo-app-7fbf8
 ```
 
@@ -93,6 +97,8 @@ As credenciais do Firestore vêm automaticamente da conta de serviço do runtime
   protegida), mensagens, rede de pessoas e configurações. As agregações do
   dashboard são feitas em JS no fuso de São Paulo.
 - `app/api/tts` — síntese ElevenLabs com fallback para voz local.
+- `app/api/helo/conversation-token` — token temporário WebRTC de um Agent
+  privado, protegido pela sessão autenticada.
 - `app/api/suggest` — sugestões dinâmicas de opções via Claude, limitadas a 3.
 
 ## Contas, vínculos e permissões

@@ -17,7 +17,7 @@ import { useSpeech, type SpeakResult } from "@/lib/useSpeech";
 import type { ActiveSpeaker, SpeakOptions, VoiceSource } from "@/lib/voice";
 import type { OrbPalette } from "@/components/ui";
 
-export type HeloMode = "conversar" | "rotina" | "emergencia" | "atividades";
+export type HeloMode = "conversar" | "rotina" | "emergencia" | "atividades" | "helo";
 
 export interface HeloModeInfo {
   id: HeloMode;
@@ -65,6 +65,15 @@ export const HELO_MODES: Record<HeloMode, HeloModeInfo> = {
     href: "/atividades",
     spoken: "Atividades: experiências pensadas especialmente para você.",
   },
+  helo: {
+    id: "helo",
+    title: "Helo",
+    description: "Converse por voz com a inteligência conversacional da Helo.",
+    palette: "coral",
+    href: "/helo",
+    // A saudação pertence ao Agent configurado na ElevenLabs, não ao cliente.
+    spoken: "",
+  },
 };
 
 // A ordem preserva o trio original nos mesmos lugares (slots ±1 do palco);
@@ -74,6 +83,7 @@ export const MODE_ORDER: HeloMode[] = [
   "conversar",
   "emergencia",
   "atividades",
+  "helo",
 ];
 
 // Apresentação inicial da Helo — falada uma única vez, ao abrir o app
@@ -105,6 +115,8 @@ interface HeloContextValue {
   activeSpeaker: ActiveSpeaker;
   activeVoiceSource: VoiceSource;
   getAmplitude: () => number;
+  /** Alimenta o palco com o áudio real do ElevenAgents enquanto a sessão vive. */
+  setAgentAmplitude: (amplitude: number | null) => void;
 }
 
 const HeloContext = createContext<HeloContextValue | null>(null);
@@ -120,6 +132,7 @@ export function HeloProvider({ children }: { children: ReactNode }) {
   // o React pode re-executá-los (StrictMode/render concorrente), e um stop()
   // repetido dentro do updater interrompia a fala recém-iniciada do modo novo.
   const activeModeRef = useRef<HeloMode>("conversar");
+  const agentAmplitudeRef = useRef<number | null>(null);
 
   const setActiveMode = useCallback(
     (mode: HeloMode) => {
@@ -163,12 +176,20 @@ export function HeloProvider({ children }: { children: ReactNode }) {
       // socorro em voz alta. Não atrasa o socorro — os botões da página já
       // estão ativos, e qualquer toque numa frase chama stop() e interrompe o
       // anúncio na hora (ver speak() em useSpeech).
-      if (opts?.silent) stop();
+      if (opts?.silent || mode === "helo") stop();
       else void speak(HELO_MODES[mode].spoken);
       router.push(HELO_MODES[mode].href);
     },
     [setActiveMode, speak, stop, router]
   );
+
+  const setAgentAmplitude = useCallback((amplitude: number | null) => {
+    agentAmplitudeRef.current = amplitude;
+  }, []);
+
+  const getStageAmplitude = useCallback(() => {
+    return agentAmplitudeRef.current ?? getAmplitude();
+  }, [getAmplitude]);
 
   const value = useMemo<HeloContextValue>(
     () => ({
@@ -184,9 +205,10 @@ export function HeloProvider({ children }: { children: ReactNode }) {
       engine,
       activeSpeaker,
       activeVoiceSource,
-      getAmplitude,
+      getAmplitude: getStageAmplitude,
+      setAgentAmplitude,
     }),
-    [activeMode, setActiveMode, enterMode, playIntro, speak, prime, stop, speaking, engine, activeSpeaker, activeVoiceSource, getAmplitude]
+    [activeMode, setActiveMode, enterMode, playIntro, speak, prime, stop, speaking, engine, activeSpeaker, activeVoiceSource, getStageAmplitude, setAgentAmplitude]
   );
 
   return <HeloContext.Provider value={value}>{children}</HeloContext.Provider>;
