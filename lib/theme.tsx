@@ -105,6 +105,12 @@ const userKey = (userId: string) => `helo-theme:user:${userId}`;
 const SCALES_LAST_KEY = "helo-theme:scales-last"; // idem, para o anti-flash
 const SCALES_ANON_KEY = "helo-theme:scales-anon";
 const scalesUserKey = (userId: string) => `helo-theme:scales-user:${userId}`;
+// Escolha de tema feita EXPLICITAMENTE enquanto ANÔNIMO, aguardando o 1º
+// login para ser gravada no perfil. Regra central: autenticar não pode apagar
+// nem sobrescrever a escolha visual feita antes do login. Sobrevive ao logout
+// (prefixo "helo-theme"); é CONSUMIDA (apagada) na primeira autenticação, para
+// nunca vazar de um usuário para outro no mesmo dispositivo.
+const PENDING_KEY = "helo-theme:pending";
 
 function safeGet(key: string): string | null {
   try {
@@ -118,6 +124,13 @@ function safeSet(key: string, value: string): void {
     localStorage.setItem(key, value);
   } catch {
     /* armazenamento indisponível — segue só em memória */
+  }
+}
+function safeRemove(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* armazenamento indisponível — nada a limpar */
   }
 }
 
@@ -217,6 +230,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       setThemeState(id);
       applyTheme(id, scalesRef.current);
       persistLocal(id, scalesRef.current);
+      // Escolha explícita ainda ANÔNIMO: marca como pendente para sobreviver ao
+      // próximo login e virar a preferência do perfil — em vez de a preferência
+      // remota (possivelmente antiga) sobrescrevê-la assim que autenticar.
+      // Autenticado, o pushToServer já persiste no perfil; nada a marcar.
+      if (!userIdRef.current) safeSet(PENDING_KEY, id);
       pushToServer({ theme: id, fontScales: scalesRef.current });
     },
     [persistLocal, pushToServer]
@@ -272,11 +290,26 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             let scales: FontScales;
             if (user?.id) {
               userIdRef.current = user.id;
-              const server = user.themePreference;
-              const local = safeGet(userKey(user.id));
-              chosen = isThemeId(server) ? server : isThemeId(local) ? local : DEFAULT_THEME;
-              const serverScales = sanitizeFontScales(user.themeFontScales);
-              scales = (serverScales ?? readScales(scalesUserKey(user.id))) as FontScales;
+              // Regra central: uma escolha feita ANTES deste login não pode ser
+              // apagada pela autenticação. Se há tema pendente (escolhido
+              // anônimo), ele vence a preferência remota e passa a ser a
+              // preferência do perfil — consumido aqui para não vazar entre
+              // contas no mesmo dispositivo.
+              const pending = safeGet(PENDING_KEY);
+              if (isThemeId(pending)) {
+                safeRemove(PENDING_KEY);
+                chosen = pending;
+                // Mantém as escalas de fonte atuais (do estado anônimo) e leva
+                // tudo ao perfil, para os próximos acessos restaurarem o tema.
+                scales = scalesRef.current;
+                pushToServer({ theme: chosen, fontScales: scales });
+              } else {
+                const server = user.themePreference;
+                const local = safeGet(userKey(user.id));
+                chosen = isThemeId(server) ? server : isThemeId(local) ? local : DEFAULT_THEME;
+                const serverScales = sanitizeFontScales(user.themeFontScales);
+                scales = (serverScales ?? readScales(scalesUserKey(user.id))) as FontScales;
+              }
             } else {
               userIdRef.current = null;
               const local = safeGet(ANON_KEY);
@@ -293,7 +326,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         .catch(() => {
           /* sem sessão legível — mantém o que o anti-flash aplicou */
         }),
-    [persistLocal]
+    [persistLocal, pushToServer]
   );
 
   // Re-sincroniza quando a IDENTIDADE pode ter mudado: no mount e a cada
