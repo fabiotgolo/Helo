@@ -10,7 +10,10 @@ import {
 } from "@/lib/access";
 import type { AccessLink, AppUser, Permission } from "@/lib/access-types";
 
-export const SESSION_COOKIE = "helo_session";
+// Precisa se chamar exatamente "__session": atrás do Firebase Hosting, o CDN
+// descarta TODOS os cookies das requisições ao backend, exceto este nome.
+// Sem isso, a sessão não chega ao servidor em heloapp.web.app (401 no login).
+export const SESSION_COOKIE = "__session";
 
 export function sessionCookieHeader(token: string): string {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
