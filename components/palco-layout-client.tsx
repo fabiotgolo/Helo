@@ -13,6 +13,7 @@ const PATH_TO_MODE: Record<string, HeloMode> = {
   "/rotina": "rotina",
   "/emergencia": "emergencia",
   "/atividades": "atividades",
+  "/helo": "helo",
 };
 
 export default function PalcoLayoutClient({ children }: { children: ReactNode }) {

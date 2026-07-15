@@ -36,6 +36,9 @@ Copie `.env.example` para `.env` e preencha:
 
 - `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` — síntese de voz. Sem chave, o
   app usa a voz local do navegador em pt-BR.
+- `ELEVENLABS_HELO_AGENT_ID` — Agent privado (`agent_...`) usado somente pelo
+  Orb Helo. A chave da API fica no servidor; o navegador recebe apenas um
+  conversation token WebRTC temporário.
 - `ANTHROPIC_API_KEY` — habilita as sugestões dinâmicas de opções por IA. Sem
   chave, o app funciona apenas com a árvore de conversa curada.
 
@@ -45,14 +48,28 @@ Em produção essas chaves não vão em arquivo: são **secrets** do App Hosting
 ## Deploy (Firebase App Hosting)
 
 Hospedado no **Firebase App Hosting** (projeto `helo-app-7fbf8`, plano Blaze),
-com Firestore em modo nativo (região `southamerica-east1`). O backend observa a
-branch `dev`: **cada push dispara um rollout** e gera/atualiza a URL `*.web.app`.
+com Firestore em modo nativo (banco nomeado `helo-db`). O backend observa a
+branch **`main`**: publica-se com **merge `dev`→`main` + push** — um hook
+pós-merge bumpa a versão ("chore: auto-bump versão (deploy)") e o push dispara
+o rollout. **Push no `dev` NÃO deploya.** O trabalho é feito no `dev`.
+
+URLs de produção:
+
+- `https://heloapp.web.app` — Firebase Hosting (CDN). Atenção: ele descarta
+  todos os cookies das requisições ao backend, **exceto o de nome `__session`**
+  (por isso o cookie de sessão se chama assim, em `lib/auth.ts`).
+- `https://heloapp--helo-app-7fbf8.us-central1.hosted.app` — Cloud Run direto,
+  sem remoção de cookie (útil como fallback/diagnóstico).
+
+As **regras do Firestore não sobem no rollout do App Hosting** — deploy à parte:
+`firebase deploy --only firestore:rules --project helo-app-7fbf8`.
 
 Segredos (uma vez):
 
 ```bash
 firebase apphosting:secrets:set ELEVENLABS_API_KEY --project helo-app-7fbf8
 firebase apphosting:secrets:set ELEVENLABS_VOICE_ID --project helo-app-7fbf8
+firebase apphosting:secrets:set ELEVENLABS_HELO_AGENT_ID --project helo-app-7fbf8
 firebase apphosting:secrets:set ANTHROPIC_API_KEY --project helo-app-7fbf8
 ```
 
@@ -80,6 +97,8 @@ As credenciais do Firestore vêm automaticamente da conta de serviço do runtime
   protegida), mensagens, rede de pessoas e configurações. As agregações do
   dashboard são feitas em JS no fuso de São Paulo.
 - `app/api/tts` — síntese ElevenLabs com fallback para voz local.
+- `app/api/helo/conversation-token` — token temporário WebRTC de um Agent
+  privado, protegido pela sessão autenticada.
 - `app/api/suggest` — sugestões dinâmicas de opções via Claude, limitadas a 3.
 
 ## Contas, vínculos e permissões

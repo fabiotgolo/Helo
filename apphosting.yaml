@@ -20,6 +20,10 @@ env:
     secret: ELEVENLABS_VOICE_ID
     availability:
       - RUNTIME
+  - variable: ELEVENLABS_HELO_AGENT_ID
+    secret: ELEVENLABS_HELO_AGENT_ID
+    availability:
+      - RUNTIME
   - variable: ANTHROPIC_API_KEY
     secret: ANTHROPIC_API_KEY
     availability:
