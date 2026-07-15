@@ -8,8 +8,22 @@ import { ORB_VERTEX, ORB_FRAGMENT, makeOrbUniforms } from "./orb-shader";
 // ——— Orbe 3D isolado: uma esfera, um canvas. Usado pelo Orb decorativo
 // com `breathe`. O palco dos três modos (OrbStage) tem cena própria. ———
 
-export default function Orb3D({ palette }: { palette: OrbPalette }) {
+export default function Orb3D({
+  palette,
+  getAmplitude,
+}: {
+  palette: OrbPalette;
+  /** Amplitude 0–1 da voz em curso — quando presente, o orbe reage ao áudio
+   *  (uniform uAudio), reaproveitando a mesma arquitetura reativa do palco. */
+  getAmplitude?: () => number;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Lida pelo loop de animação sem re-executar o efeito (que depende só da
+  // paleta). Espelhada por efeito para não escrever a ref durante o render.
+  const amplitudeRef = useRef(getAmplitude);
+  useEffect(() => {
+    amplitudeRef.current = getAmplitude;
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -51,8 +65,13 @@ export default function Orb3D({ palette }: { palette: OrbPalette }) {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const start = performance.now();
     let raf = 0;
+    let smoothAmp = 0;
     const renderFrame = () => {
       material.uniforms.uTime.value = (performance.now() - start) / 1000;
+      // A voz amplia a ondulação; sob reduced-motion o orbe fica calmo.
+      const raw = reducedMotion ? 0 : amplitudeRef.current?.() ?? 0;
+      smoothAmp += (raw - smoothAmp) * 0.18;
+      material.uniforms.uAudio.value = smoothAmp;
       renderer.render(scene, camera);
       if (!reducedMotion) raf = requestAnimationFrame(renderFrame);
     };

@@ -56,6 +56,33 @@ function clampX(x: number, d: number, w: number): number {
   return Math.min(Math.max(x, d / 2 + 12), w - d / 2 - 12);
 }
 
+/**
+ * Distribui os orbes recolhidos numa FILA horizontal única, centralizada em
+ * `cx`, com espaçamento IGUAL entre vizinhos e mesmo tamanho — o conjunto
+ * fica simétrico, sem "buraco" no meio (diferente dos slots ±k, que cercam o
+ * orbe ativo). Se a fila não couber, a folga encolhe por igual: nada é
+ * cortado nem desalinhado. Todos ficam na mesma linha `y`.
+ */
+function rowLayout(
+  lay: Layout,
+  modes: HeloMode[],
+  cx: number,
+  y: number,
+  d: number,
+  gap: number,
+  w: number
+): void {
+  const n = modes.length;
+  if (n === 0) return;
+  const maxRow = w - d - 24; // 12px de respiro em cada borda
+  const g = n > 1 ? Math.min(gap, Math.max(8, (maxRow - n * d) / (n - 1))) : gap;
+  const rowW = n * d + (n - 1) * g;
+  const startX = cx - rowW / 2 + d / 2;
+  modes.forEach((m, i) => {
+    lay[m] = { x: startX + i * (d + g), y, d };
+  });
+}
+
 function computeLayout(w: number, h: number, active: HeloMode, variant: StageVariant): Layout {
   const inactive = MODE_ORDER.filter((m) => m !== active);
   const mobile = w < 640;
@@ -65,14 +92,20 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
     // O ativo ocupa o centro do palco, atrás do overlay de conteúdo; os
     // inativos repousam pequenos no topo, ainda alcançáveis para trocar
     // de experiência sem fechar nada.
-    const D = Math.min(w * (mobile ? 0.82 : 0.52), h * 0.68, 480);
+    // Orbe ativo GRANDE — do mesmo tamanho da Orb da tela deslogada (login:
+    // 88vmin, teto 44rem/704px). Presença viva que transborda acima e abaixo
+    // do painel, com o modal centralizado sobre ela.
+    const D = Math.min(Math.min(w, h) * 0.88, 704);
     const d = mobile ? 52 : 68;
     const y = mobile ? 44 : 54;
     const gap = mobile ? 32 : 44;
-    lay[active] = { x: w * 0.5, y: h * 0.46, d: D };
-    inactive.forEach((m, i) => {
-      lay[m] = { x: clampX(slotX(w * 0.5, SLOTS[i], 0, d, gap), d, w), y, d };
-    });
+    // Centro deslocado levemente abaixo do meio: o painel de conteúdo é
+    // centrado verticalmente numa área com respiro de topo (pt-20/24), então
+    // ~0.52h alinha o centro da Orb ao centro do modal.
+    lay[active] = { x: w * 0.5, y: h * 0.52, d: D };
+    // Recolhidos: fila única, centralizada e com espaçamento igual — não
+    // cercam o ativo (que fica grande e central, atrás do conteúdo).
+    rowLayout(lay, inactive, w * 0.5, y, d, gap, w);
     return lay;
   }
 
@@ -426,11 +459,15 @@ export default function OrbStage({
             >
               <span
                 className={`pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap font-medium tracking-tight transition-all duration-500 motion-reduce:transition-none ${
-                  variant !== "aberto"
-                    ? "sr-only"
-                    : isActive
+                  variant === "aberto"
+                    ? isActive
                       ? "text-xl text-ink sm:text-2xl"
                       : "text-sm text-ink-soft"
+                    : isActive
+                      ? // presença central (atrás do conteúdo): sem rótulo visível
+                        "sr-only"
+                      : // recolhido: nome logo abaixo, pequeno e discreto
+                        "text-[11px] text-ink-mute sm:text-xs"
                 }`}
               >
                 {info.title}

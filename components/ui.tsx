@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import type { Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { useAuthUser } from "@/lib/use-auth";
+import { ThemeDots } from "@/components/theme-dots";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
 
 // Carregado sob demanda: Three.js só entra no bundle quando há um orbe animado na tela
@@ -207,12 +208,15 @@ export function TopBar({
   right,
   showLogout = true,
   showFeedback = true,
+  showThemeDots = true,
 }: {
   right?: React.ReactNode;
   /** Só a tela de login desliga — toda área autenticada mantém o Sair. */
   showLogout?: boolean;
   /** A própria página de feedback evita repetir o atalho. */
   showFeedback?: boolean;
+  /** Atalho rápido de temas — indicador + troca. Ligado em todo o app. */
+  showThemeDots?: boolean;
 }) {
   return (
     <header className="no-print flex items-center justify-between gap-3 px-6 py-4 sm:px-10">
@@ -229,6 +233,7 @@ export function TopBar({
       {/* flex-wrap: em telas estreitas os controles quebram de linha — o
           Sair nunca some por falta de espaço. */}
       <nav className="flex flex-wrap items-center justify-end gap-2">
+        {showThemeDots && <ThemeDots className="mr-1" />}
         {right}
         {showFeedback && <FeedbackLink />}
         {showLogout && <LogoutButton />}

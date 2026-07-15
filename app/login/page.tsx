@@ -7,6 +7,7 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { TopBar } from "@/components/ui";
+import { WelcomeIntro } from "@/components/welcome-orb";
 
 function LoginForm() {
   const router = useRouter();
@@ -57,28 +58,50 @@ function LoginForm() {
   }, [mode, name, email, password, router, search]);
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-6 px-6 py-10">
-      <div>
-        <h1 className="text-3xl font-medium tracking-tight">
-          {mode === "bootstrap" ? "Bem-vindo à Helo" : "Entrar"}
-        </h1>
-        <p className="mt-1 text-ink-soft">
-          {mode === "bootstrap"
-            ? "Instalação nova: crie a conta do administrador para começar."
-            : "Acesse com sua conta para acompanhar seus pacientes."}
-        </p>
-      </div>
+    <main className="relative flex w-full flex-1 items-center justify-center px-6 py-10">
+      {/* Primeiro a presença da Helo; o login surge sobre a Orb quando a voz
+          termina. O Orb principal (Conversa) fica grande e central, protagonista,
+          e nunca desmonta. */}
+      <WelcomeIntro
+        orbClassName="h-[88vmin] w-[88vmin] max-h-[44rem] max-w-[44rem]"
+        className="w-full"
+      >
+        {(revealed) => (
+          <div
+            inert={!revealed}
+            aria-hidden={!revealed}
+            // Painel translúcido do TEMA sobre a Orb: sem ele o texto flutua
+            // direto no gradiente coral (claro em todo tema) e perde contraste
+            // — no escuro o texto claro some, no claro o título briga com a Orb.
+            // Com o painel (bg-cream do tema + blur) o texto sempre contrasta o
+            // próprio fundo, e a Orb segue brilhando ao redor.
+            className={`flex w-full max-w-xs flex-col gap-6 rounded-[1.75rem] border border-line bg-cream/75 p-6 shadow-soft backdrop-blur-2xl transition-[opacity,transform] duration-700 ease-out sm:max-w-sm sm:p-8 motion-reduce:transition-opacity ${
+              revealed
+                ? "pointer-events-auto opacity-100 translate-y-0"
+                : "pointer-events-none opacity-0 translate-y-2 motion-reduce:translate-y-0"
+            }`}
+          >
+            <div>
+              <h1 className="text-3xl font-medium tracking-tight">
+                {mode === "bootstrap" ? "Bem-vindo à Helo" : "Entrar"}
+              </h1>
+              <p className="mt-1 text-ink-soft">
+                {mode === "bootstrap"
+                  ? "Instalação nova: crie a conta do administrador para começar."
+                  : "Acesse com sua conta para acompanhar seus pacientes."}
+              </p>
+            </div>
 
-      {mode === "loading" ? (
-        <p className="py-10 text-center text-ink-soft">Verificando sessão…</p>
-      ) : (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submit();
-          }}
-          className="flex flex-col gap-3"
-        >
+            {mode === "loading" ? (
+              <p className="py-10 text-center text-ink-soft">Verificando sessão…</p>
+            ) : (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void submit();
+                }}
+                className="flex flex-col gap-3"
+              >
           {mode === "bootstrap" && (
             <input
               type="text"
@@ -87,7 +110,7 @@ function LoginForm() {
               placeholder="Seu nome"
               autoComplete="name"
               required
-              className="min-h-12 rounded-2xl border border-line bg-card px-5 py-3 outline-none focus:border-ink-mute"
+              className="min-h-12 rounded-2xl border border-white/50 bg-card/55 px-5 py-3 outline-none backdrop-blur-md placeholder:text-ink-soft focus:border-ink-mute"
             />
           )}
           <input
@@ -97,7 +120,7 @@ function LoginForm() {
             placeholder="Email"
             autoComplete="email"
             required
-            className="min-h-12 rounded-2xl border border-line bg-card px-5 py-3 outline-none focus:border-ink-mute"
+            className="min-h-12 rounded-2xl border border-white/50 bg-card/55 px-5 py-3 outline-none backdrop-blur-md placeholder:text-ink-soft focus:border-ink-mute"
           />
           <input
             type="password"
@@ -107,7 +130,7 @@ function LoginForm() {
             autoComplete={mode === "bootstrap" ? "new-password" : "current-password"}
             required
             minLength={mode === "bootstrap" ? 8 : undefined}
-            className="min-h-12 rounded-2xl border border-line bg-card px-5 py-3 outline-none focus:border-ink-mute"
+            className="min-h-12 rounded-2xl border border-white/50 bg-card/55 px-5 py-3 outline-none backdrop-blur-md placeholder:text-ink-soft focus:border-ink-mute"
           />
           {error && (
             <p role="alert" className="rounded-2xl bg-nao-soft px-4 py-3 text-sm text-nao">
@@ -117,16 +140,19 @@ function LoginForm() {
           <button
             type="submit"
             disabled={busy}
-            className="min-h-12 rounded-full bg-ink px-6 py-3 font-medium text-white hover:bg-black disabled:opacity-40"
+            className="min-h-12 rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong disabled:opacity-40"
           >
             {busy
               ? "Entrando…"
               : mode === "bootstrap"
                 ? "Criar administrador e entrar"
                 : "Entrar"}
-          </button>
-        </form>
-      )}
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+      </WelcomeIntro>
     </main>
   );
 }
