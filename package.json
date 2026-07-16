@@ -1,6 +1,6 @@
 {
   "name": "helo-app",
-  "version": "0.9.8",
+  "version": "1.0.4",
   "private": true,
   "scripts": {
     "dev": "node scripts/gen-version.mjs && next dev --webpack",
