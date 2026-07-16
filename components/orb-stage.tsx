@@ -466,7 +466,13 @@ export default function OrbStage({
                   variant === "aberto"
                     ? isActive
                       ? "text-2xl text-ink sm:text-2xl"
-                      : "text-sm text-ink-soft"
+                      : // Fila da Home mobile: os nomes dividem a largura da
+                        // tela em N fatias (~75px em 375px), então o rótulo
+                        // é dimensionado em px FIXOS para caber na fatia —
+                        // em rem ele acompanharia a escala de fonte do
+                        // paciente (130% já colide) e os nomes se encavalam.
+                        // O desktop tem folga de sobra e mantém text-sm.
+                        "text-[11px] text-ink-soft sm:text-sm"
                     : isActive
                       ? // presença central (atrás do conteúdo): sem rótulo visível
                         "sr-only"
