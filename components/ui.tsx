@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import type { Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { useAuthUser } from "@/lib/use-auth";
+import { usePatient } from "@/lib/patient";
 import { ThemeDots } from "@/components/theme-dots";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
 
@@ -216,6 +218,117 @@ export function AdminLink() {
   return <PillLink href="/admin">Admin</PillLink>;
 }
 
+/**
+ * Seletor persistente do paciente ativo. A lista já chega filtrada por
+ * /api/patients; selectPatient também só aceita ids presentes nessa lista.
+ * Assim, o menu troca a experiência, mas não é uma camada de autorização.
+ */
+export function PatientSwitcher() {
+  const { user, loading: authLoading } = useAuthUser();
+  const { patients, patient, loading: patientsLoading, selectPatient } = usePatient();
+  const pathname = usePathname();
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeWhenOutside = (event: MouseEvent | TouchEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeWhenOutside);
+    document.addEventListener("touchstart", closeWhenOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeWhenOutside);
+      document.removeEventListener("touchstart", closeWhenOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  // A tela de login também usa a TopBar. Não exibimos contexto de paciente
+  // antes de saber que existe uma sessão autenticada.
+  if (authLoading || !user || patientsLoading) return null;
+
+  if (patients.length === 0) {
+    return (
+      <span className="rounded-full border border-line bg-card px-4 py-2.5 text-sm text-ink-soft">
+        Nenhum paciente selecionado
+      </span>
+    );
+  }
+
+  if (patients.length === 1) {
+    return (
+      <span
+        className="max-w-52 truncate rounded-full border border-line bg-card px-4 py-2.5 text-sm text-ink"
+        title={`Paciente ativo: ${patient?.name ?? patients[0].name}`}
+      >
+        Paciente: {patient?.name ?? patients[0].name}
+      </span>
+    );
+  }
+
+  return (
+    <div ref={menuRef} className="relative">
+      <button
+        type="button"
+        aria-label="Selecionar paciente"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex max-w-60 items-center gap-2 rounded-full border border-line bg-card px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:border-ink-mute focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+      >
+        <span className="shrink-0">Pacientes</span>
+        <span className="truncate text-ink-soft">{patient?.name ?? "Selecionar"}</span>
+        <span aria-hidden="true" className="text-xs">{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label="Pacientes autorizados"
+          className="absolute right-0 z-50 mt-2 min-w-64 overflow-hidden rounded-2xl border border-line bg-card p-1.5 shadow-lg"
+        >
+          <p className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-ink-mute">
+            Paciente ativo
+          </p>
+          {patients.map((candidate) => {
+            const selected = candidate.id === patient?.id;
+            return (
+              <button
+                key={candidate.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
+                onClick={() => {
+                  selectPatient(candidate.id);
+                  setOpen(false);
+                  // O dashboard individual é a única tela cuja identidade
+                  // também está na rota. Mantemos URL e paciente ativo em
+                  // sincronia sem alterar a navegação das demais áreas.
+                  if (/^\/dashboard\/\d+$/.test(pathname)) {
+                    router.replace(`/dashboard/${candidate.id}`);
+                  }
+                }}
+                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors hover:bg-bg ${
+                  selected ? "font-semibold text-ink" : "text-ink-soft"
+                }`}
+              >
+                <span aria-hidden="true" className="w-4 text-center">{selected ? "✓" : ""}</span>
+                <span className="min-w-0 flex-1 truncate">{candidate.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TopBar({
   right,
   showLogout = true,
@@ -249,6 +362,7 @@ export function TopBar({
           Sair nunca some por falta de espaço. */}
       <nav className="flex flex-wrap items-center justify-end gap-2">
         {showThemeDots && <ThemeDots className="mr-1" />}
+        <PatientSwitcher />
         {right}
         {showAdmin && <AdminLink />}
         {showFeedback && <FeedbackLink />}

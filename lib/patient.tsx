@@ -76,6 +76,14 @@ export function PatientProvider({ children }: { children: ReactNode }) {
   const applyPatients = useCallback((list: Patient[]) => {
     setPatients(list);
     writeCache(PATIENTS_CACHE_KEY, list);
+    if (list.length === 0) {
+      try {
+        localStorage.removeItem(ACTIVE_PATIENT_KEY);
+      } catch {
+        /* armazenamento indisponível — o estado em memória segue limpo */
+      }
+      setSettings({});
+    }
     const stored = Number(localStorage.getItem(ACTIVE_PATIENT_KEY));
     setPatientId((current) => {
       const want = current ?? (stored || null);
@@ -162,9 +170,13 @@ export function PatientProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, [patientId]);
 
+  // Uma seleção vinda da interface só é aceita se ainda estiver na lista
+  // autorizada recém-carregada. As APIs continuam validando o vínculo em cada
+  // leitura/escrita — localStorage e estado de cliente nunca concedem acesso.
   const selectPatient = useCallback((id: number) => {
+    if (!patients.some((patient) => patient.id === id)) return;
     setPatientId(id);
-  }, []);
+  }, [patients]);
 
   const addPatient = useCallback(
     async (name: string): Promise<Patient | null> => {
@@ -181,6 +193,9 @@ export function PatientProvider({ children }: { children: ReactNode }) {
           writeCache(PATIENTS_CACHE_KEY, next);
           return next;
         });
+        // A resposta do POST é autorizada pelo servidor; ela pode virar o
+        // ativo sem depender do fechamento assíncrono de `patients`.
+        setPatientId(d.patient.id);
         return d.patient;
       } catch {
         return null;
