@@ -54,12 +54,6 @@ function markPlayedThisSession(): void {
   }
 }
 
-// Rede de segurança: se, por algum motivo, o evento `ended` não chegar mesmo
-// com a reprodução em curso (mídia travada, aba oculta prolongada), o formulário
-// não pode ficar oculto para sempre. Bem acima dos ~7s do áudio — o evento real
-// continua sendo o gatilho principal; isto é só o backstop.
-const REVEAL_BACKSTOP_MS = 15000;
-
 export function useWelcomeAudio() {
   const [state, setState] = useState<WelcomeAudioState>("idle");
   // Sinal para a UI: a apresentação por voz terminou (evento real `ended`),
@@ -76,13 +70,8 @@ export function useWelcomeAudio() {
   const hasPlayedRef = useRef(false);
   const startingRef = useRef(false);
   const mountedRef = useRef(true);
-  const backstopRef = useRef<number | null>(null);
 
   const reveal = useCallback(() => {
-    if (backstopRef.current !== null) {
-      window.clearTimeout(backstopRef.current);
-      backstopRef.current = null;
-    }
     if (mountedRef.current) setRevealReady(true);
   }, []);
 
@@ -120,13 +109,13 @@ export function useWelcomeAudio() {
     }
 
     const onEnded = () => {
-      // Gatilho PRINCIPAL da revelação do formulário: o evento real de término
-      // da voz — não um timer estimado.
+      // Só registra o término da fala — a revelação do form já aconteceu no
+      // clique do usuário (ver play()).
       if (mountedRef.current) setState("ended");
-      reveal();
     };
     const onError = () => {
-      // Fallback: MP3 ausente/falho não pode prender o usuário no Orb.
+      // MP3 ausente/falho: registra o erro. O form não depende disto — já foi
+      // revelado no clique (ou na montagem, se a sessão já tinha tocado).
       if (mountedRef.current) setState("error");
       reveal();
     };
@@ -146,7 +135,6 @@ export function useWelcomeAudio() {
       // forma limpa. Evita qualquer sobreposição com a voz ElevenLabs depois
       // do login — nunca duas vozes ao mesmo tempo.
       mountedRef.current = false;
-      if (backstopRef.current !== null) window.clearTimeout(backstopRef.current);
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("error", onError);
       audio.removeEventListener("canplaythrough", onReady);
@@ -179,41 +167,43 @@ export function useWelcomeAudio() {
     startingRef.current = true;
     setState("starting");
 
-    // AudioContext suspenso roteia o áudio SEM som — retomar antes de tocar.
-    // Há gesto real do usuário aqui, então o resume é permitido.
+    // Regra do produto: o clique do usuário é o gatilho da revelação. O form
+    // surge JÁ neste toque — o áudio toca em paralelo e o Orb reage à voz, mas
+    // o acesso não espera o fim da fala. (Antes gatilhávamos no evento `ended`,
+    // que no Safari iOS — áudio roteado por Web Audio — muitas vezes não chega,
+    // prendendo o usuário no Orb.)
+    reveal();
+
+    // No iOS o vínculo com o gesto do usuário é estrito: `audio.play()` precisa
+    // ser chamado de forma síncrona dentro do handler. Disparamos o play ANTES
+    // de aguardar `ctx.resume()` — aguardar o resume primeiro rompe a cadeia do
+    // gesto e o Safari rejeita a reprodução.
+    const playPromise = audio.play();
+
+    // AudioContext suspenso roteia o áudio SEM som — retomar em paralelo. Há
+    // gesto real do usuário aqui, então o resume é permitido.
     const ctx = audioCtxRef.current;
     if (ctx && ctx.state !== "running") {
-      try {
-        await ctx.resume();
-      } catch {
+      void ctx.resume().catch(() => {
         // segue mesmo assim: sem Web Audio o áudio toca direto
-      }
-    }
-    if (!mountedRef.current) {
-      startingRef.current = false;
-      return "error";
+      });
     }
 
     try {
-      await audio.play();
+      await playPromise;
       // Só marca como tocado DEPOIS que a reprodução foi aceita — assim uma
       // rejeição de autoplay não "queima" a única reprodução da sessão.
       hasPlayedRef.current = true;
       markPlayedThisSession();
       startingRef.current = false;
       if (mountedRef.current) setState("playing");
-      // Rede de segurança: revela o formulário mesmo que `ended` nunca chegue.
-      if (backstopRef.current === null) {
-        backstopRef.current = window.setTimeout(reveal, REVEAL_BACKSTOP_MS);
-      }
       return "started";
     } catch {
       // Autoplay negado (improvável num gesto real) ou falha de mídia: não
-      // marca como tocado, permite nova tentativa. Sem voz do navegador — e o
-      // formulário aparece para não prender o usuário no Orb.
+      // marca como tocado, permite nova tentativa. Sem voz do navegador — o
+      // form já foi revelado acima, então o usuário nunca fica preso no Orb.
       startingRef.current = false;
       if (mountedRef.current) setState("error");
-      reveal();
       return "error";
     }
   }, [reveal]);

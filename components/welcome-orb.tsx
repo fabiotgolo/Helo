@@ -3,8 +3,11 @@
 // ——— Apresentação de boas-vindas da tela de login ———
 // Primeiro a PRESENÇA da Helo, depois o acesso: o Orb principal (Conversa)
 // aparece sozinho, grande e central. Na primeira interação válida do usuário
-// o MP3 oficial toca uma única vez e o Orb reage à voz. Quando a voz termina
-// DE VERDADE (evento `ended`, não timer), o conteúdo de login surge com fade.
+// (um toque/clique em qualquer ponto) o MP3 oficial toca uma única vez, o Orb
+// reage à voz e o conteúdo de login surge com fade JÁ nesse toque — sem esperar
+// o fim da fala. (Antes gatilhávamos no evento `ended`; no Safari iOS, com o
+// áudio roteado por Web Audio, esse evento muitas vezes não chega e o usuário
+// ficava preso no Orb.)
 //
 // O Orb NUNCA desmonta nem reinicia — permanece vivo atrás/acima do formulário.
 // A revelação é entregue via render-prop `children(revealed)`.
@@ -23,9 +26,9 @@ export function WelcomeIntro({
   /** Classe do contêiner (layout da composição Orb + conteúdo). */
   className?: string;
   /**
-   * Recebe `revealed`: true quando a apresentação por voz terminou (evento
-   * real `ended`), falhou (fallback), ou já ocorreu nesta sessão — a partir
-   * daí o formulário de login pode surgir com fade in.
+   * Recebe `revealed`: true a partir do primeiro toque/clique do usuário (que
+   * também dispara o áudio), ou de imediato se a apresentação já ocorreu nesta
+   * sessão — a partir daí o formulário de login surge com fade in.
    */
   children: (revealed: boolean) => ReactNode;
 }) {

@@ -24,6 +24,19 @@ env:
     secret: ELEVENLABS_HELO_AGENT_ID
     availability:
       - RUNTIME
+  # Só deve ser "true" depois de habilitar Voice ID override no Agent Helo.
+  - variable: ELEVENLABS_HELO_VOICE_OVERRIDE_ENABLED
+    secret: ELEVENLABS_HELO_VOICE_OVERRIDE_ENABLED
+    availability:
+      - RUNTIME
+  - variable: ELEVENLABS_HELO_PLATFORM_VOICE_FEMALE_ID
+    secret: ELEVENLABS_HELO_VOICE_FEMALE_ID
+    availability:
+      - RUNTIME
+  - variable: ELEVENLABS_HELO_PLATFORM_VOICE_MALE_ID
+    secret: ELEVENLABS_HELO_VOICE_MALE_ID
+    availability:
+      - RUNTIME
   - variable: ANTHROPIC_API_KEY
     secret: ANTHROPIC_API_KEY
     availability:

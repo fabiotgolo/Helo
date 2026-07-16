@@ -4,6 +4,7 @@ import "./globals.css";
 import { PatientProvider } from "@/lib/patient";
 import { HeloProvider } from "@/lib/helo-state";
 import { ThemeProvider, THEME_INIT_SCRIPT } from "@/lib/theme";
+import { HeloAgentProvider } from "@/components/helo-agent-provider";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -38,11 +39,13 @@ export default function RootLayout({
         {/* Anti-flash: aplica o tema salvo antes da primeira pintura. Precisa
             ser o primeiro nó do body e rodar de forma síncrona. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
-        <ThemeProvider>
-          <PatientProvider>
-            <HeloProvider>{children}</HeloProvider>
-          </PatientProvider>
-        </ThemeProvider>
+        <PatientProvider>
+          <ThemeProvider>
+            <HeloProvider>
+              <HeloAgentProvider>{children}</HeloAgentProvider>
+            </HeloProvider>
+          </ThemeProvider>
+        </PatientProvider>
       </body>
     </html>
   );

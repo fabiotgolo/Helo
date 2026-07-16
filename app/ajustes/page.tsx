@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
 import { AppearanceSettings } from "@/components/appearance-settings";
+import { HeloVoiceSettings } from "@/components/helo-voice-settings";
 import { GESTURES, type Gesture, type HeloItemMode, type ModeItem } from "@/lib/types";
 import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
@@ -39,8 +40,20 @@ type VoicesData = {
   };
 };
 type Person = { id: number; name: string; relation: string | null };
+type SettingsCaps = {
+  profile: boolean;
+  conversation: boolean;
+  gestures: boolean;
+  heloGreeting: boolean;
+  persistentAssistant: boolean;
+};
+type SettingsCapsState = {
+  patientId: number;
+  caps: SettingsCaps;
+};
 
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
+const HELO_GREETING_MAX_LENGTH = 200;
 
 // Paleta de mãos por gesto — cada gesto oferece só as mãos coerentes com ele
 // (ex.: o "Sim" não oferece 👎). Mãos neutras servem a qualquer gesto, pois o
@@ -69,6 +82,8 @@ export default function AjustesPage() {
   const [patientName, setPatientName] = useState("");
   const [speechStyle, setSpeechStyle] = useState("");
   const [avoidedTopics, setAvoidedTopics] = useState("");
+  const [heloGreeting, setHeloGreeting] = useState("");
+  const [persistentAssistantEnabled, setPersistentAssistantEnabled] = useState(false);
   const [gestureEmojis, setGestureEmojis] = useState<Record<Gesture, string>>({
     sim: "",
     talvez: "",
@@ -80,6 +95,9 @@ export default function AjustesPage() {
   const [newPatientName, setNewPatientName] = useState("");
   const [creatingPatient, setCreatingPatient] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [settingsCapsState, setSettingsCapsState] = useState<SettingsCapsState | null>(null);
+  const settingsCaps =
+    settingsCapsState?.patientId === patientId ? settingsCapsState.caps : null;
   // Qual prévia está tocando — "plataforma" | "paciente" | null. Antes era um
   // booleano único, o que fazia os DOIS botões "Ouvir" virarem "Falando…" ao
   // clicar em um só. Agora cada botão reflete só o próprio estado.
@@ -107,12 +125,28 @@ export default function AjustesPage() {
     });
   }, []);
 
+  // Client Tools só podem escolher seções conhecidas. A query não concede
+  // permissão e não altera dados; ela apenas posiciona a página já existente.
+  useEffect(() => {
+    const section = readSearchParams().get("section");
+    const allowed = ["paciente", "aparencia", "voz_helo", "gestos", "comunicacao"];
+    if (!section || !allowed.includes(section)) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`section-${section}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
   // O formulário espelha as configurações do paciente ativo; trocar de
   // paciente recarrega tudo — nada de um vaza para o outro.
   useEffect(() => {
     setPatientName(settings[PATIENT_SETTING_KEYS.name] ?? "");
     setSpeechStyle(settings[PATIENT_SETTING_KEYS.speechStyle] ?? "");
     setAvoidedTopics(settings[PATIENT_SETTING_KEYS.avoidedTopics] ?? "");
+    setHeloGreeting(settings[PATIENT_SETTING_KEYS.heloGreeting] ?? "");
+    setPersistentAssistantEnabled(
+      settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] === "true"
+    );
     setGestureEmojis({
       sim: settings[GESTURE_EMOJI_KEYS.sim] ?? "",
       talvez: settings[GESTURE_EMOJI_KEYS.talvez] ?? "",
@@ -159,16 +193,52 @@ export default function AjustesPage() {
     void loadPeople();
   }, [loadPeople]);
 
+  useEffect(() => {
+    if (patientId == null) return;
+    void fetch(`/api/settings/caps?patientId=${patientId}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((caps: SettingsCaps) => setSettingsCapsState({ patientId, caps }))
+      .catch(() =>
+        setSettingsCapsState({
+          patientId,
+          caps: {
+            profile: false,
+            conversation: false,
+            gestures: false,
+            heloGreeting: false,
+            persistentAssistant: false,
+          },
+        })
+      );
+  }, [patientId]);
+
   const save = useCallback(async () => {
-    const ok = await saveSettings({
-      [PATIENT_SETTING_KEYS.name]: patientName,
-      [PATIENT_SETTING_KEYS.speechStyle]: speechStyle.trim(),
-      [PATIENT_SETTING_KEYS.avoidedTopics]: avoidedTopics.trim(),
-      [GESTURE_EMOJI_KEYS.sim]: gestureEmojis.sim.trim(),
-      [GESTURE_EMOJI_KEYS.talvez]: gestureEmojis.talvez.trim(),
-      [GESTURE_EMOJI_KEYS.nao]: gestureEmojis.nao.trim(),
-    });
-    if (ok && patientId != null && patientName.trim()) {
+    if (!settingsCaps) return;
+
+    const updates: Record<string, string> = {};
+    if (settingsCaps.profile) {
+      updates[PATIENT_SETTING_KEYS.name] = patientName;
+    }
+    if (settingsCaps.conversation) {
+      updates[PATIENT_SETTING_KEYS.speechStyle] = speechStyle.trim();
+      updates[PATIENT_SETTING_KEYS.avoidedTopics] = avoidedTopics.trim();
+    }
+    if (settingsCaps.heloGreeting) {
+      updates[PATIENT_SETTING_KEYS.heloGreeting] = heloGreeting.trim();
+    }
+    if (settingsCaps.persistentAssistant) {
+      updates[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] = String(
+        persistentAssistantEnabled
+      );
+    }
+    if (settingsCaps.gestures) {
+      updates[GESTURE_EMOJI_KEYS.sim] = gestureEmojis.sim.trim();
+      updates[GESTURE_EMOJI_KEYS.talvez] = gestureEmojis.talvez.trim();
+      updates[GESTURE_EMOJI_KEYS.nao] = gestureEmojis.nao.trim();
+    }
+
+    const ok = Object.keys(updates).length > 0 ? await saveSettings(updates) : false;
+    if (ok && settingsCaps.profile && patientId != null && patientName.trim()) {
       await renamePatient(patientId, patientName.trim());
     }
     setSaved(ok);
@@ -180,7 +250,10 @@ export default function AjustesPage() {
     patientName,
     speechStyle,
     avoidedTopics,
+    heloGreeting,
+    persistentAssistantEnabled,
     gestureEmojis,
+    settingsCaps,
   ]);
 
   // Prévia de voz: o cliente NUNCA envia voiceId técnico — só ids do
@@ -319,15 +392,12 @@ export default function AjustesPage() {
         <div>
           <h1 className="text-4xl font-medium tracking-tight">Ajustes</h1>
           <p className="mt-2 text-lg text-ink-soft">
-            Cada paciente tem sua própria Helo: frases, gestos, voz e pessoas.
+            Ajustes de {patient?.name ?? "paciente"}. Estas configurações pertencem ao paciente selecionado.
           </p>
         </div>
 
-        {/* ——— Aparência (preferência do USUÁRIO, não do paciente) ——— */}
-        <AppearanceSettings />
-
         {/* ——— Paciente ativo ——— */}
-        <section className="rounded-3xl border border-line bg-card p-6">
+        <section id="section-paciente" className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Paciente</h2>
           <p className="text-sm text-ink-soft">
             Tudo nesta página pertence ao paciente selecionado. Trocar de
@@ -386,8 +456,70 @@ export default function AjustesPage() {
           </label>
         </section>
 
+        {/* ——— Aparência do paciente ativo ——— */}
+        <div id="section-aparencia"><AppearanceSettings /></div>
+
+        {/* ——— Voz do Agent para o paciente ativo ——— */}
+        <div id="section-voz_helo"><HeloVoiceSettings /></div>
+
+        <section className="rounded-3xl border border-line bg-card p-6" aria-labelledby="helo-greeting-title">
+          <h2 id="helo-greeting-title" className="font-semibold tracking-tight">Saudação da Helo</h2>
+          <p className="text-sm text-ink-soft">
+            Escreva a frase que a Helo deve dizer ao iniciar uma conversa com este paciente.
+          </p>
+          <label className="mt-4 flex flex-col gap-2">
+            <span className="text-sm font-medium text-ink-soft">Frase inicial</span>
+            <textarea
+              value={heloGreeting}
+              onChange={(e) => setHeloGreeting(e.target.value.slice(0, HELO_GREETING_MAX_LENGTH))}
+              rows={3}
+              maxLength={HELO_GREETING_MAX_LENGTH}
+              disabled={!settingsCaps?.heloGreeting}
+              placeholder="Bom dia, Dr. Fábio! Como você está hoje?"
+              className="w-full rounded-2xl border border-line bg-cream px-5 py-3.5 outline-none focus:border-ink-mute disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <span className="text-xs text-ink-mute">{heloGreeting.length}/{HELO_GREETING_MAX_LENGTH} caracteres</span>
+          </label>
+          <p className="mt-3 text-xs text-ink-mute">
+            Evite incluir informações médicas ou dados sensíveis nesta saudação.
+          </p>
+          {!settingsCaps?.heloGreeting && settingsCaps && (
+            <p className="mt-3 text-sm text-ink-mute">Você pode visualizar esta saudação, mas não tem permissão para alterá-la.</p>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-line bg-card p-6" aria-labelledby="persistent-assistant-title">
+          <div className="flex items-start justify-between gap-5">
+            <div>
+              <h2 id="persistent-assistant-title" className="font-semibold tracking-tight">Assistente persistente</h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                Quando ativado, a Helo pode continuar ativa enquanto você navega pela plataforma, permitindo comandos de voz como abrir Rotina, Atividades ou Emergência.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={persistentAssistantEnabled}
+              aria-label="Ativar assistente persistente"
+              disabled={!settingsCaps?.persistentAssistant}
+              onClick={() => setPersistentAssistantEnabled((enabled) => !enabled)}
+              className={`relative mt-1 h-8 w-14 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                persistentAssistantEnabled ? "bg-accent" : "bg-line"
+              }`}
+            >
+              <span className={`absolute top-1 size-6 rounded-full bg-card shadow-sm transition-transform ${persistentAssistantEnabled ? "translate-x-7" : "translate-x-1"}`} />
+            </button>
+          </div>
+          <p className="mt-4 text-xs text-ink-mute">
+            A Helo só continua ativa depois que você iniciar a conversa. Você verá sempre um indicador enquanto ela estiver ativa e poderá encerrá-la a qualquer momento.
+          </p>
+          {!settingsCaps?.persistentAssistant && settingsCaps && (
+            <p className="mt-3 text-sm text-ink-mute">Você pode visualizar esta opção, mas não tem permissão para alterá-la.</p>
+          )}
+        </section>
+
         {/* ——— Estilo de comunicação ——— */}
-        <section className="rounded-3xl border border-line bg-card p-6">
+        <section id="section-comunicacao" className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Estilo de comunicação</h2>
           <p className="text-sm text-ink-soft">
             Usado pela IA para sugerir frases com o jeito de falar do paciente.
@@ -420,7 +552,7 @@ export default function AjustesPage() {
         </section>
 
         {/* ——— Gestos ——— */}
-        <section className="rounded-3xl border border-line bg-card p-6">
+        <section id="section-gestos" className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Gestos</h2>
           <p className="text-sm text-ink-soft">
             Escolha a mão que representa cada gesto — adapte ao que o paciente
@@ -730,6 +862,7 @@ export default function AjustesPage() {
           <button
             type="button"
             onClick={() => void save()}
+            disabled={!settingsCaps}
             className="rounded-full bg-accent px-8 py-3.5 font-medium text-on-accent shadow-soft hover:bg-accent-strong"
           >
             Salvar ajustes
