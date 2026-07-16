@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/auth";
-import { logAudit, setUserPlatformVoice } from "@/lib/access";
+import { logAudit, setUserHeloVoicePreference, setUserPlatformVoice } from "@/lib/access";
+import type { HeloVoicePreference } from "@/lib/access-types";
 import { getPlatformVoice } from "@/lib/voice-catalog";
 
 // Preferência de voz da PLATAFORMA do próprio usuário.
@@ -13,9 +14,27 @@ export async function POST(request: Request) {
   const auth = await requireUser(request);
   if (auth instanceof Response) return auth;
   const { user } = auth;
-  const { platformVoiceId } = (await request.json()) as {
+  const { platformVoiceId, heloVoicePreference } = (await request.json()) as {
     platformVoiceId?: string | null;
+    heloVoicePreference?: unknown;
   };
+  // Preferência explícita do Agent: feminina/masculina. É tratada antes do
+  // catálogo histórico para manter a seleção simples e independente do paciente.
+  if (heloVoicePreference !== undefined) {
+    if (heloVoicePreference !== "female" && heloVoicePreference !== "male") {
+      return Response.json({ error: "preferência de voz inválida" }, { status: 400 });
+    }
+    await setUserHeloVoicePreference(user.id, heloVoicePreference as HeloVoicePreference);
+    await logAudit({
+      userId: user.id,
+      userName: user.name,
+      action: "helo.voice_preference.set",
+      entityType: "user",
+      entityId: user.id,
+      metadata: { before: user.heloVoicePreference ?? "female", after: heloVoicePreference },
+    });
+    return Response.json({ ok: true, heloVoicePreference });
+  }
   // null/"" limpa a preferência — volta à voz padrão definida pelo Admin.
   const chosen = platformVoiceId?.trim() || null;
   if (chosen) {

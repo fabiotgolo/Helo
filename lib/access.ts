@@ -11,6 +11,7 @@ import { firestore } from "@/lib/firestore";
 import type {
   AccessLink,
   AppUser,
+  HeloVoicePreference,
   AuditEvent,
   Permission,
   ProfessionalType,
@@ -55,6 +56,10 @@ function toUser(id: string, v: FirebaseFirestore.DocumentData): AppUser {
     status: v.status === "inactive" ? "inactive" : "active",
     canSelectPlatformVoice: v.canSelectPlatformVoice === true,
     platformVoiceId: v.platformVoiceId ? String(v.platformVoiceId) : null,
+    heloVoicePreference:
+      v.heloVoicePreference === "male" || v.heloVoicePreference === "female"
+        ? v.heloVoicePreference
+        : null,
     themePreference: v.themePreference ? String(v.themePreference) : null,
     themeFontScales: sanitizeFontScales(v.themeFontScales),
     createdAt: String(v.createdAt ?? ""),
@@ -166,6 +171,17 @@ export async function setUserPlatformVoice(
 ): Promise<void> {
   await col.users().doc(userId).set(
     { platformVoiceId, updatedAt: new Date().toISOString() },
+    { merge: true }
+  );
+}
+
+/** Preferência da voz do Agent Helo; não é uma configuração do paciente. */
+export async function setUserHeloVoicePreference(
+  userId: string,
+  heloVoicePreference: HeloVoicePreference
+): Promise<void> {
+  await col.users().doc(userId).set(
+    { heloVoicePreference, updatedAt: new Date().toISOString() },
     { merge: true }
   );
 }

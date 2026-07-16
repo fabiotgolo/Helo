@@ -13,6 +13,9 @@ export type UserRole =
   | "familiar"
   | "paciente";
 
+/** Preferência da voz do Agent Helo, estritamente do usuário autenticado. */
+export type HeloVoicePreference = "female" | "male";
+
 export type ProfessionalType =
   | "enfermeiro"
   | "fonoaudiologo"
@@ -151,6 +154,8 @@ export interface AppUser {
   canSelectPlatformVoice: boolean;
   /** Preferência do usuário: id de voz do CATÁLOGO (nunca voiceId técnico). */
   platformVoiceId: string | null;
+  /** Voz do Agent Helo escolhida pelo usuário; null usa a feminina padrão. */
+  heloVoicePreference: HeloVoicePreference | null;
   /**
    * Preferência VISUAL do usuário (tema de cores). Pertence ao usuário, nunca
    * ao paciente — dois usuários no mesmo paciente mantêm temas próprios.

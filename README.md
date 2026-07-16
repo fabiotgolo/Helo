@@ -39,6 +39,13 @@ Copie `.env.example` para `.env` e preencha:
 - `ELEVENLABS_HELO_AGENT_ID` — Agent privado (`agent_...`) usado somente pelo
   Orb Helo. A chave da API fica no servidor; o navegador recebe apenas um
   conversation token WebRTC temporário.
+- `ELEVENLABS_HELO_PLATFORM_VOICE_FEMALE_ID` e
+  `ELEVENLABS_HELO_PLATFORM_VOICE_MALE_ID` — IDs centralizados das vozes do
+  Agent. No App Hosting, esses env vars podem apontar para os secrets já
+  existentes `ELEVENLABS_HELO_VOICE_FEMALE_ID` e
+  `ELEVENLABS_HELO_VOICE_MALE_ID`. `ELEVENLABS_HELO_VOICE_OVERRIDE_ENABLED=true`
+  só é seguro após o Voice ID override ter sido habilitado no Agent Helo na
+  ElevenLabs.
 - `ANTHROPIC_API_KEY` — habilita as sugestões dinâmicas de opções por IA. Sem
   chave, o app funciona apenas com a árvore de conversa curada.
 
@@ -70,6 +77,9 @@ Segredos (uma vez):
 firebase apphosting:secrets:set ELEVENLABS_API_KEY --project helo-app-7fbf8
 firebase apphosting:secrets:set ELEVENLABS_VOICE_ID --project helo-app-7fbf8
 firebase apphosting:secrets:set ELEVENLABS_HELO_AGENT_ID --project helo-app-7fbf8
+firebase apphosting:secrets:set ELEVENLABS_HELO_VOICE_OVERRIDE_ENABLED --project helo-app-7fbf8
+firebase apphosting:secrets:set ELEVENLABS_HELO_VOICE_FEMALE_ID --project helo-app-7fbf8
+firebase apphosting:secrets:set ELEVENLABS_HELO_VOICE_MALE_ID --project helo-app-7fbf8
 firebase apphosting:secrets:set ANTHROPIC_API_KEY --project helo-app-7fbf8
 ```
 

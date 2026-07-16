@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
-import type { Conversation as ElevenLabsConversation } from "@elevenlabs/client";
+import type { Conversation as ElevenLabsConversation, SessionConfig } from "@elevenlabs/client";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 import { GestureTriplet } from "@/components/ui";
 import { GESTURE_SEMANTIC_INTENTS, GESTURE_SEMANTIC_MESSAGES } from "@/lib/gestures";
@@ -17,6 +17,8 @@ import type { Gesture } from "@/lib/types";
 
 type SessionError = string | null;
 type ActivitySource = "control" | "gesture" | "typing" | "field-focus" | "heartbeat";
+type HeloApiOverrides = { tts?: { voice_id?: string } };
+type HeloSessionOverrides = NonNullable<SessionConfig["overrides"]>;
 
 const ACTIVITY_THROTTLE_MS = 3000;
 const ACTIVITY_HEARTBEAT_MS = 15000;
@@ -63,6 +65,13 @@ function isBenignLiveKitDataChannelError(value: unknown) {
   );
 }
 
+function toElevenLabsSessionOverrides(overrides?: HeloApiOverrides): HeloSessionOverrides | undefined {
+  // @elevenlabs/client 1.15.0 recebe voiceId e serializa para o protocolo
+  // oficial ElevenLabs como conversation_config_override.tts.voice_id.
+  const voiceId = overrides?.tts?.voice_id?.trim();
+  return voiceId ? { tts: { voiceId } } : undefined;
+}
+
 function HeloSession({ onError }: { onError: (message: string) => void }) {
   const { stop, setAgentAmplitude } = useHelo();
   const { patientId } = usePatient();
@@ -95,6 +104,12 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
   const gestureResponseLockedRef = useRef(false);
   const gestureResponseUnlockRef = useRef<number | null>(null);
   const loggedSessionIdRef = useRef<number | null>(null);
+  const sessionPatientIdRef = useRef<number | null>(null);
+  const patientIdRef = useRef<number | null>(patientId);
+
+  useEffect(() => {
+    patientIdRef.current = patientId;
+  }, [patientId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -204,6 +219,22 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     };
   }, [endSession, setAgentAmplitude]);
 
+  // Trocar o paciente encerra a conversa imediatamente. A próxima conexão
+  // sempre busca um token e dynamic variables novos — contexto algum sobrevive.
+  useEffect(() => {
+    if (!startedRef.current || sessionPatientIdRef.current === patientId) return;
+    activeUntilRef.current = 0;
+    gestureResponseLockedRef.current = false;
+    setGestureResponsePending(false);
+    setLastGesture(null);
+    endLoggedSession(loggedSessionIdRef.current);
+    loggedSessionIdRef.current = null;
+    sessionPatientIdRef.current = null;
+    startedRef.current = false;
+    setAgentAmplitude(null);
+    endSession();
+  }, [endSession, patientId, setAgentAmplitude]);
+
   const connect = useCallback(async () => {
     if (startingRef.current || status !== "disconnected") return;
     startingRef.current = true;
@@ -220,19 +251,34 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
 
-      const response = await fetch("/api/helo/conversation-token", { method: "POST" });
-      const data = (await response.json().catch(() => null)) as { conversationToken?: string; error?: string } | null;
+      const requestedPatientId = patientId;
+      if (requestedPatientId == null) throw new Error("Selecione um paciente antes de iniciar a conversa.");
+      const response = await fetch("/api/helo/conversation-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId: requestedPatientId }),
+      });
+      const data = (await response.json().catch(() => null)) as {
+        conversationToken?: string;
+        dynamicVariables?: Record<string, string | number | boolean>;
+        overrides?: HeloApiOverrides;
+        error?: string;
+      } | null;
       if (!response.ok || !data?.conversationToken) {
         throw new Error(data?.error ?? "Não foi possível preparar a conversa.");
       }
-      if (patientId != null) {
-        const loggedSession = await startLoggedSession("helo", patientId);
-        loggedSessionIdRef.current = loggedSession.id;
-      }
+      // Uma resposta antiga nunca pode iniciar a sessão do paciente recém-selecionado.
+      if (patientIdRef.current !== requestedPatientId) return;
+      const loggedSession = await startLoggedSession("helo", requestedPatientId);
+      loggedSessionIdRef.current = loggedSession.id;
+      sessionPatientIdRef.current = requestedPatientId;
       startedRef.current = true;
+      const sessionOverrides = toElevenLabsSessionOverrides(data.overrides);
       startSession({
         conversationToken: data.conversationToken,
         connectionType: "webrtc",
+        dynamicVariables: data.dynamicVariables,
+        overrides: sessionOverrides,
       });
     } catch (error) {
       startedRef.current = false;
@@ -274,6 +320,7 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     }
     endLoggedSession(loggedSessionIdRef.current);
     loggedSessionIdRef.current = null;
+    sessionPatientIdRef.current = null;
     if (status !== "disconnected" || startedRef.current) endSession();
     startedRef.current = false;
     setAgentAmplitude(null);

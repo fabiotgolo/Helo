@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
 import { AppearanceSettings } from "@/components/appearance-settings";
+import { HeloVoiceSettings } from "@/components/helo-voice-settings";
 import { GESTURES, type Gesture, type HeloItemMode, type ModeItem } from "@/lib/types";
 import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
@@ -325,6 +326,9 @@ export default function AjustesPage() {
 
         {/* ——— Aparência (preferência do USUÁRIO, não do paciente) ——— */}
         <AppearanceSettings />
+
+        {/* ——— Voz do Agent (preferência do USUÁRIO, não do paciente) ——— */}
+        <HeloVoiceSettings />
 
         {/* ——— Paciente ativo ——— */}
         <section className="rounded-3xl border border-line bg-card p-6">
