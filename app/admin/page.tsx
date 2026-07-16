@@ -226,9 +226,9 @@ export default function AdminPage() {
   // ——— Guarda de papel (o servidor já nega; aqui é só a mensagem) ———
   if (!meLoading && me && me.role !== "admin") {
     return (
-      <div className="flex min-h-dvh flex-col">
+      <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
         <TopBar right={<PillLink href="/dashboard">← Pacientes</PillLink>} />
-        <main role="alert" className="mx-auto flex max-w-xl flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <main role="alert" className="mx-auto flex max-w-xl flex-1 flex-col items-center justify-center gap-3 px-6 pl-14 text-center sm:pl-20 xl:pl-6">
           <p className="text-2xl font-medium">Acesso negado.</p>
           <p className="text-ink-soft">O Dashboard Administrativo é exclusivo do administrador.</p>
         </main>
@@ -237,7 +237,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
       <TopBar
         right={
           <>
@@ -246,7 +246,9 @@ export default function AdminPage() {
           </>
         }
       />
-      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6">
+      {/* pl-14 no mobile: deixa livre o vão da coluna de temas (bolinhas
+          ocupam x≈20–48px sob a marca). Desktop volta ao px original. */}
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
         <div>
           <h1 className="text-3xl font-medium tracking-tight">Administração</h1>
           <p className="mt-1 text-ink-soft">

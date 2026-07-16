@@ -461,7 +461,7 @@ function HeloAgentSession({
     <HeloAgentContext.Provider value={agentContext}>
       {mount && createPortal(stage, mount)}
       {sessionVisible && (
-        <aside aria-live="polite" className="fixed bottom-4 right-4 z-[70] flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-line bg-card/95 px-4 py-3 shadow-soft backdrop-blur-sm">
+        <aside aria-live="polite" className="fixed bottom-24 right-4 z-[70] flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-line bg-card/95 px-4 py-3 shadow-soft backdrop-blur-sm sm:bottom-4">
           <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden="true" />
           <div className="min-w-0"><p className="text-sm font-medium text-ink">{label}</p><p className="text-xs text-ink-soft">Helo ativa</p></div>
           <button type="button" onClick={end} className="shrink-0 rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink hover:border-ink-mute">Encerrar Helo</button>

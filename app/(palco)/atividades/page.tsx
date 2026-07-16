@@ -314,7 +314,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative flex flex-1 flex-col">
       <OverlayVeil />
-      <main className="relative flex w-full flex-1 flex-col justify-center px-4 pb-6 sm:px-6">
+      <main className="relative flex w-full flex-1 flex-col justify-center px-4 pb-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
         <div className="fade-rise pointer-events-auto mx-auto flex w-full max-w-4xl flex-col gap-6 py-8">
           {children}
         </div>

@@ -152,7 +152,7 @@ export default function RotinaPage() {
           segue visível e animado através da camada. Só o conteúdo troca
           (com fade) entre grade e confirmação — o palco nunca desmonta. */}
       <OverlayVeil />
-      <main className="relative flex w-full flex-1 flex-col items-center justify-center px-4 pb-6 sm:px-6">
+      <main className="relative flex w-full flex-1 flex-col items-center justify-center px-4 pb-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
         {pending ? (
           <section
             key="confirmar"

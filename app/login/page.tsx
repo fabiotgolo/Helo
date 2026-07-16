@@ -8,8 +8,6 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Orb, TopBar } from "@/components/ui";
 import { WelcomeIntro } from "@/components/welcome-orb";
-import { MobileHeader } from "@/components/mobile/mobile-header";
-import { MobileTabBar } from "@/components/mobile/mobile-tab-bar";
 import { usePatient } from "@/lib/patient";
 
 // Destino padrão pós-login: no mobile a experiência abre na Home (sessão
@@ -202,13 +200,9 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="flex min-h-dvh flex-col">
-      {/* Desktop mantém a TopBar; o mobile veste o cabeçalho e o menu da Home
-          (área de paciente vazia e menu inerte — não há sessão). */}
-      <div className="hidden sm:block">
-        <TopBar showLogout={false} />
-      </div>
-      <MobileHeader className="sm:hidden" />
-      <MobileTabBar locked className="sm:hidden" />
+      {/* mobile="locked": cabeçalho e menu da Home visíveis porém inertes —
+          não há sessão; qualquer toque só revela o formulário. */}
+      <TopBar showLogout={false} mobile="locked" />
       <Suspense>
         <LoginForm />
       </Suspense>

@@ -549,7 +549,7 @@ export default function ConversaPage() {
           animado através da camada. Só o conteúdo troca (com fade) — o palco
           nunca desmonta. A intro mantém o painel translúcido da Fase 5. */}
       {phase !== "intro" && <OverlayVeil />}
-      <main className="relative flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-6">
+      <main className="relative flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
         {phase === "intro" ? (
           <OverlayPanel label="Conversa guiada" variant="imersivo">
             <Intro

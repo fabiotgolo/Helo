@@ -9,6 +9,8 @@ import { useGestures } from "@/lib/gestures";
 import { useAuthUser } from "@/lib/use-auth";
 import { usePatient } from "@/lib/patient";
 import { ThemeDots } from "@/components/theme-dots";
+import { MobileHeader } from "@/components/mobile/mobile-header";
+import { MobileTabBar } from "@/components/mobile/mobile-tab-bar";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
 
 // Carregado sob demanda: Three.js só entra no bundle quando há um orbe animado na tela
@@ -335,6 +337,7 @@ export function TopBar({
   showFeedback = true,
   showThemeDots = true,
   showAdmin = true,
+  mobile = "full",
 }: {
   right?: React.ReactNode;
   /** Só a tela de login desliga — toda área autenticada mantém o Sair. */
@@ -345,23 +348,47 @@ export function TopBar({
   showThemeDots?: boolean;
   /** Entrada persistente para o Dashboard Administrativo quando o papel é admin. */
   showAdmin?: boolean;
+  /**
+   * Padrão mobile global (< sm): cabeçalho + menu inferior da Home em TODAS
+   * as telas que usam a TopBar. "locked" = tela de login (menu visível porém
+   * inerte); "none" desliga o padrão quando uma tela tiver exceção funcional.
+   * O desktop ignora — o header original segue exclusivo de sm+.
+   */
+  mobile?: "full" | "locked" | "none";
 }) {
   return (
-    <header className="no-print flex items-center justify-between gap-3 px-6 py-4 sm:px-10">
-      <Link href="/" className="flex items-center gap-2.5" aria-label="Helo — página inicial">
-        <Orb palette="coral" className="h-6 w-6" />
-        <span className="text-xl font-semibold tracking-tight">Helo</span>
-        <span
-          className="self-center rounded-full border border-line px-1.5 py-0.5 text-[10px] font-medium leading-none tracking-wide text-ink-mute tabular-nums"
-          title={APP_COMMIT ? `build ${APP_COMMIT}` : undefined}
-        >
-          v{APP_VERSION}
-        </span>
-      </Link>
+    <>
+      {mobile !== "none" && (
+        <>
+          <MobileHeader className="sm:hidden" />
+          <MobileTabBar className="sm:hidden" locked={mobile === "locked"} />
+        </>
+      )}
+      {/* relative z-30: mesma razão do cabeçalho mobile — o palco (irmão
+          posterior) não pode cobrir a coluna de temas nem a navegação. */}
+      <header className="no-print relative z-30 hidden items-center justify-between gap-3 px-6 py-4 sm:flex sm:px-10">
+      {/* A marca ancora a coluna de temas logo abaixo dela. `relative` só
+          para posicionar; a coluna é absoluta e não ocupa altura no header. */}
+      <div className="relative">
+        <Link href="/" className="flex items-center gap-2.5" aria-label="Helo — página inicial">
+          <Orb palette="coral" className="h-6 w-6" />
+          <span className="text-xl font-semibold tracking-tight">Helo</span>
+          <span
+            className="self-center rounded-full border border-line px-1.5 py-0.5 text-[10px] font-medium leading-none tracking-wide text-ink-mute tabular-nums"
+            title={APP_COMMIT ? `build ${APP_COMMIT}` : undefined}
+          >
+            v{APP_VERSION}
+          </span>
+        </Link>
+        {/* Coluna de temas na margem esquerda, sob a marca: sobrepõe o vão
+            lateral sem empurrar o conteúdo da página. */}
+        {showThemeDots && (
+          <ThemeDots orientation="vertical" className="absolute left-0 top-full mt-1" />
+        )}
+      </div>
       {/* flex-wrap: em telas estreitas os controles quebram de linha — o
           Sair nunca some por falta de espaço. */}
       <nav className="flex flex-wrap items-center justify-end gap-2">
-        {showThemeDots && <ThemeDots className="mr-1" />}
         <PatientSwitcher />
         {right}
         {showAdmin && <AdminLink />}
@@ -369,6 +396,7 @@ export function TopBar({
         {showLogout && <LogoutButton />}
       </nav>
     </header>
+    </>
   );
 }
 

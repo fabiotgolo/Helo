@@ -17,10 +17,14 @@ import { useTheme } from "@/lib/theme";
 export function ThemeDots({
   className = "",
   size = "default",
+  orientation = "horizontal",
 }: {
   className?: string;
   /** "compact": bolinhas menores para o cabeçalho mobile. */
   size?: "default" | "compact";
+  /** "vertical": coluna sob a marca (padrão do app). Radiogroup navega com
+   *  as setas do teclado em qualquer eixo — a semântica não muda. */
+  orientation?: "horizontal" | "vertical";
 }) {
   const { theme, setTheme, themes } = useTheme();
   const compact = size === "compact";
@@ -29,7 +33,10 @@ export function ThemeDots({
     <div
       role="radiogroup"
       aria-label="Trocar tema"
-      className={`flex items-center gap-0.5 ${className}`}
+      aria-orientation={orientation}
+      className={`flex items-center gap-0.5 ${
+        orientation === "vertical" ? "flex-col" : ""
+      } ${className}`}
     >
       {themes.map((meta) => {
         const selected = theme === meta.id;

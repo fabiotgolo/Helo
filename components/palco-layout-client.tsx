@@ -5,8 +5,6 @@ import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { useHelo, type HeloMode } from "@/lib/helo-state";
 import { PillLink, TopBar } from "@/components/ui";
-import { MobileHeader } from "@/components/mobile/mobile-header";
-import { MobileTabBar } from "@/components/mobile/mobile-tab-bar";
 
 const OrbStage = dynamic(() => import("@/components/orb-stage"), { ssr: false });
 
@@ -53,28 +51,19 @@ export default function PalcoLayoutClient({ children }: { children: ReactNode })
 
   return (
   <div className="safe-area-pb flex min-h-dvh flex-col">
-      {/* Home mobile tem cabeçalho e menu próprios (referência visual);
-          o desktop — e as demais rotas em qualquer largura — seguem com a
-          TopBar intacta. */}
-      <div className={isHome ? "hidden sm:block" : ""}>
-        <TopBar
-          right={
-            <>
-              <span className="hidden rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft sm:inline">
-                voz: {voiceBadge}
-              </span>
-              <PillLink href="/ajustes">Ajustes</PillLink>
-              <PillLink href="/dashboard">Dashboard</PillLink>
-            </>
-          }
-        />
-      </div>
-      {isHome && (
-        <>
-          <MobileHeader className="sm:hidden" />
-          <MobileTabBar className="sm:hidden" />
-        </>
-      )}
+      {/* A TopBar entrega o padrão global: header original no desktop e
+          cabeçalho + menu inferior mobile em toda tela < sm. */}
+      <TopBar
+        right={
+          <>
+            <span className="hidden rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft sm:inline">
+              voz: {voiceBadge}
+            </span>
+            <PillLink href="/ajustes">Ajustes</PillLink>
+            <PillLink href="/dashboard">Dashboard</PillLink>
+          </>
+        }
+      />
 
       <div className="relative flex flex-1 flex-col">
         <OrbStage
@@ -96,7 +85,9 @@ export default function PalcoLayoutClient({ children }: { children: ReactNode })
           className={`pointer-events-none relative z-10 flex flex-1 flex-col ${
             variant === "aberto"
               ? "*:pointer-events-auto pt-[min(46vh,400px)]"
-              : "pt-20 sm:pt-24"
+              : // pb no mobile: o conteúdo rola por inteiro acima do menu
+                // inferior fixo — nada fica escondido atrás dele.
+                "pb-24 pt-20 sm:pb-0 sm:pt-24"
           }`}
         >
           {children}

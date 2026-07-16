@@ -297,7 +297,7 @@ export default function MensagemPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
       <TopBar
         right={
           <span className="rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft">
@@ -306,7 +306,7 @@ export default function MensagemPage() {
         }
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-8 px-6 py-8">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-8 px-6 py-8 pl-14 sm:pl-20 xl:pl-6">
         {phase === "intro" && (
           <section className="flex flex-col items-center gap-8 text-center">
             <Orb palette="lilas" breathe className="h-32 w-32" />

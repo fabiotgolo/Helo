@@ -376,7 +376,7 @@ export default function AjustesPage() {
   }, [newPatientName, addPatient, selectPatient]);
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
       <TopBar
         right={
           <>
@@ -388,7 +388,7 @@ export default function AjustesPage() {
         }
       />
 
-      <main className="safe-area-pb-spaced mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-8">
+      <main className="safe-area-pb-spaced mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-8 pl-14 sm:pl-20 xl:pl-6">
         <div>
           <h1 className="text-4xl font-medium tracking-tight">Ajustes</h1>
           <p className="mt-2 text-lg text-ink-soft">
@@ -858,7 +858,9 @@ export default function AjustesPage() {
           spokenPlaceholder="Como o paciente diria (ex.: Estou cansado, quero ficar quieto um pouco.)"
         />
 
-        <div className="sticky bottom-4 flex items-center gap-3">
+        {/* Mobile: gruda ACIMA do menu inferior fixo (~71px + safe area) —
+            o Salvar nunca fica atrás dele. Desktop segue a 16px do fundo. */}
+        <div className="sticky bottom-24 flex items-center gap-3 sm:bottom-4">
           <button
             type="button"
             onClick={() => void save()}

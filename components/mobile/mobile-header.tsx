@@ -8,6 +8,7 @@
 // componente: lá permanece a TopBar.
 
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Orb } from "@/components/ui";
 import { ThemeDots } from "@/components/theme-dots";
@@ -25,6 +26,8 @@ import { APP_VERSION, APP_COMMIT } from "@/lib/version";
 function MobilePatientArea() {
   const { user, loading: authLoading } = useAuthUser();
   const { patients, patient, loading, selectPatient } = usePatient();
+  const pathname = usePathname();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -122,6 +125,12 @@ function MobilePatientArea() {
                 onClick={() => {
                   selectPatient(candidate.id);
                   setOpen(false);
+                  // Mesmo comportamento do PatientSwitcher desktop: o
+                  // dashboard individual é a única tela com a identidade
+                  // também na rota — URL e paciente ativo andam juntos.
+                  if (/^\/dashboard\/\d+$/.test(pathname)) {
+                    router.replace(`/dashboard/${candidate.id}`);
+                  }
                 }}
                 className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors hover:bg-bg ${
                   selected ? "font-semibold text-ink" : "text-ink-soft"
@@ -143,9 +152,14 @@ function MobilePatientArea() {
 export function MobileHeader({ className = "" }: { className?: string }) {
   return (
     <header
-      className={`no-print flex items-start justify-between gap-3 px-5 pb-1 pt-4 ${className}`}
+      // relative z-30: o palco é irmão POSTERIOR no DOM e pintaria por cima
+      // da coluna de temas (que desce sob a marca). O cabeçalho e seus
+      // controles ficam sempre acima do orbe.
+      className={`no-print relative z-30 flex items-start justify-between gap-3 px-5 pb-1 pt-4 ${className}`}
     >
-      <div className="flex shrink-0 flex-col gap-1">
+      {/* Mesma âncora do desktop: a coluna de temas é absoluta sob a marca —
+          não rouba altura do palco nem empurra o conteúdo da tela. */}
+      <div className="relative shrink-0">
         <Link href="/" className="flex items-center gap-2" aria-label="Helo — página inicial">
           <Orb palette="coral" className="h-6 w-6" />
           <span className="text-xl font-semibold tracking-tight">Helo</span>
@@ -156,7 +170,11 @@ export function MobileHeader({ className = "" }: { className?: string }) {
             v{APP_VERSION}
           </span>
         </Link>
-        <ThemeDots size="compact" className="-ml-1" />
+        <ThemeDots
+          size="compact"
+          orientation="vertical"
+          className="absolute left-0 top-full mt-1"
+        />
       </div>
       <MobilePatientArea />
     </header>

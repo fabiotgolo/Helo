@@ -216,9 +216,9 @@ export default function DashboardIndividualPage() {
   // ——— Acesso negado (sem vínculo ou sem permissão) ———
   if (denied) {
     return (
-      <div className="flex min-h-dvh flex-col">
+      <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
         <TopBar right={<PillLink href="/dashboard">← Pacientes</PillLink>} />
-        <main role="alert" className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+        <main role="alert" className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-4 px-6 pl-14 text-center sm:pl-20 xl:pl-6">
           <p className="text-2xl font-medium">Acesso negado.</p>
           <p className="text-ink-soft">
             Você não possui vínculo ativo com este paciente ou não tem a
@@ -239,9 +239,9 @@ export default function DashboardIndividualPage() {
   // "Não encontrado" só depois de uma busca FRESCA da lista confirmar.
   if (invalidId || (!patientsLoading && !patient && patientsRefetched)) {
     return (
-      <div className="flex min-h-dvh flex-col">
+      <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
         <TopBar right={<PillLink href="/dashboard">← Pacientes</PillLink>} />
-        <main role="alert" className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+        <main role="alert" className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-4 px-6 pl-14 text-center sm:pl-20 xl:pl-6">
           <p className="text-2xl font-medium">Paciente não encontrado.</p>
           <p className="text-ink-soft">
             {invalidId
@@ -260,7 +260,7 @@ export default function DashboardIndividualPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
       <TopBar
         right={
           <>
@@ -276,7 +276,7 @@ export default function DashboardIndividualPage() {
         }
       />
 
-      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-4 py-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
         {/* Cabeçalho do relatório impresso */}
         <div className="hidden print:block">
           <h1 className="text-2xl font-semibold">
