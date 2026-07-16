@@ -4,7 +4,7 @@
 // entre rotas quando a opção do paciente está ligada; fora disso, sair de
 // /helo reproduz o comportamento anterior de encerrar a conversa.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import type { Conversation as ElevenLabsConversation, SessionConfig } from "@elevenlabs/client";
@@ -43,6 +43,15 @@ const ACTIVE_WINDOW_MS = 60000;
 const GESTURE_RESPONSE_LOCK_MS = 1200;
 const GESTURE_CHOICES_HIGHLIGHT_MS = 8000;
 
+type HeloAgentContextValue = {
+  activeSessionPatientId: number | null;
+  sessionStatus: string;
+  restarting: boolean;
+  restartForVoiceChange: (patientId: number) => Promise<{ ok: boolean; error?: string }>;
+};
+
+const HeloAgentContext = createContext<HeloAgentContextValue | null>(null);
+
 function patchIncompleteElevenLabsErrorEvent(conversation: ElevenLabsConversation) {
   const patched = conversation as PatchableConversation;
   if (patched.__heloIncompleteErrorEventPatch || typeof patched.handleErrorEvent !== "function") return;
@@ -54,17 +63,29 @@ function patchIncompleteElevenLabsErrorEvent(conversation: ElevenLabsConversatio
 }
 
 function toSessionOverrides(overrides?: HeloApiOverrides): HeloSessionOverrides | undefined {
+  // A API interna usa `voice_id`; @elevenlabs/client 1.15 recebe `voiceId`
+  // e o serializa como `conversation_config_override.tts.voice_id`.
   const voiceId = overrides?.tts?.voice_id?.trim();
   return voiceId ? { tts: { voiceId } } : undefined;
 }
 
-function HeloAgentSession({ error, onError }: { error: string | null; onError: (message: string | null) => void }) {
+function HeloAgentSession({
+  children,
+  error,
+  onError,
+}: {
+  children: ReactNode;
+  error: string | null;
+  onError: (message: string | null) => void;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const { stop, setAgentAmplitude } = useHelo();
   const { patientId, settings } = usePatient();
   const persistentEnabled = settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] === "true";
   const [starting, setStarting] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [activeSessionPatientId, setActiveSessionPatientId] = useState<number | null>(null);
   const [lastGesture, setLastGesture] = useState<Gesture | null>(null);
   const [gesturePending, setGesturePending] = useState(false);
   const [gesturesHighlighted, setGesturesHighlighted] = useState(false);
@@ -74,6 +95,7 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
   const startedRef = useRef(false);
   const startingRef = useRef(false);
   const connectedRef = useRef(false);
+  const statusRef = useRef("disconnected");
   const patientIdRef = useRef<number | null>(patientId);
   const sessionPatientIdRef = useRef<number | null>(null);
   const loggedSessionIdRef = useRef<number | null>(null);
@@ -176,6 +198,7 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
     endLoggedSession(loggedSessionIdRef.current);
     loggedSessionIdRef.current = null;
     sessionPatientIdRef.current = null;
+    setActiveSessionPatientId(null);
     if (startedRef.current) endSession();
     startedRef.current = false;
     setAgentAmplitude(null);
@@ -187,6 +210,7 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
 
   useEffect(() => {
     connectedRef.current = status === "connected";
+    statusRef.current = status;
     if (status === "disconnected") {
       activeUntilRef.current = 0;
       lastActivitySentAtRef.current = 0;
@@ -268,7 +292,7 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
   }, [pathname]);
 
   const connect = useCallback(async () => {
-    if (startingRef.current || startedRef.current || status !== "disconnected") return;
+    if (startingRef.current || startedRef.current || statusRef.current !== "disconnected") return false;
     startingRef.current = true;
     setStarting(true);
     onError(null);
@@ -292,10 +316,11 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
         error?: string;
       } | null;
       if (!response.ok || !data?.conversationToken) throw new Error(data?.error ?? "Não foi possível preparar a conversa.");
-      if (patientIdRef.current !== requestedPatientId) return;
+      if (patientIdRef.current !== requestedPatientId) return false;
       const logged = await startLoggedSession("helo", requestedPatientId);
       loggedSessionIdRef.current = logged.id;
       sessionPatientIdRef.current = requestedPatientId;
+      setActiveSessionPatientId(requestedPatientId);
       startedRef.current = true;
       startSession({
         conversationToken: data.conversationToken,
@@ -303,6 +328,7 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
         dynamicVariables: data.dynamicVariables,
         overrides: toSessionOverrides(data.overrides),
       });
+      return true;
     } catch (caught) {
       startedRef.current = false;
       const name = caught instanceof DOMException ? caught.name : "";
@@ -311,11 +337,43 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
           ? "Permissão do microfone negada. Autorize o microfone e tente novamente."
           : caught instanceof Error ? caught.message : "Não foi possível iniciar a conversa."
       );
+      return false;
     } finally {
       startingRef.current = false;
       setStarting(false);
     }
-  }, [onError, startSession, status, stop]);
+  }, [onError, startSession, stop]);
+
+  const restartForVoiceChange = useCallback(async (targetPatientId: number) => {
+    if (
+      !persistentEnabled ||
+      !startedRef.current ||
+      sessionPatientIdRef.current !== targetPatientId ||
+      patientIdRef.current !== targetPatientId
+    ) {
+      return { ok: false, error: "A sessão atual não pode ser reiniciada para este paciente." };
+    }
+    setRestarting(true);
+    onError(null);
+    end();
+    const deadline = Date.now() + 5000;
+    while (statusRef.current !== "disconnected" && Date.now() < deadline) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+    }
+    if (statusRef.current !== "disconnected") {
+      setRestarting(false);
+      const message = "Não foi possível encerrar a conversa atual para trocar a voz.";
+      onError(message);
+      return { ok: false, error: message };
+    }
+    if (patientIdRef.current !== targetPatientId) {
+      setRestarting(false);
+      return { ok: false, error: "O paciente ativo foi alterado." };
+    }
+    const started = await connect();
+    setRestarting(false);
+    return started ? { ok: true } : { ok: false, error: "Não foi possível reconectar a Helo." };
+  }, [connect, end, onError, persistentEnabled]);
 
   const markGesture = useCallback((gesture: Gesture) => {
     if (!connectedRef.current || gestureLockRef.current) return;
@@ -346,7 +404,9 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
     }
   }, [onError, sendActivity, sendUserMessage]);
 
-  const label = starting || status === "connecting"
+  const label = restarting
+    ? "Reconectando Helo"
+    : starting || status === "connecting"
     ? "Conectando"
     : status === "connected" && isSpeaking
       ? "Helo falando"
@@ -355,7 +415,7 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
         : status === "connected"
           ? "Helo aguardando"
           : "Helo encerrada";
-  const sessionVisible = starting || status !== "disconnected";
+  const sessionVisible = restarting || starting || status !== "disconnected";
 
   const stage = (
     <main className="relative flex flex-1 items-center px-4 pb-8 sm:px-6">
@@ -390,8 +450,15 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
     </main>
   );
 
+  const agentContext = useMemo<HeloAgentContextValue>(() => ({
+    activeSessionPatientId,
+    sessionStatus: status,
+    restarting,
+    restartForVoiceChange,
+  }), [activeSessionPatientId, restartForVoiceChange, restarting, status]);
+
   return (
-    <>
+    <HeloAgentContext.Provider value={agentContext}>
       {mount && createPortal(stage, mount)}
       {sessionVisible && (
         <aside aria-live="polite" className="fixed bottom-4 right-4 z-[70] flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-line bg-card/95 px-4 py-3 shadow-soft backdrop-blur-sm">
@@ -400,7 +467,8 @@ function HeloAgentSession({ error, onError }: { error: string | null; onError: (
           <button type="button" onClick={end} className="shrink-0 rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink hover:border-ink-mute">Encerrar Helo</button>
         </aside>
       )}
-    </>
+      {children}
+    </HeloAgentContext.Provider>
   );
 }
 
@@ -408,8 +476,13 @@ export function HeloAgentProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   return (
     <ConversationProvider onError={() => setError("A conversa foi interrompida. Verifique sua conexão e tente novamente.")}>
-      <HeloAgentSession error={error} onError={setError} />
-      {children}
+      <HeloAgentSession error={error} onError={setError}>{children}</HeloAgentSession>
     </ConversationProvider>
   );
+}
+
+export function useHeloAgent(): HeloAgentContextValue {
+  const context = useContext(HeloAgentContext);
+  if (!context) throw new Error("useHeloAgent precisa estar dentro de <HeloAgentProvider>");
+  return context;
 }

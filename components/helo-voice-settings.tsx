@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { HeloVoicePreference } from "@/lib/access-types";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { usePatient } from "@/lib/patient";
+import { useHeloAgent } from "@/components/helo-agent-provider";
 
 const OPTIONS: Array<{ value: HeloVoicePreference; label: string; description: string }> = [
   { value: "female", label: "Voz feminina", description: "Será usada na próxima conversa com a Helo deste paciente." },
@@ -13,6 +14,7 @@ const OPTIONS: Array<{ value: HeloVoicePreference; label: string; description: s
 /** Preferência compartilhada da voz do Agent Helo para o paciente ativo. */
 export function HeloVoiceSettings() {
   const { patient, patientId, settings, saveSettings } = usePatient();
+  const { activeSessionPatientId, sessionStatus, restarting, restartForVoiceChange } = useHeloAgent();
   const configured = settings[PATIENT_SETTING_KEYS.heloVoicePreference];
   const current: HeloVoicePreference = configured === "male" ? "male" : "female";
   const [pending, setPending] = useState<{
@@ -21,7 +23,12 @@ export function HeloVoiceSettings() {
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [restartPrompt, setRestartPrompt] = useState(false);
   const selected = pending && pending.patientId === patientId ? pending.value : current;
+  const hasPersistentSession =
+    settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] === "true" &&
+    activeSessionPatientId === patientId &&
+    sessionStatus !== "disconnected";
 
   const choose = async (next: HeloVoicePreference) => {
     if (saving || configured === next) return;
@@ -31,11 +38,27 @@ export function HeloVoiceSettings() {
     const ok = await saveSettings({ [PATIENT_SETTING_KEYS.heloVoicePreference]: next });
     setSaving(false);
     if (ok) {
-      setNotice("Voz salva. Ela será aplicada na próxima conversa.");
+      if (hasPersistentSession) {
+        setRestartPrompt(true);
+      } else {
+        setNotice("Voz salva. Ela será aplicada na próxima conversa.");
+      }
     } else {
       setPending(null);
       setNotice("Não foi possível salvar a voz deste paciente.");
     }
+  };
+
+  const restartNow = async () => {
+    if (patientId == null || restarting) return;
+    setNotice(null);
+    const result = await restartForVoiceChange(patientId);
+    setRestartPrompt(false);
+    setNotice(
+      result.ok
+        ? "A Helo está reconectando com a nova voz."
+        : result.error ?? "Não foi possível reiniciar a Helo agora."
+    );
   };
 
   return (
@@ -53,7 +76,7 @@ export function HeloVoiceSettings() {
               type="button"
               role="radio"
               aria-checked={isSelected}
-              disabled={saving}
+              disabled={saving || restarting}
               onClick={() => void choose(option.value)}
               className={`rounded-2xl border p-4 text-left transition-colors disabled:opacity-60 ${
                 isSelected ? "border-accent ring-2 ring-accent" : "border-line hover:border-ink-mute"
@@ -68,6 +91,20 @@ export function HeloVoiceSettings() {
           );
         })}
       </div>
+      {restartPrompt && (
+        <section role="dialog" aria-modal="false" aria-labelledby="restart-voice-title" className="mt-4 rounded-2xl border border-line bg-cream p-4">
+          <h3 id="restart-voice-title" className="font-medium">Reiniciar Helo para aplicar a nova voz?</h3>
+          <p className="mt-1 text-sm text-ink-soft">A voz escolhida será usada após reiniciar a sessão atual da Helo.</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" onClick={() => void restartNow()} disabled={restarting} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-on-accent disabled:opacity-60">
+              {restarting ? "Reconectando Helo..." : "Reiniciar agora"}
+            </button>
+            <button type="button" onClick={() => { setRestartPrompt(false); setNotice("A nova voz será usada na próxima conversa da Helo."); }} disabled={restarting} className="rounded-full border border-line bg-card px-4 py-2 text-sm font-medium text-ink disabled:opacity-60">
+              Aplicar na próxima conversa
+            </button>
+          </div>
+        </section>
+      )}
       {notice && <p role="status" className="mt-3 text-sm text-ink-soft">{notice}</p>}
     </section>
   );
