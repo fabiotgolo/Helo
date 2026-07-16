@@ -148,7 +148,6 @@ export default function DashboardGeralPage() {
       <TopBar
         right={
           <>
-            {user?.role === "admin" && <PillLink href="/admin">Admin</PillLink>}
             <PillLink href="/ajustes">Ajustes</PillLink>
             <PillLink href="/">Início</PillLink>
           </>

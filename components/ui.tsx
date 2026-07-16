@@ -209,11 +209,19 @@ export function FeedbackLink() {
   );
 }
 
+/** Entrada persistente do Admin no menu principal; segurança real fica no servidor. */
+export function AdminLink() {
+  const { user, loading } = useAuthUser();
+  if (loading || user?.role !== "admin") return null;
+  return <PillLink href="/admin">Admin</PillLink>;
+}
+
 export function TopBar({
   right,
   showLogout = true,
   showFeedback = true,
   showThemeDots = true,
+  showAdmin = true,
 }: {
   right?: React.ReactNode;
   /** Só a tela de login desliga — toda área autenticada mantém o Sair. */
@@ -222,6 +230,8 @@ export function TopBar({
   showFeedback?: boolean;
   /** Atalho rápido de temas — indicador + troca. Ligado em todo o app. */
   showThemeDots?: boolean;
+  /** Entrada persistente para o Dashboard Administrativo quando o papel é admin. */
+  showAdmin?: boolean;
 }) {
   return (
     <header className="no-print flex items-center justify-between gap-3 px-6 py-4 sm:px-10">
@@ -240,6 +250,7 @@ export function TopBar({
       <nav className="flex flex-wrap items-center justify-end gap-2">
         {showThemeDots && <ThemeDots className="mr-1" />}
         {right}
+        {showAdmin && <AdminLink />}
         {showFeedback && <FeedbackLink />}
         {showLogout && <LogoutButton />}
       </nav>
