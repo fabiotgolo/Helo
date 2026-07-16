@@ -1,6 +1,7 @@
-import { requirePatientAccess, requireUser } from "@/lib/auth";
+import { requirePatientAccess } from "@/lib/auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { getPatientSettings } from "@/lib/store";
+import type { HeloVoicePreference } from "@/lib/access-types";
 
 type HeloDynamicVariables = Record<string, string | number | boolean>;
 type HeloConversationOverrides = { tts?: { voice_id?: string } };
@@ -33,7 +34,12 @@ function buildDynamicVariables(input: {
   };
 }
 
-function resolveVoiceOverride(preference: "female" | "male" | null) {
+function patientVoicePreference(settings: Record<string, string>): HeloVoicePreference {
+  const preference = settings[PATIENT_SETTING_KEYS.heloVoicePreference];
+  return preference === "male" ? "male" : "female";
+}
+
+function resolveVoiceOverride(preference: HeloVoicePreference) {
   // O override só é enviado quando foi explicitamente habilitado na segurança
   // do Agent. Sem essa confirmação, a voz configurada no Agent prevalece.
   if (process.env.ELEVENLABS_HELO_VOICE_OVERRIDE_ENABLED !== "true") return null;
@@ -53,9 +59,6 @@ function buildVoiceOverrides(voiceId: string | null): HeloConversationOverrides 
 // O SDK React usa WebRTC para conversas por voz. A credencial retornada aqui
 // expira e não dá acesso à API da ElevenLabs nem aos demais recursos da conta.
 export async function POST(request: Request) {
-  const auth = await requireUser(request);
-  if (auth instanceof Response) return auth;
-
   const body = (await request.json().catch(() => ({}))) as { patientId?: unknown };
   const patientId = Number(body.patientId);
   if (!Number.isInteger(patientId) || patientId <= 0) {
@@ -79,11 +82,12 @@ export async function POST(request: Request) {
       settings,
       operatorRole: patientAuth.user.role,
     });
-    const voiceId = resolveVoiceOverride(auth.user.heloVoicePreference);
+    const heloVoicePreference = patientVoicePreference(settings);
+    const voiceId = resolveVoiceOverride(heloVoicePreference);
     const voiceOverrideApplied = Boolean(voiceId);
     console.info("[HELO AGENT] voice override", {
       voiceOverrideApplied,
-      voicePreference: auth.user.heloVoicePreference,
+      voicePreference: heloVoicePreference,
       voiceIdPresent: Boolean(voiceId),
     });
 

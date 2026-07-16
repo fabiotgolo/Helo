@@ -38,11 +38,11 @@ export default function RootLayout({
         {/* Anti-flash: aplica o tema salvo antes da primeira pintura. Precisa
             ser o primeiro nó do body e rodar de forma síncrona. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
-        <ThemeProvider>
-          <PatientProvider>
+        <PatientProvider>
+          <ThemeProvider>
             <HeloProvider>{children}</HeloProvider>
-          </PatientProvider>
-        </ThemeProvider>
+          </ThemeProvider>
+        </PatientProvider>
       </body>
     </html>
   );

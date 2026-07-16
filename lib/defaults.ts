@@ -72,12 +72,20 @@ export { modeSpeakerRole };
 //                        "clone" ou "platform" (via selectPatientVoiceSource).
 //   patientVoicePlatformId → id do CATÁLOGO interno quando a fonte é
 //                        "platform" (nunca um voiceId técnico).
+//   appearanceTheme       → tema visual da Helo para este paciente.
+//   appearanceFontScales  → escalas de fonte do tema, serializadas em JSON.
+//   heloVoicePreference   → voz semântica do Agent Helo (female | male).
+//                        O voiceId técnico é resolvido exclusivamente no
+//                        backend ao iniciar a conversa.
 export const PATIENT_SETTING_KEYS = {
   name: "patient_name",
   voiceId: "voice_id",
   voiceCloneName: "voice_clone_name",
   patientVoiceSource: "patient_voice_source",
   patientVoicePlatformId: "patient_voice_platform_id",
+  appearanceTheme: "appearance_theme",
+  appearanceFontScales: "appearance_font_scales",
+  heloVoicePreference: "helo_voice_preference",
   speechStyle: "speech_style",
   avoidedTopics: "avoided_topics",
   gestureSim: "gesture_sim_emoji",

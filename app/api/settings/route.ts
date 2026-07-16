@@ -1,20 +1,26 @@
 import { getPatientSettings, setPatientSettings } from "@/lib/store";
 import { requirePatientAccess } from "@/lib/auth";
 import { PATIENT_SETTING_KEYS, VOICE_SETTING_KEYS } from "@/lib/defaults";
-import type { Permission } from "@/lib/access-types";
+import {
+  isThemeId,
+  sanitizeFontScales,
+  type Permission,
+} from "@/lib/access-types";
 
 // Configurações do paciente (nome, gestos, estilo de fala…).
 // Sempre com escopo de patientId — não existe mais configuração global.
 // Escrita exige a permissão da área correspondente:
 //   gestos → editGestures · demais → editProfile.
 //
-// VOZ não passa por aqui (nem leitura do id técnico, nem escrita):
+// A voz clonada do paciente não passa por aqui (nem leitura do id técnico,
+// nem escrita):
 //   - clone do paciente → /api/admin/patient-voice (Admin);
 //   - fonte da voz do paciente → /api/patient-voice-source (permissão
 //     selectPatientVoiceSource);
 //   - estado visível (status, nomes) → /api/voices.
 // Isso garante que nenhum voiceId ElevenLabs seja gravado ou lido pelo
-// fluxo genérico de settings, mesmo por requisição direta.
+// fluxo genérico de settings, mesmo por requisição direta. A preferência
+// semântica do Agent Helo (female | male) é uma setting comum do paciente.
 
 function permissionForKey(key: string): Permission {
   if (
@@ -45,7 +51,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const { patientId, ...updates } = (await request.json()) as {
     patientId?: number;
-  } & Record<string, string>;
+  } & Record<string, unknown>;
   if (!patientId) {
     return Response.json({ error: "patientId obrigatório" }, { status: 400 });
   }
@@ -55,6 +61,33 @@ export async function POST(request: Request) {
       { error: "configuração de voz só pelas rotas dedicadas de voz" },
       { status: 403 }
     );
+  }
+  const appearanceTheme = updates[PATIENT_SETTING_KEYS.appearanceTheme];
+  if (appearanceTheme !== undefined && !isThemeId(appearanceTheme)) {
+    return Response.json({ error: "tema inválido" }, { status: 422 });
+  }
+  const appearanceFontScales = updates[PATIENT_SETTING_KEYS.appearanceFontScales];
+  if (appearanceFontScales !== undefined) {
+    if (typeof appearanceFontScales !== "string") {
+      return Response.json({ error: "escalas de fonte inválidas" }, { status: 422 });
+    }
+    try {
+      const scales = sanitizeFontScales(JSON.parse(appearanceFontScales));
+      updates[PATIENT_SETTING_KEYS.appearanceFontScales] = JSON.stringify(scales ?? {});
+    } catch {
+      return Response.json({ error: "escalas de fonte inválidas" }, { status: 422 });
+    }
+  }
+  const heloVoicePreference = updates[PATIENT_SETTING_KEYS.heloVoicePreference];
+  if (
+    heloVoicePreference !== undefined &&
+    heloVoicePreference !== "female" &&
+    heloVoicePreference !== "male"
+  ) {
+    return Response.json({ error: "preferência de voz inválida" }, { status: 422 });
+  }
+  if (Object.values(updates).some((value) => typeof value !== "string")) {
+    return Response.json({ error: "configuração inválida" }, { status: 422 });
   }
   const needed = new Set(keys.map((k) => permissionForKey(k)));
   for (const permission of needed) {

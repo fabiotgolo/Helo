@@ -320,15 +320,9 @@ export default function AjustesPage() {
         <div>
           <h1 className="text-4xl font-medium tracking-tight">Ajustes</h1>
           <p className="mt-2 text-lg text-ink-soft">
-            Cada paciente tem sua própria Helo: frases, gestos, voz e pessoas.
+            Ajustes de {patient?.name ?? "paciente"}. Estas configurações pertencem ao paciente selecionado.
           </p>
         </div>
-
-        {/* ——— Aparência (preferência do USUÁRIO, não do paciente) ——— */}
-        <AppearanceSettings />
-
-        {/* ——— Voz do Agent (preferência do USUÁRIO, não do paciente) ——— */}
-        <HeloVoiceSettings />
 
         {/* ——— Paciente ativo ——— */}
         <section className="rounded-3xl border border-line bg-card p-6">
@@ -389,6 +383,12 @@ export default function AjustesPage() {
             />
           </label>
         </section>
+
+        {/* ——— Aparência do paciente ativo ——— */}
+        <AppearanceSettings />
+
+        {/* ——— Voz do Agent para o paciente ativo ——— */}
+        <HeloVoiceSettings />
 
         {/* ——— Estilo de comunicação ——— */}
         <section className="rounded-3xl border border-line bg-card p-6">

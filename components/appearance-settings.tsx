@@ -1,8 +1,8 @@
 "use client";
 
 // ——— Aparência: painel de escolha de tema visual (Ajustes) ———
-// A preferência pertence ao USUÁRIO logado, nunca ao paciente. Selecionar
-// aplica na hora (sem reload), mostra o estado selecionado e persiste.
+// A preferência pertence ao PACIENTE ativo. Selecionar aplica na hora (sem
+// reload), mostra o estado selecionado e persiste nas settings dele.
 // Cada tema tem também um slider de tamanho de fonte: arrastar aumenta a
 // fonte daquele tema (o "Aa" da prévia acompanha; se o tema estiver em uso,
 // a interface inteira acompanha na hora).
@@ -52,12 +52,12 @@ export function AppearanceSettings() {
       className="rounded-3xl border border-line bg-card p-6"
     >
       <h2 id="aparencia-title" className="font-semibold tracking-tight">
-        Aparência
+        Aparência da Helo para este paciente
       </h2>
       <p className="text-sm text-ink-soft">
-        O tema de cores é a sua preferência pessoal — vale só para você e não
-        altera os dados nem a experiência do paciente. A mudança é imediata.
-        Em cada tema, arraste o controle para aumentar o tamanho da fonte.
+        Este tema e sua cor de destaque pertencem ao paciente selecionado.
+        Outros usuários autorizados verão a mesma aparência. A mudança é
+        imediata; em cada tema, ajuste também o tamanho da fonte.
       </p>
 
       <div
