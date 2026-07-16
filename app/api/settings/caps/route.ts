@@ -17,5 +17,8 @@ export async function GET(request: Request) {
     profile: admin || hasPermission(auth.link, "editProfile"),
     conversation: admin || hasPermission(auth.link, "editConversation"),
     gestures: admin || hasPermission(auth.link, "editGestures"),
+    // Saudação e voz pertencem ao Agent Helo, não à fala do paciente. Um
+    // vínculo ativo já é a autorização mínima, ainda conferida no POST.
+    heloGreeting: true,
   });
 }

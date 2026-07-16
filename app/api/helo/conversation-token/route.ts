@@ -1,6 +1,6 @@
 import { requirePatientAccess } from "@/lib/auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
-import { getPatientSettings } from "@/lib/store";
+import { getPatient, getPatientSettings } from "@/lib/store";
 import type { HeloVoicePreference } from "@/lib/access-types";
 
 type HeloDynamicVariables = Record<string, string | number | boolean>;
@@ -13,9 +13,10 @@ function gestureLabel(settings: Record<string, string>, key: "gestureSim" | "ges
 
 function patientGreeting(settings: Record<string, string>, preferredName: string): string {
   const greeting = settings[PATIENT_SETTING_KEYS.heloGreeting]?.trim();
-  return greeting && greeting.length <= HELO_GREETING_MAX_LENGTH
-    ? greeting
-    : `Olá, ${preferredName}. Eu sou a Helo. Como posso ajudar?`;
+  if (greeting && greeting.length <= HELO_GREETING_MAX_LENGTH) return greeting;
+  return preferredName
+    ? `Olá, ${preferredName}. Eu sou a Helo. Como posso ajudar?`
+    : "Olá. Eu sou a Helo. Como posso ajudar?";
 }
 
 function buildDynamicVariables(input: {
@@ -25,7 +26,10 @@ function buildDynamicVariables(input: {
   operatorRole: string;
 }): HeloDynamicVariables {
   const { patientId, patientName, settings, operatorRole } = input;
-  const preferredName = settings[PATIENT_SETTING_KEYS.name]?.trim() || patientName || "paciente";
+  // `patient_name` é o nome de tratamento/preferido configurado em Ajustes.
+  // O nome do perfil do paciente é o fallback seguinte; ambos podem estar
+  // ausentes em dados antigos, caso em que a saudação continua preenchida.
+  const preferredName = settings[PATIENT_SETTING_KEYS.name]?.trim() || patientName.trim();
   return {
     // Contexto mínimo, configuracional e sem histórico, diagnóstico ou documentos.
     patientName: patientName || preferredName,
@@ -87,10 +91,13 @@ export async function POST(request: Request) {
   if (!apiKey) return Response.json({ error: "Serviço de voz não configurado" }, { status: 503 });
 
   try {
-    const [settings] = await Promise.all([getPatientSettings(patientId)]);
+    const [settings, patient] = await Promise.all([
+      getPatientSettings(patientId),
+      getPatient(patientId),
+    ]);
     const dynamicVariables = buildDynamicVariables({
       patientId,
-      patientName: settings[PATIENT_SETTING_KEYS.name]?.trim() || "paciente",
+      patientName: patient?.name ?? "",
       settings,
       operatorRole: patientAuth.user.role,
     });

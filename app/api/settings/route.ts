@@ -36,8 +36,7 @@ function permissionForKey(key: string): Permission | undefined {
   }
   if (
     key === PATIENT_SETTING_KEYS.speechStyle ||
-    key === PATIENT_SETTING_KEYS.avoidedTopics ||
-    key === PATIENT_SETTING_KEYS.heloGreeting
+    key === PATIENT_SETTING_KEYS.avoidedTopics
   ) {
     return "editConversation";
   }

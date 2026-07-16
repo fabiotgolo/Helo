@@ -44,6 +44,7 @@ type SettingsCaps = {
   profile: boolean;
   conversation: boolean;
   gestures: boolean;
+  heloGreeting: boolean;
 };
 type SettingsCapsState = {
   patientId: number;
@@ -195,7 +196,7 @@ export default function AjustesPage() {
       .catch(() =>
         setSettingsCapsState({
           patientId,
-          caps: { profile: false, conversation: false, gestures: false },
+          caps: { profile: false, conversation: false, gestures: false, heloGreeting: false },
         })
       );
   }, [patientId]);
@@ -210,6 +211,8 @@ export default function AjustesPage() {
     if (settingsCaps.conversation) {
       updates[PATIENT_SETTING_KEYS.speechStyle] = speechStyle.trim();
       updates[PATIENT_SETTING_KEYS.avoidedTopics] = avoidedTopics.trim();
+    }
+    if (settingsCaps.heloGreeting) {
       updates[PATIENT_SETTING_KEYS.heloGreeting] = heloGreeting.trim();
     }
     if (settingsCaps.gestures) {
@@ -454,7 +457,7 @@ export default function AjustesPage() {
               onChange={(e) => setHeloGreeting(e.target.value.slice(0, HELO_GREETING_MAX_LENGTH))}
               rows={3}
               maxLength={HELO_GREETING_MAX_LENGTH}
-              disabled={!settingsCaps?.conversation}
+              disabled={!settingsCaps?.heloGreeting}
               placeholder="Bom dia, Dr. Fábio! Como você está hoje?"
               className="w-full rounded-2xl border border-line bg-cream px-5 py-3.5 outline-none focus:border-ink-mute disabled:cursor-not-allowed disabled:opacity-60"
             />
@@ -463,7 +466,7 @@ export default function AjustesPage() {
           <p className="mt-3 text-xs text-ink-mute">
             Evite incluir informações médicas ou dados sensíveis nesta saudação.
           </p>
-          {!settingsCaps?.conversation && settingsCaps && (
+          {!settingsCaps?.heloGreeting && settingsCaps && (
             <p className="mt-3 text-sm text-ink-mute">Você pode visualizar esta saudação, mas não tem permissão para alterá-la.</p>
           )}
         </section>
