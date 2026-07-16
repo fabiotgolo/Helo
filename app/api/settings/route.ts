@@ -10,7 +10,9 @@ import {
 // Configurações do paciente (nome, gestos, estilo de fala…).
 // Sempre com escopo de patientId — não existe mais configuração global.
 // Escrita exige a permissão da área correspondente:
-//   gestos → editGestures · demais → editProfile.
+//   perfil → editProfile · comunicação → editConversation · gestos → editGestures.
+// Aparência e voz semântica da Helo exigem vínculo ativo com o paciente, mas
+// não são tratadas como edição de perfil.
 //
 // A voz clonada do paciente não passa por aqui (nem leitura do id técnico,
 // nem escrita):
@@ -22,7 +24,7 @@ import {
 // fluxo genérico de settings, mesmo por requisição direta. A preferência
 // semântica do Agent Helo (female | male) é uma setting comum do paciente.
 
-function permissionForKey(key: string): Permission {
+function permissionForKey(key: string): Permission | undefined {
   if (
     key === PATIENT_SETTING_KEYS.gestureSim ||
     key === PATIENT_SETTING_KEYS.gestureTalvez ||
@@ -30,7 +32,16 @@ function permissionForKey(key: string): Permission {
   ) {
     return "editGestures";
   }
-  return "editProfile";
+  if (
+    key === PATIENT_SETTING_KEYS.speechStyle ||
+    key === PATIENT_SETTING_KEYS.avoidedTopics
+  ) {
+    return "editConversation";
+  }
+  if (key === PATIENT_SETTING_KEYS.name) {
+    return "editProfile";
+  }
+  return undefined;
 }
 
 export async function GET(request: Request) {
@@ -89,7 +100,14 @@ export async function POST(request: Request) {
   if (Object.values(updates).some((value) => typeof value !== "string")) {
     return Response.json({ error: "configuração inválida" }, { status: 422 });
   }
-  const needed = new Set(keys.map((k) => permissionForKey(k)));
+  const baseAuth = await requirePatientAccess(request, Number(patientId));
+  if (baseAuth instanceof Response) return baseAuth;
+
+  const needed = new Set(
+    keys
+      .map((k) => permissionForKey(k))
+      .filter((permission): permission is Permission => Boolean(permission))
+  );
   for (const permission of needed) {
     const auth = await requirePatientAccess(
       request,

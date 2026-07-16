@@ -93,11 +93,14 @@ export function GestureTriplet({
   size = "grande",
   disabled = false,
   idPrefix = "",
+  highlighted = false,
 }: {
   onGesture: (g: Gesture) => void;
   size?: "grande" | "compacto";
   disabled?: boolean;
   idPrefix?: string;
+  /** Chama atenção para as opções; nunca dispara uma resposta por si só. */
+  highlighted?: boolean;
 }) {
   const grande = size === "grande";
   const gestures = useGestures();
@@ -105,7 +108,9 @@ export function GestureTriplet({
     <div
       role="group"
       aria-label="Gestos: sim, talvez, não"
-      className={`flex items-center justify-center ${grande ? "gap-6" : "gap-3"}`}
+      className={`flex items-center justify-center rounded-3xl ${grande ? "gap-6" : "gap-3"} ${
+        highlighted ? "ring-2 ring-accent ring-offset-4 ring-offset-transparent motion-safe:animate-pulse" : ""
+      }`}
     >
       {GESTURE_ORDER.map((g) => {
         const info = gestures[g];

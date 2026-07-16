@@ -1,13 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import type { Conversation as ElevenLabsConversation, SessionConfig } from "@elevenlabs/client";
+import { useRouter } from "next/navigation";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 import { GestureTriplet } from "@/components/ui";
 import { GESTURE_SEMANTIC_INTENTS, GESTURE_SEMANTIC_MESSAGES } from "@/lib/gestures";
 import { useHelo } from "@/lib/helo-state";
 import { usePatient } from "@/lib/patient";
+import {
+  HELO_AREA_ROUTES,
+  isHeloNavigationArea,
+  isHeloSettingsSection,
+  type HeloClientToolAction,
+} from "@/lib/helo-client-tools";
 import {
   endSession as endLoggedSession,
   logEvent,
@@ -24,6 +31,7 @@ const ACTIVITY_THROTTLE_MS = 3000;
 const ACTIVITY_HEARTBEAT_MS = 15000;
 const ACTIVE_WINDOW_MS = 60000;
 const GESTURE_RESPONSE_LOCK_MS = 1200;
+const GESTURE_CHOICES_HIGHLIGHT_MS = 8000;
 const ACTIVITY_DEBUG = process.env.NODE_ENV !== "production";
 
 type ElevenLabsErrorEvent = {
@@ -75,6 +83,133 @@ function toElevenLabsSessionOverrides(overrides?: HeloApiOverrides): HeloSession
 function HeloSession({ onError }: { onError: (message: string) => void }) {
   const { stop, setAgentAmplitude } = useHelo();
   const { patientId } = usePatient();
+  const router = useRouter();
+  const [starting, setStarting] = useState(false);
+  const [lastGesture, setLastGesture] = useState<Gesture | null>(null);
+  const [note, setNote] = useState("");
+  const [noteFocused, setNoteFocused] = useState(false);
+  const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
+  const [interruptionDetected, setInterruptionDetected] = useState(false);
+  const [gestureResponsePending, setGestureResponsePending] = useState(false);
+  const [gestureChoicesHighlighted, setGestureChoicesHighlighted] = useState(false);
+  const [toolFeedback, setToolFeedback] = useState<string | null>(null);
+  const startedRef = useRef(false);
+  const startingRef = useRef(false);
+  const connectedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const activeUntilRef = useRef(0);
+  const lastActivitySentAtRef = useRef(0);
+  const gestureResponseLockedRef = useRef(false);
+  const gestureResponseUnlockRef = useRef<number | null>(null);
+  const gestureChoicesHighlightRef = useRef<number | null>(null);
+  const loggedSessionIdRef = useRef<number | null>(null);
+  const sessionPatientIdRef = useRef<number | null>(null);
+  const patientIdRef = useRef<number | null>(patientId);
+
+  const toolResult = useCallback((value: Record<string, unknown>) => JSON.stringify(value), []);
+
+  const authorizeTool = useCallback(
+    async (
+      action: HeloClientToolAction,
+      options?: { area?: string; section?: string }
+    ): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const activePatientId = patientIdRef.current;
+      if (activePatientId == null) {
+        if (ACTIVITY_DEBUG) console.info("[HELO TOOL] no active patient");
+        return { ok: false, error: "Paciente ativo não selecionado" };
+      }
+      try {
+        const response = await fetch("/api/helo/client-tools", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ patientId: activePatientId, action, ...options }),
+        });
+        const data = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (!response.ok || !data?.ok) return { ok: false, error: data?.error ?? "Acesso negado" };
+        // A troca de paciente durante a confirmação nunca pode navegar usando
+        // a autorização do paciente anterior.
+        if (patientIdRef.current !== activePatientId) return { ok: false, error: "O paciente ativo foi alterado" };
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Não foi possível verificar o acesso" };
+      }
+    },
+    []
+  );
+
+  const navigateToArea = useCallback(
+    async (action: HeloClientToolAction, area: string, feedback: string) => {
+      if (!isHeloNavigationArea(area)) {
+        if (ACTIVITY_DEBUG) console.info("[HELO TOOL] invalid targetArea");
+        return toolResult({ ok: false, error: "Área de navegação inválida" });
+      }
+      const access = await authorizeTool(action, { area });
+      if (!access.ok) {
+        if (ACTIVITY_DEBUG) console.info("[HELO TOOL] failed");
+        return toolResult(access);
+      }
+      if (ACTIVITY_DEBUG) console.info(`[HELO TOOL] ${action} called`);
+      setToolFeedback(feedback);
+      router.push(HELO_AREA_ROUTES[area]);
+      if (ACTIVITY_DEBUG) console.info("[HELO TOOL] success");
+      return toolResult({ ok: true, action, targetArea: area });
+    },
+    [authorizeTool, router, toolResult]
+  );
+
+  const clientTools = useMemo(
+    () => ({
+      navigateHeloArea: async (parameters: Record<string, unknown>) => {
+        const targetArea = parameters?.targetArea;
+        if (typeof targetArea !== "string") return toolResult({ ok: false, error: "targetArea inválido" });
+        return navigateToArea("navigateHeloArea", targetArea, `Abrindo ${targetArea}`);
+      },
+      openPatientSettings: async (parameters: Record<string, unknown>) => {
+        const section = parameters?.section;
+        if (!isHeloSettingsSection(section)) {
+          if (ACTIVITY_DEBUG) console.info("[HELO TOOL] invalid settings section");
+          return toolResult({ ok: false, error: "Seção de ajustes inválida" });
+        }
+        const access = await authorizeTool("openPatientSettings", { section });
+        if (!access.ok) return toolResult(access);
+        if (ACTIVITY_DEBUG) console.info("[HELO TOOL] openPatientSettings called");
+        setToolFeedback("Abrindo Ajustes");
+        router.push(`/ajustes?section=${encodeURIComponent(section)}`);
+        if (ACTIVITY_DEBUG) console.info("[HELO TOOL] success");
+        return toolResult({ ok: true, action: "openPatientSettings", section });
+      },
+      openRoutineMode: async (_parameters: Record<string, unknown>) =>
+        navigateToArea("openRoutineMode", "rotina", "Abrindo Rotina"),
+      openEmergencyMode: async (_parameters: Record<string, unknown>) => {
+        const result = await navigateToArea("openEmergencyMode", "emergencia", "Abrindo Emergência");
+        // O motivo recebido é deliberadamente ignorado: esta tool só navega.
+        try {
+          const data = JSON.parse(result) as Record<string, unknown>;
+          return toolResult(data.ok ? { ...data, opened: "emergencia", requiresUserConfirmation: true } : data);
+        } catch {
+          return result;
+        }
+      },
+      openActivitiesMode: async (_parameters: Record<string, unknown>) =>
+        navigateToArea("openActivitiesMode", "atividades", "Abrindo Atividades"),
+      showGestureChoices: async (_parameters: Record<string, unknown>) => {
+        const access = await authorizeTool("showGestureChoices");
+        if (!access.ok) return toolResult(access);
+        if (ACTIVITY_DEBUG) console.info("[HELO TOOL] showGestureChoices called");
+        if (gestureChoicesHighlightRef.current != null) window.clearTimeout(gestureChoicesHighlightRef.current);
+        setGestureChoicesHighlighted(true);
+        setToolFeedback("Mostrando gestos");
+        gestureChoicesHighlightRef.current = window.setTimeout(() => {
+          setGestureChoicesHighlighted(false);
+          gestureChoicesHighlightRef.current = null;
+        }, GESTURE_CHOICES_HIGHLIGHT_MS);
+        if (ACTIVITY_DEBUG) console.info("[HELO TOOL] success");
+        return toolResult({ ok: true, action: "showGestureChoices" });
+      },
+    }),
+    [authorizeTool, navigateToArea, router, toolResult]
+  );
+
   const {
     startSession,
     endSession,
@@ -87,25 +222,13 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
   } = useConversation({
     onConversationCreated: patchIncompleteElevenLabsErrorEvent,
     onInterruption: () => setInterruptionDetected(true),
+    clientTools,
+    onUnhandledClientToolCall: (toolCall) => {
+      // Não há fallback dinâmico: uma tool não registrada nunca ganha acesso
+      // à interface. O log contém apenas o nome técnico, sem parâmetros.
+      if (ACTIVITY_DEBUG) console.info("[HELO TOOL] unhandled", toolCall.tool_name);
+    },
   });
-  const [starting, setStarting] = useState(false);
-  const [lastGesture, setLastGesture] = useState<Gesture | null>(null);
-  const [note, setNote] = useState("");
-  const [noteFocused, setNoteFocused] = useState(false);
-  const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
-  const [interruptionDetected, setInterruptionDetected] = useState(false);
-  const [gestureResponsePending, setGestureResponsePending] = useState(false);
-  const startedRef = useRef(false);
-  const startingRef = useRef(false);
-  const connectedRef = useRef(false);
-  const mountedRef = useRef(true);
-  const activeUntilRef = useRef(0);
-  const lastActivitySentAtRef = useRef(0);
-  const gestureResponseLockedRef = useRef(false);
-  const gestureResponseUnlockRef = useRef<number | null>(null);
-  const loggedSessionIdRef = useRef<number | null>(null);
-  const sessionPatientIdRef = useRef<number | null>(null);
-  const patientIdRef = useRef<number | null>(patientId);
 
   useEffect(() => {
     patientIdRef.current = patientId;
@@ -145,6 +268,9 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     return () => {
       if (gestureResponseUnlockRef.current != null) {
         window.clearTimeout(gestureResponseUnlockRef.current);
+      }
+      if (gestureChoicesHighlightRef.current != null) {
+        window.clearTimeout(gestureChoicesHighlightRef.current);
       }
       gestureResponseLockedRef.current = false;
     };
@@ -226,6 +352,12 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
     activeUntilRef.current = 0;
     gestureResponseLockedRef.current = false;
     setGestureResponsePending(false);
+    setGestureChoicesHighlighted(false);
+    setToolFeedback(null);
+    if (gestureChoicesHighlightRef.current != null) {
+      window.clearTimeout(gestureChoicesHighlightRef.current);
+      gestureChoicesHighlightRef.current = null;
+    }
     setLastGesture(null);
     endLoggedSession(loggedSessionIdRef.current);
     loggedSessionIdRef.current = null;
@@ -432,8 +564,10 @@ function HeloSession({ onError }: { onError: (message: string) => void }) {
               onGesture={markGesture}
               size="compacto"
               disabled={gestureResponsePending}
+              highlighted={gestureChoicesHighlighted}
             />
           </div>
+          {toolFeedback && <p role="status" className="text-sm text-ink-soft">{toolFeedback}</p>}
           <div className="min-h-5 text-sm text-ink-soft" aria-live="polite">
             {gestureResponsePending
               ? "Registrando resposta..."

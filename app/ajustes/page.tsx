@@ -40,6 +40,15 @@ type VoicesData = {
   };
 };
 type Person = { id: number; name: string; relation: string | null };
+type SettingsCaps = {
+  profile: boolean;
+  conversation: boolean;
+  gestures: boolean;
+};
+type SettingsCapsState = {
+  patientId: number;
+  caps: SettingsCaps;
+};
 
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
@@ -81,6 +90,9 @@ export default function AjustesPage() {
   const [newPatientName, setNewPatientName] = useState("");
   const [creatingPatient, setCreatingPatient] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [settingsCapsState, setSettingsCapsState] = useState<SettingsCapsState | null>(null);
+  const settingsCaps =
+    settingsCapsState?.patientId === patientId ? settingsCapsState.caps : null;
   // Qual prévia está tocando — "plataforma" | "paciente" | null. Antes era um
   // booleano único, o que fazia os DOIS botões "Ouvir" virarem "Falando…" ao
   // clicar em um só. Agora cada botão reflete só o próprio estado.
@@ -106,6 +118,18 @@ export default function AjustesPage() {
       itemId: q.get("itemId"),
       returnTo: safeReturnTo(q.get("returnTo")),
     });
+  }, []);
+
+  // Client Tools só podem escolher seções conhecidas. A query não concede
+  // permissão e não altera dados; ela apenas posiciona a página já existente.
+  useEffect(() => {
+    const section = readSearchParams().get("section");
+    const allowed = ["paciente", "aparencia", "voz_helo", "gestos", "comunicacao"];
+    if (!section || !allowed.includes(section)) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`section-${section}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   // O formulário espelha as configurações do paciente ativo; trocar de
@@ -160,16 +184,38 @@ export default function AjustesPage() {
     void loadPeople();
   }, [loadPeople]);
 
+  useEffect(() => {
+    if (patientId == null) return;
+    void fetch(`/api/settings/caps?patientId=${patientId}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((caps: SettingsCaps) => setSettingsCapsState({ patientId, caps }))
+      .catch(() =>
+        setSettingsCapsState({
+          patientId,
+          caps: { profile: false, conversation: false, gestures: false },
+        })
+      );
+  }, [patientId]);
+
   const save = useCallback(async () => {
-    const ok = await saveSettings({
-      [PATIENT_SETTING_KEYS.name]: patientName,
-      [PATIENT_SETTING_KEYS.speechStyle]: speechStyle.trim(),
-      [PATIENT_SETTING_KEYS.avoidedTopics]: avoidedTopics.trim(),
-      [GESTURE_EMOJI_KEYS.sim]: gestureEmojis.sim.trim(),
-      [GESTURE_EMOJI_KEYS.talvez]: gestureEmojis.talvez.trim(),
-      [GESTURE_EMOJI_KEYS.nao]: gestureEmojis.nao.trim(),
-    });
-    if (ok && patientId != null && patientName.trim()) {
+    if (!settingsCaps) return;
+
+    const updates: Record<string, string> = {};
+    if (settingsCaps.profile) {
+      updates[PATIENT_SETTING_KEYS.name] = patientName;
+    }
+    if (settingsCaps.conversation) {
+      updates[PATIENT_SETTING_KEYS.speechStyle] = speechStyle.trim();
+      updates[PATIENT_SETTING_KEYS.avoidedTopics] = avoidedTopics.trim();
+    }
+    if (settingsCaps.gestures) {
+      updates[GESTURE_EMOJI_KEYS.sim] = gestureEmojis.sim.trim();
+      updates[GESTURE_EMOJI_KEYS.talvez] = gestureEmojis.talvez.trim();
+      updates[GESTURE_EMOJI_KEYS.nao] = gestureEmojis.nao.trim();
+    }
+
+    const ok = Object.keys(updates).length > 0 ? await saveSettings(updates) : false;
+    if (ok && settingsCaps.profile && patientId != null && patientName.trim()) {
       await renamePatient(patientId, patientName.trim());
     }
     setSaved(ok);
@@ -182,6 +228,7 @@ export default function AjustesPage() {
     speechStyle,
     avoidedTopics,
     gestureEmojis,
+    settingsCaps,
   ]);
 
   // Prévia de voz: o cliente NUNCA envia voiceId técnico — só ids do
@@ -325,7 +372,7 @@ export default function AjustesPage() {
         </div>
 
         {/* ——— Paciente ativo ——— */}
-        <section className="rounded-3xl border border-line bg-card p-6">
+        <section id="section-paciente" className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Paciente</h2>
           <p className="text-sm text-ink-soft">
             Tudo nesta página pertence ao paciente selecionado. Trocar de
@@ -385,13 +432,13 @@ export default function AjustesPage() {
         </section>
 
         {/* ——— Aparência do paciente ativo ——— */}
-        <AppearanceSettings />
+        <div id="section-aparencia"><AppearanceSettings /></div>
 
         {/* ——— Voz do Agent para o paciente ativo ——— */}
-        <HeloVoiceSettings />
+        <div id="section-voz_helo"><HeloVoiceSettings /></div>
 
         {/* ——— Estilo de comunicação ——— */}
-        <section className="rounded-3xl border border-line bg-card p-6">
+        <section id="section-comunicacao" className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Estilo de comunicação</h2>
           <p className="text-sm text-ink-soft">
             Usado pela IA para sugerir frases com o jeito de falar do paciente.
@@ -424,7 +471,7 @@ export default function AjustesPage() {
         </section>
 
         {/* ——— Gestos ——— */}
-        <section className="rounded-3xl border border-line bg-card p-6">
+        <section id="section-gestos" className="rounded-3xl border border-line bg-card p-6">
           <h2 className="font-semibold tracking-tight">Gestos</h2>
           <p className="text-sm text-ink-soft">
             Escolha a mão que representa cada gesto — adapte ao que o paciente
@@ -734,6 +781,7 @@ export default function AjustesPage() {
           <button
             type="button"
             onClick={() => void save()}
+            disabled={!settingsCaps}
             className="rounded-full bg-accent px-8 py-3.5 font-medium text-on-accent shadow-soft hover:bg-accent-strong"
           >
             Salvar ajustes
