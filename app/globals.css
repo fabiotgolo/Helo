@@ -89,29 +89,6 @@
   outline-width: 4px;
 }
 
-/* Suave — claro e acolhedor, com texto suficientemente escuro */
-:root[data-theme="suave"] {
-  color-scheme: light;
-  --color-cream: #f4f2ef;
-  --color-card: #fbfaf8;
-  --color-surface-elevated: #ffffff;
-  --color-ink: #2b2a27;
-  --color-ink-soft: #5f5d56;
-  --color-ink-mute: #74716a;
-  --color-line: #e7e4de;
-  --color-accent: #3a3833;
-  --color-accent-strong: #24221e;
-  --color-on-accent: #ffffff;
-  --color-focus: #4a6db3;
-  --color-sim: #1a7a49;
-  --color-sim-soft: #e4f0ea;
-  --color-nao: #ac4334;
-  --color-nao-soft: #f6e8e4;
-  --color-talvez: #8a5e1a;
-  --color-talvez-soft: #f3ecda;
-  --color-series: #7a72c8;
-}
-
 /* Quente — creme, pêssego, laranja suave */
 :root[data-theme="quente"] {
   color-scheme: light;
@@ -133,29 +110,6 @@
   --color-talvez: #97620f;
   --color-talvez-soft: #f7ead0;
   --color-series: #c06a3a;
-}
-
-/* Frio — azul, lilás, cinza azulado */
-:root[data-theme="frio"] {
-  color-scheme: light;
-  --color-cream: #eef1f6;
-  --color-card: #f9fbfe;
-  --color-surface-elevated: #ffffff;
-  --color-ink: #1e2530;
-  --color-ink-soft: #47505f;
-  --color-ink-mute: #5c6675;
-  --color-line: #dbe1ec;
-  --color-accent: #3d5c8c;
-  --color-accent-strong: #304a72;
-  --color-on-accent: #f6f9ff;
-  --color-focus: #2f5fbf;
-  --color-sim: #167a5e;
-  --color-sim-soft: #dcefe9;
-  --color-nao: #a8433f;
-  --color-nao-soft: #f4e4e3;
-  --color-talvez: #7a5c99;
-  --color-talvez-soft: #ebe6f2;
-  --color-series: #4f7cc4;
 }
 
 /* Escuro — modo escuro completo (não é inversão de cores) */

@@ -195,12 +195,14 @@ export interface AuditEvent {
 
 // Temas visuais disponíveis (id canônico). Módulo neutro: validado no servidor
 // e consumido pelo cliente.
+// Catálogo enxuto (4 temas). Um id antigo ("suave"/"frio") que ainda esteja
+// gravado nas settings de algum paciente simplesmente não valida aqui: o
+// ThemeProvider aplica o tema padrão e o valor obsoleto é sobrescrito na
+// próxima escolha — sem migração nem erro.
 export const THEME_IDS = [
   "helo-original",
   "alto-contraste",
-  "suave",
   "quente",
-  "frio",
   "escuro",
 ] as const;
 

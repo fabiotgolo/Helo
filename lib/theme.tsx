@@ -58,22 +58,10 @@ export const THEMES: ThemeMeta[] = [
     swatches: { bg: "#ffffff", surface: "#ffffff", text: "#000000", textSoft: "#1a1a1a", accent: "#000000" },
   },
   {
-    id: "suave",
-    label: "Suave",
-    description: "Claro e acolhedor, sem abrir mão da legibilidade.",
-    swatches: { bg: "#f4f2ef", surface: "#fbfaf8", text: "#2b2a27", textSoft: "#5f5d56", accent: "#3a3833" },
-  },
-  {
     id: "quente",
     label: "Quente",
     description: "Creme, pêssego e laranja suave — tons acolhedores.",
     swatches: { bg: "#fbf3ea", surface: "#fffaf3", text: "#33261d", textSoft: "#6b503f", accent: "#b04e2c" },
-  },
-  {
-    id: "frio",
-    label: "Frio",
-    description: "Azul, lilás e cinza azulado — tons serenos.",
-    swatches: { bg: "#eef1f6", surface: "#f9fbfe", text: "#1e2530", textSoft: "#47505f", accent: "#3d5c8c" },
   },
   {
     id: "escuro",
