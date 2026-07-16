@@ -79,6 +79,8 @@ export { modeSpeakerRole };
 //                        backend ao iniciar a conversa.
 //   heloGreeting          → primeira fala personalizada da Helo para este
 //                        paciente; texto simples, limitado no backend.
+//   heloPersistentAssistantEnabled → mantém a sessão do Agent Helo entre
+//                        rotas internas depois de iniciada manualmente.
 export const PATIENT_SETTING_KEYS = {
   name: "patient_name",
   voiceId: "voice_id",
@@ -89,6 +91,7 @@ export const PATIENT_SETTING_KEYS = {
   appearanceFontScales: "appearance_font_scales",
   heloVoicePreference: "helo_voice_preference",
   heloGreeting: "helo_greeting",
+  heloPersistentAssistantEnabled: "helo_persistent_assistant_enabled",
   speechStyle: "speech_style",
   avoidedTopics: "avoided_topics",
   gestureSim: "gesture_sim_emoji",

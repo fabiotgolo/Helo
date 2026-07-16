@@ -49,6 +49,7 @@ export function useAuthUser(): {
 
   const logout = useCallback(async () => {
     // 1. Nenhuma voz atravessa o logout: Helo, paciente ou emergência param já.
+    window.dispatchEvent(new Event("helo-agent-stop"));
     stopAllSpeech();
     // 2. Sessões de modo em andamento (conversa, rotina, emergência, mensagem)
     //    tratam beforeunload como "encerre minha sessão com keepalive". O evento

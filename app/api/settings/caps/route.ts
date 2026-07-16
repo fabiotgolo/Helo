@@ -20,5 +20,6 @@ export async function GET(request: Request) {
     // Saudação e voz pertencem ao Agent Helo, não à fala do paciente. Um
     // vínculo ativo já é a autorização mínima, ainda conferida no POST.
     heloGreeting: true,
+    persistentAssistant: true,
   });
 }

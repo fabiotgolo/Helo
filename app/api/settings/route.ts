@@ -115,6 +115,14 @@ export async function POST(request: Request) {
     // fallback seguro ao iniciar a próxima sessão.
     updates[PATIENT_SETTING_KEYS.heloGreeting] = normalizedGreeting;
   }
+  const persistentAssistant = updates[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled];
+  if (
+    persistentAssistant !== undefined &&
+    persistentAssistant !== "true" &&
+    persistentAssistant !== "false"
+  ) {
+    return Response.json({ error: "modo assistente persistente inválido" }, { status: 422 });
+  }
   if (Object.values(updates).some((value) => typeof value !== "string")) {
     return Response.json({ error: "configuração inválida" }, { status: 422 });
   }

@@ -45,6 +45,7 @@ type SettingsCaps = {
   conversation: boolean;
   gestures: boolean;
   heloGreeting: boolean;
+  persistentAssistant: boolean;
 };
 type SettingsCapsState = {
   patientId: number;
@@ -82,6 +83,7 @@ export default function AjustesPage() {
   const [speechStyle, setSpeechStyle] = useState("");
   const [avoidedTopics, setAvoidedTopics] = useState("");
   const [heloGreeting, setHeloGreeting] = useState("");
+  const [persistentAssistantEnabled, setPersistentAssistantEnabled] = useState(false);
   const [gestureEmojis, setGestureEmojis] = useState<Record<Gesture, string>>({
     sim: "",
     talvez: "",
@@ -142,6 +144,9 @@ export default function AjustesPage() {
     setSpeechStyle(settings[PATIENT_SETTING_KEYS.speechStyle] ?? "");
     setAvoidedTopics(settings[PATIENT_SETTING_KEYS.avoidedTopics] ?? "");
     setHeloGreeting(settings[PATIENT_SETTING_KEYS.heloGreeting] ?? "");
+    setPersistentAssistantEnabled(
+      settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] === "true"
+    );
     setGestureEmojis({
       sim: settings[GESTURE_EMOJI_KEYS.sim] ?? "",
       talvez: settings[GESTURE_EMOJI_KEYS.talvez] ?? "",
@@ -196,7 +201,13 @@ export default function AjustesPage() {
       .catch(() =>
         setSettingsCapsState({
           patientId,
-          caps: { profile: false, conversation: false, gestures: false, heloGreeting: false },
+          caps: {
+            profile: false,
+            conversation: false,
+            gestures: false,
+            heloGreeting: false,
+            persistentAssistant: false,
+          },
         })
       );
   }, [patientId]);
@@ -214,6 +225,11 @@ export default function AjustesPage() {
     }
     if (settingsCaps.heloGreeting) {
       updates[PATIENT_SETTING_KEYS.heloGreeting] = heloGreeting.trim();
+    }
+    if (settingsCaps.persistentAssistant) {
+      updates[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] = String(
+        persistentAssistantEnabled
+      );
     }
     if (settingsCaps.gestures) {
       updates[GESTURE_EMOJI_KEYS.sim] = gestureEmojis.sim.trim();
@@ -235,6 +251,7 @@ export default function AjustesPage() {
     speechStyle,
     avoidedTopics,
     heloGreeting,
+    persistentAssistantEnabled,
     gestureEmojis,
     settingsCaps,
   ]);
@@ -468,6 +485,36 @@ export default function AjustesPage() {
           </p>
           {!settingsCaps?.heloGreeting && settingsCaps && (
             <p className="mt-3 text-sm text-ink-mute">Você pode visualizar esta saudação, mas não tem permissão para alterá-la.</p>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-line bg-card p-6" aria-labelledby="persistent-assistant-title">
+          <div className="flex items-start justify-between gap-5">
+            <div>
+              <h2 id="persistent-assistant-title" className="font-semibold tracking-tight">Assistente persistente</h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                Quando ativado, a Helo pode continuar ativa enquanto você navega pela plataforma, permitindo comandos de voz como abrir Rotina, Atividades ou Emergência.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={persistentAssistantEnabled}
+              aria-label="Ativar assistente persistente"
+              disabled={!settingsCaps?.persistentAssistant}
+              onClick={() => setPersistentAssistantEnabled((enabled) => !enabled)}
+              className={`relative mt-1 h-8 w-14 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                persistentAssistantEnabled ? "bg-accent" : "bg-line"
+              }`}
+            >
+              <span className={`absolute top-1 size-6 rounded-full bg-card shadow-sm transition-transform ${persistentAssistantEnabled ? "translate-x-7" : "translate-x-1"}`} />
+            </button>
+          </div>
+          <p className="mt-4 text-xs text-ink-mute">
+            A Helo só continua ativa depois que você iniciar a conversa. Você verá sempre um indicador enquanto ela estiver ativa e poderá encerrá-la a qualquer momento.
+          </p>
+          {!settingsCaps?.persistentAssistant && settingsCaps && (
+            <p className="mt-3 text-sm text-ink-mute">Você pode visualizar esta opção, mas não tem permissão para alterá-la.</p>
           )}
         </section>
 
