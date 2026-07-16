@@ -6,12 +6,23 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { TopBar } from "@/components/ui";
+import { Orb, TopBar } from "@/components/ui";
 import { WelcomeIntro } from "@/components/welcome-orb";
+import { MobileHeader } from "@/components/mobile/mobile-header";
+import { MobileTabBar } from "@/components/mobile/mobile-tab-bar";
+import { usePatient } from "@/lib/patient";
+
+// Destino padrão pós-login: no mobile a experiência abre na Home (sessão
+// Conversar, "Toque para falar"); no desktop permanece o Dashboard. Um
+// ?next= explícito sempre vence — a autenticação em si não muda.
+function defaultDestination(): string {
+  return window.matchMedia("(min-width: 640px)").matches ? "/dashboard" : "/";
+}
 
 function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
+  const { reloadPatients } = usePatient();
   const [mode, setMode] = useState<"loading" | "login" | "bootstrap">("loading");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -24,7 +35,7 @@ function LoginForm() {
       .then((r) => r.json())
       .then((d: { user: unknown; needsBootstrap: boolean }) => {
         if (d.user) {
-          router.replace(search.get("next") || "/dashboard");
+          router.replace(search.get("next") || defaultDestination());
         } else {
           setMode(d.needsBootstrap ? "bootstrap" : "login");
         }
@@ -49,16 +60,21 @@ function LoginForm() {
         setError(d.error ?? "não foi possível entrar");
         return;
       }
-      router.replace(search.get("next") || "/dashboard");
+      // O PatientProvider vive no layout raiz e sobrevive à navegação: a
+      // lista dele ainda é a de ANTES do login (vazia, do 401). Recarrega
+      // com a sessão nova antes de navegar — o seletor de pacientes e o
+      // tema do paciente ativo já chegam prontos no destino.
+      await reloadPatients();
+      router.replace(search.get("next") || defaultDestination());
     } catch {
       setError("falha de conexão — tente de novo");
     } finally {
       setBusy(false);
     }
-  }, [mode, name, email, password, router, search]);
+  }, [mode, name, email, password, router, search, reloadPatients]);
 
   return (
-    <main className="relative flex w-full flex-1 items-center justify-center px-6 py-10">
+    <main className="relative flex w-full flex-1 items-center justify-center px-6 py-10 pb-32 sm:pb-10">
       {/* Primeiro a presença da Helo; o login surge sobre a Orb quando a voz
           termina. O Orb principal (Conversa) fica grande e central, protagonista,
           e nunca desmonta. */}
@@ -153,6 +169,32 @@ function LoginForm() {
           </div>
         )}
       </WelcomeIntro>
+
+      {/* Mobile: a Home aparece por inteiro antes do acesso — a fila de modos
+          é VISUAL (aria-hidden, sem ação própria). Qualquer toque, aqui ou em
+          qualquer ponto da tela, conta como primeira interação e revela o
+          formulário com fade (comportamento do WelcomeIntro). Nenhuma área
+          protegida é alcançável sem sessão. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 bottom-28 flex items-start justify-evenly px-4 sm:hidden"
+      >
+        {(
+          [
+            ["Rotina", "lilas"],
+            ["Emergência", "ambar"],
+            ["Atividades", "ceu"],
+            ["Helo", "coral"],
+          ] as const
+        ).map(([label, palette]) => (
+          <span key={label} className="flex flex-col items-center gap-1.5">
+            {/* breathe: a mesma esfera 3D do palco logado (com fallback em
+                gradiente CSS quando não há WebGL). */}
+            <Orb palette={palette} breathe className="size-14" />
+            <span className="text-[11px] font-medium text-ink-mute">{label}</span>
+          </span>
+        ))}
+      </div>
     </main>
   );
 }
@@ -160,7 +202,13 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="flex min-h-dvh flex-col">
-      <TopBar showLogout={false} />
+      {/* Desktop mantém a TopBar; o mobile veste o cabeçalho e o menu da Home
+          (área de paciente vazia e menu inerte — não há sessão). */}
+      <div className="hidden sm:block">
+        <TopBar showLogout={false} />
+      </div>
+      <MobileHeader className="sm:hidden" />
+      <MobileTabBar locked className="sm:hidden" />
       <Suspense>
         <LoginForm />
       </Suspense>

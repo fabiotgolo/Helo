@@ -37,7 +37,10 @@ export default function Home() {
       // Só avança se a apresentação terminou de verdade e o usuário ainda
       // está na home. "bloqueada" (autoplay negado), "erro", "interrompida"
       // e "ignorada" mantêm a home funcional com o CTA à mão.
-      if (mounted && result === "concluida") {
+      // No mobile a Home É a sessão Conversar ("Toque para falar") — a intro
+      // toca, mas quem avança é o toque do usuário, nunca o timer da fala.
+      const desktop = window.matchMedia("(min-width: 640px)").matches;
+      if (mounted && desktop && result === "concluida") {
         advance("conversar", { silent: true });
       }
     });
@@ -50,7 +53,9 @@ export default function Home() {
     // Espaço negativo dosado: o vão entre o CTA e o bloco da marca fica com
     // METADE da folga (o restante desce para baixo do bloco) — respiro sem
     // abismo entre as duas ilhas de conteúdo.
-    <main className="flex flex-1 flex-col items-center gap-6 px-4 pb-6 pt-12 sm:px-6">
+    // No mobile a Home é o palco puro (orbe + fila de modos + menu inferior);
+    // este conteúdo textual e o CTA pertencem à composição desktop.
+    <main className="hidden flex-1 flex-col items-center gap-6 px-4 pb-6 pt-12 sm:flex sm:px-6">
       <div key={activeMode} className="fade-rise flex flex-col items-center gap-4 text-center">
         <p className="max-w-md text-ink-soft">{info.description}</p>
         <button

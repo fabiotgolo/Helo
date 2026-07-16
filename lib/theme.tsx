@@ -140,7 +140,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const setTheme = useCallback(
     async (id: ThemeId): Promise<boolean> => {
-      if (!isThemeId(id) || patientId == null) return false;
+      if (!isThemeId(id)) return false;
+      // Sem paciente ativo (ex.: tela de login): a troca é imediata e apenas
+      // visual — nada é persistido, e a preferência do paciente volta a
+      // mandar assim que houver um ativo (efeito de settings acima).
+      if (patientId == null) {
+        themeRef.current = id;
+        setThemeState(id);
+        applyTheme(id, scalesRef.current);
+        return true;
+      }
       const targetPatientId = patientId;
       const previousTheme = themeRef.current;
       const previousScales = scalesRef.current;

@@ -125,13 +125,16 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
   }
 
   if (mobile) {
-    // Home mobile: o grande no alto, os demais em fila na base.
-    const D = Math.min(w * 0.6, h * 0.46, 280);
+    // Home mobile (referência visual): o orbe ativo é o protagonista absoluto
+    // — quase a largura da tela — com "Conversar / Toque para falar" logo
+    // abaixo; os demais modos formam a fila de acesso rápido na base, acima
+    // do menu inferior. O palco recebe a altura útil inteira do layout.
+    const D = Math.min(w * 0.82, h * 0.52, 400);
     const n = inactive.length;
-    const d = Math.min(D * 0.5, w / (n + 1) - 14);
-    lay[active] = { x: w * 0.5, y: h * 0.3, d: D };
+    const d = Math.min(D * 0.28, w / (n + 1) - 14);
+    lay[active] = { x: w * 0.5, y: h * 0.38, d: D };
     inactive.forEach((m, i) => {
-      lay[m] = { x: (w * (i + 1)) / (n + 1), y: h * 0.76, d };
+      lay[m] = { x: (w * (i + 1)) / (n + 1), y: h * 0.84, d };
     });
     return lay;
   }
@@ -459,10 +462,10 @@ export default function OrbStage({
               style={{ left: r.x - r.d / 2, top: r.y - r.d / 2, width: r.d, height: r.d }}
             >
               <span
-                className={`pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap font-medium tracking-tight transition-all duration-500 motion-reduce:transition-none ${
+                className={`pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap text-center font-medium tracking-tight transition-all duration-500 motion-reduce:transition-none ${
                   variant === "aberto"
                     ? isActive
-                      ? "text-xl text-ink sm:text-2xl"
+                      ? "text-2xl text-ink sm:text-2xl"
                       : "text-sm text-ink-soft"
                     : isActive
                       ? // presença central (atrás do conteúdo): sem rótulo visível
@@ -472,6 +475,13 @@ export default function OrbStage({
                 }`}
               >
                 {info.title}
+                {variant === "aberto" && isActive && (
+                  // Convite ao toque da referência mobile — o desktop mantém
+                  // a descrição e o CTA da página da Home.
+                  <span className="mt-1 block text-base font-normal text-ink-soft sm:hidden">
+                    Toque para falar
+                  </span>
+                )}
               </span>
             </button>
           );

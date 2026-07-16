@@ -14,8 +14,16 @@
 
 import { useTheme } from "@/lib/theme";
 
-export function ThemeDots({ className = "" }: { className?: string }) {
+export function ThemeDots({
+  className = "",
+  size = "default",
+}: {
+  className?: string;
+  /** "compact": bolinhas menores para o cabeçalho mobile. */
+  size?: "default" | "compact";
+}) {
   const { theme, setTheme, themes } = useTheme();
+  const compact = size === "compact";
 
   return (
     <div
@@ -36,16 +44,19 @@ export function ThemeDots({ className = "" }: { className?: string }) {
             aria-label={`Tema ${meta.label}${selected ? " — ativo" : ""}`}
             title={meta.label}
             onClick={() => setTheme(meta.id)}
-            // Alvo de toque generoso (32px) com a bolinha visível menor e
-            // discreta no centro — o clique é fácil sem ocupar a topbar.
-            className="group flex size-8 shrink-0 items-center justify-center rounded-full"
+            // Alvo de toque generoso (32px; 28px no compacto) com a bolinha
+            // visível menor e discreta no centro — o clique é fácil sem
+            // ocupar a topbar.
+            className={`group flex shrink-0 items-center justify-center rounded-full ${
+              compact ? "size-7" : "size-8"
+            }`}
           >
             <span
               aria-hidden="true"
               className={`block rounded-full transition-all duration-200 motion-reduce:transition-none ${
                 selected
-                  ? "size-5 ring-2 ring-accent ring-offset-2 ring-offset-cream"
-                  : "size-4 border border-black/15 group-hover:scale-110"
+                  ? `${compact ? "size-3.5" : "size-5"} ring-2 ring-accent ring-offset-2 ring-offset-cream`
+                  : `${compact ? "size-3" : "size-4"} border border-black/15 group-hover:scale-110`
               }`}
               // Duas metades: fundo + destaque do tema — mostra tom claro/escuro
               // e a cor de acento de relance. Espelha as amostras do painel.

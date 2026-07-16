@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { useHelo, type HeloMode } from "@/lib/helo-state";
 import { PillLink, TopBar } from "@/components/ui";
+import { MobileHeader } from "@/components/mobile/mobile-header";
+import { MobileTabBar } from "@/components/mobile/mobile-tab-bar";
 
 const OrbStage = dynamic(() => import("@/components/orb-stage"), { ssr: false });
 
@@ -51,23 +53,39 @@ export default function PalcoLayoutClient({ children }: { children: ReactNode })
 
   return (
   <div className="safe-area-pb flex min-h-dvh flex-col">
-      <TopBar
-        right={
-          <>
-            <span className="hidden rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft sm:inline">
-              voz: {voiceBadge}
-            </span>
-            <PillLink href="/ajustes">Ajustes</PillLink>
-            <PillLink href="/dashboard">Dashboard</PillLink>
-          </>
-        }
-      />
+      {/* Home mobile tem cabeçalho e menu próprios (referência visual);
+          o desktop — e as demais rotas em qualquer largura — seguem com a
+          TopBar intacta. */}
+      <div className={isHome ? "hidden sm:block" : ""}>
+        <TopBar
+          right={
+            <>
+              <span className="hidden rounded-full border border-line bg-card px-4 py-1.5 text-xs text-ink-soft sm:inline">
+                voz: {voiceBadge}
+              </span>
+              <PillLink href="/ajustes">Ajustes</PillLink>
+              <PillLink href="/dashboard">Dashboard</PillLink>
+            </>
+          }
+        />
+      </div>
+      {isHome && (
+        <>
+          <MobileHeader className="sm:hidden" />
+          <MobileTabBar className="sm:hidden" />
+        </>
+      )}
 
       <div className="relative flex flex-1 flex-col">
         <OrbStage
           variant={variant}
           className={`absolute inset-x-0 top-0 z-0 transition-[height] duration-700 ease-out motion-reduce:transition-none ${
-            variant === "aberto" ? "h-[min(44vh,380px)]" : "h-full"
+            variant === "aberto"
+              ? // Mobile: o palco ocupa a altura útil até o menu inferior
+                // (~5.5rem) — orbe protagonista + fila de modos, como na
+                // referência. Desktop preserva a faixa superior original.
+                "h-[calc(100%-5.5rem)] sm:h-[min(44vh,380px)]"
+              : "h-full"
           }`}
         />
         {/* O conteúdo flutua SOBRE o orbe: cliques atravessam as áreas

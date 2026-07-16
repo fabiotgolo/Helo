@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Teste em dispositivo real na rede local (iPhone → IP do Mac): sem isto o
+  // Next 16 responde 403 aos assets de dev em acessos que não sejam
+  // localhost. Só vale em desenvolvimento — produção ignora a opção.
+  allowedDevOrigins: ["192.168.68.*"],
   // Permite um dev server paralelo (ex.: preview de outra sessão) sem brigar
   // pelo lock em .next/dev — cada instância aponta seu próprio distDir.
   distDir: process.env.NEXT_DIST_DIR || ".next",
