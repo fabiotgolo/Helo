@@ -51,6 +51,7 @@ type SettingsCapsState = {
 };
 
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
+const HELO_GREETING_MAX_LENGTH = 200;
 
 // Paleta de mãos por gesto — cada gesto oferece só as mãos coerentes com ele
 // (ex.: o "Sim" não oferece 👎). Mãos neutras servem a qualquer gesto, pois o
@@ -79,6 +80,7 @@ export default function AjustesPage() {
   const [patientName, setPatientName] = useState("");
   const [speechStyle, setSpeechStyle] = useState("");
   const [avoidedTopics, setAvoidedTopics] = useState("");
+  const [heloGreeting, setHeloGreeting] = useState("");
   const [gestureEmojis, setGestureEmojis] = useState<Record<Gesture, string>>({
     sim: "",
     talvez: "",
@@ -138,6 +140,7 @@ export default function AjustesPage() {
     setPatientName(settings[PATIENT_SETTING_KEYS.name] ?? "");
     setSpeechStyle(settings[PATIENT_SETTING_KEYS.speechStyle] ?? "");
     setAvoidedTopics(settings[PATIENT_SETTING_KEYS.avoidedTopics] ?? "");
+    setHeloGreeting(settings[PATIENT_SETTING_KEYS.heloGreeting] ?? "");
     setGestureEmojis({
       sim: settings[GESTURE_EMOJI_KEYS.sim] ?? "",
       talvez: settings[GESTURE_EMOJI_KEYS.talvez] ?? "",
@@ -207,6 +210,7 @@ export default function AjustesPage() {
     if (settingsCaps.conversation) {
       updates[PATIENT_SETTING_KEYS.speechStyle] = speechStyle.trim();
       updates[PATIENT_SETTING_KEYS.avoidedTopics] = avoidedTopics.trim();
+      updates[PATIENT_SETTING_KEYS.heloGreeting] = heloGreeting.trim();
     }
     if (settingsCaps.gestures) {
       updates[GESTURE_EMOJI_KEYS.sim] = gestureEmojis.sim.trim();
@@ -227,6 +231,7 @@ export default function AjustesPage() {
     patientName,
     speechStyle,
     avoidedTopics,
+    heloGreeting,
     gestureEmojis,
     settingsCaps,
   ]);
@@ -436,6 +441,32 @@ export default function AjustesPage() {
 
         {/* ——— Voz do Agent para o paciente ativo ——— */}
         <div id="section-voz_helo"><HeloVoiceSettings /></div>
+
+        <section className="rounded-3xl border border-line bg-card p-6" aria-labelledby="helo-greeting-title">
+          <h2 id="helo-greeting-title" className="font-semibold tracking-tight">Saudação da Helo</h2>
+          <p className="text-sm text-ink-soft">
+            Escreva a frase que a Helo deve dizer ao iniciar uma conversa com este paciente.
+          </p>
+          <label className="mt-4 flex flex-col gap-2">
+            <span className="text-sm font-medium text-ink-soft">Frase inicial</span>
+            <textarea
+              value={heloGreeting}
+              onChange={(e) => setHeloGreeting(e.target.value.slice(0, HELO_GREETING_MAX_LENGTH))}
+              rows={3}
+              maxLength={HELO_GREETING_MAX_LENGTH}
+              disabled={!settingsCaps?.conversation}
+              placeholder="Bom dia, Dr. Fábio! Como você está hoje?"
+              className="w-full rounded-2xl border border-line bg-cream px-5 py-3.5 outline-none focus:border-ink-mute disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <span className="text-xs text-ink-mute">{heloGreeting.length}/{HELO_GREETING_MAX_LENGTH} caracteres</span>
+          </label>
+          <p className="mt-3 text-xs text-ink-mute">
+            Evite incluir informações médicas ou dados sensíveis nesta saudação.
+          </p>
+          {!settingsCaps?.conversation && settingsCaps && (
+            <p className="mt-3 text-sm text-ink-mute">Você pode visualizar esta saudação, mas não tem permissão para alterá-la.</p>
+          )}
+        </section>
 
         {/* ——— Estilo de comunicação ——— */}
         <section id="section-comunicacao" className="rounded-3xl border border-line bg-card p-6">

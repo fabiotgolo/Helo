@@ -7,6 +7,8 @@ import {
   type Permission,
 } from "@/lib/access-types";
 
+const HELO_GREETING_MAX_LENGTH = 200;
+
 // Configurações do paciente (nome, gestos, estilo de fala…).
 // Sempre com escopo de patientId — não existe mais configuração global.
 // Escrita exige a permissão da área correspondente:
@@ -34,7 +36,8 @@ function permissionForKey(key: string): Permission | undefined {
   }
   if (
     key === PATIENT_SETTING_KEYS.speechStyle ||
-    key === PATIENT_SETTING_KEYS.avoidedTopics
+    key === PATIENT_SETTING_KEYS.avoidedTopics ||
+    key === PATIENT_SETTING_KEYS.heloGreeting
   ) {
     return "editConversation";
   }
@@ -96,6 +99,22 @@ export async function POST(request: Request) {
     heloVoicePreference !== "male"
   ) {
     return Response.json({ error: "preferência de voz inválida" }, { status: 422 });
+  }
+  const heloGreeting = updates[PATIENT_SETTING_KEYS.heloGreeting];
+  if (heloGreeting !== undefined) {
+    if (typeof heloGreeting !== "string") {
+      return Response.json({ error: "saudação inválida" }, { status: 422 });
+    }
+    const normalizedGreeting = heloGreeting.trim();
+    if (normalizedGreeting.length > HELO_GREETING_MAX_LENGTH) {
+      return Response.json(
+        { error: `a saudação deve ter no máximo ${HELO_GREETING_MAX_LENGTH} caracteres` },
+        { status: 422 }
+      );
+    }
+    // Vazio é intencional: remove a personalização e faz o Agent usar o
+    // fallback seguro ao iniciar a próxima sessão.
+    updates[PATIENT_SETTING_KEYS.heloGreeting] = normalizedGreeting;
   }
   if (Object.values(updates).some((value) => typeof value !== "string")) {
     return Response.json({ error: "configuração inválida" }, { status: 422 });

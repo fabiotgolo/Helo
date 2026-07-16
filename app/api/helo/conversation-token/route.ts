@@ -5,9 +5,17 @@ import type { HeloVoicePreference } from "@/lib/access-types";
 
 type HeloDynamicVariables = Record<string, string | number | boolean>;
 type HeloConversationOverrides = { tts?: { voice_id?: string } };
+const HELO_GREETING_MAX_LENGTH = 200;
 
 function gestureLabel(settings: Record<string, string>, key: "gestureSim" | "gestureTalvez" | "gestureNao", fallback: string) {
   return settings[PATIENT_SETTING_KEYS[key]]?.trim() || fallback;
+}
+
+function patientGreeting(settings: Record<string, string>, preferredName: string): string {
+  const greeting = settings[PATIENT_SETTING_KEYS.heloGreeting]?.trim();
+  return greeting && greeting.length <= HELO_GREETING_MAX_LENGTH
+    ? greeting
+    : `Olá, ${preferredName}. Eu sou a Helo. Como posso ajudar?`;
 }
 
 function buildDynamicVariables(input: {
@@ -22,6 +30,10 @@ function buildDynamicVariables(input: {
     // Contexto mínimo, configuracional e sem histórico, diagnóstico ou documentos.
     patientName: patientName || preferredName,
     preferredName,
+    // A configuração do First Message do Agent deve usar
+    // {{heloPatientGreeting}}. Nunca enviamos uma string vazia para que a
+    // primeira fala continue segura quando não houver personalização.
+    heloPatientGreeting: patientGreeting(settings, preferredName),
     communicationStyle: settings[PATIENT_SETTING_KEYS.speechStyle]?.trim() || "claro e respeitoso",
     responsePace: "calmo e pausado",
     confirmGestureLabel: gestureLabel(settings, "gestureSim", "Sim"),

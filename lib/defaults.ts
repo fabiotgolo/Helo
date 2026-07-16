@@ -77,6 +77,8 @@ export { modeSpeakerRole };
 //   heloVoicePreference   → voz semântica do Agent Helo (female | male).
 //                        O voiceId técnico é resolvido exclusivamente no
 //                        backend ao iniciar a conversa.
+//   heloGreeting          → primeira fala personalizada da Helo para este
+//                        paciente; texto simples, limitado no backend.
 export const PATIENT_SETTING_KEYS = {
   name: "patient_name",
   voiceId: "voice_id",
@@ -86,6 +88,7 @@ export const PATIENT_SETTING_KEYS = {
   appearanceTheme: "appearance_theme",
   appearanceFontScales: "appearance_font_scales",
   heloVoicePreference: "helo_voice_preference",
+  heloGreeting: "helo_greeting",
   speechStyle: "speech_style",
   avoidedTopics: "avoided_topics",
   gestureSim: "gesture_sim_emoji",
