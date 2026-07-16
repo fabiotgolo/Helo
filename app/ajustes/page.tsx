@@ -507,7 +507,18 @@ export default function AjustesPage() {
                 persistentAssistantEnabled ? "bg-accent" : "bg-line"
               }`}
             >
-              <span className={`absolute top-1 size-6 rounded-full bg-card shadow-sm transition-transform ${persistentAssistantEnabled ? "translate-x-7" : "translate-x-1"}`} />
+              {/* `left-1` é obrigatório: sem ele o knob cai na posição
+                  estática, que num <button> (text-align: center do
+                  navegador) é o CENTRO do trilho — e o translate somava a
+                  partir dali, jogando o knob para fora. Ancorado à
+                  esquerda, o curso é trilho − knob − 2×folga (56−24−8=24px
+                  = translate-x-6), e tudo em rem acompanha a escala de
+                  fonte do paciente. */}
+              <span
+                className={`absolute left-1 top-1 size-6 rounded-full bg-card shadow-sm transition-transform ${
+                  persistentAssistantEnabled ? "translate-x-6" : "translate-x-0"
+                }`}
+              />
             </button>
           </div>
           <p className="mt-4 text-xs text-ink-mute">
