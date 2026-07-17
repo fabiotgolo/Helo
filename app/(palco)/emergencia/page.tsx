@@ -88,13 +88,10 @@ export default function EmergenciaPage() {
 
   const trigger = useCallback(
     (item: EmergencyAction) => {
-      console.log("[EMERGENCY] click received:", item.label);
-      console.log("[EMERGENCY] phrase selected:", item.phrase);
       setFeedback({ label: item.label, status: "falando" });
       // A voz sai PRIMEIRO — nenhuma rede ou registro na frente do socorro.
       // Fala do PACIENTE: usa a voz clonada dele quando configurada; sem
       // clone, o servidor aplica o fallback aprovado (voz neutra identificada).
-      console.log("[EMERGENCY] speak called");
       speak(item.phrase, {
         speakerRole: "patient",
         confirmationStatus: "notRequired",
@@ -102,7 +99,6 @@ export default function EmergenciaPage() {
         mode: "emergencia",
       })
         .then((result) => {
-          console.log("[EMERGENCY] speak result:", result);
           if (result === "erro" || result === "bloqueada") {
             setFeedback({
               label: item.label,

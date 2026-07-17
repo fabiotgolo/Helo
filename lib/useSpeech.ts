@@ -234,6 +234,11 @@ export function useSpeech() {
       if (!text.trim()) return "concluida";
       const speakerRole = options?.speakerRole ?? "helo";
       const confirmationStatus = options?.confirmationStatus ?? "notRequired";
+      // Fallback do navegador é EXCLUSIVO da Emergência ("uma frase de
+      // socorro nunca morre em silêncio"). Fora dela, uma falha da
+      // ElevenLabs falha em silêncio — a voz do sistema nunca representa
+      // a Helo nem o paciente em fluxos não vitais.
+      const fallbackAllowed = options?.mode === "emergencia";
       // Fala do paciente sempre valida o contexto do paciente ATIVO — uma
       // troca rápida de paciente nunca reproduz a voz (ou o cache) errado.
       const patientId =
@@ -338,6 +343,10 @@ export function useSpeech() {
           if (r !== "erro") return r;
           if (genRef.current !== gen) return "interrompida";
           console.warn("[EMERGENCY] áudio ElevenLabs falhou — fallback aprovado (voz do navegador)");
+        }
+        if (!fallbackAllowed) {
+          console.warn("[VOZ] ElevenLabs indisponível fora da Emergência — fala falha em silêncio (sem fallback)");
+          return "erro";
         }
         console.log("[EMERGENCY] fallback aprovado: voz local do navegador");
         setEngine("navegador");
