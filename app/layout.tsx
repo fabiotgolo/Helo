@@ -35,7 +35,10 @@ export default function RootLayout({
       className={`${inter.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">
+      {/* suppressHydrationWarning: extensões do navegador (antivírus,
+          gerenciadores de senha) injetam atributos no <body> antes da
+          hidratação — só silencia atributos deste nó, não erros reais. */}
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         {/* Anti-flash: aplica o tema salvo antes da primeira pintura. Precisa
             ser o primeiro nó do body e rodar de forma síncrona. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
