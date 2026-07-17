@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Gesture, ModeItem } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
@@ -10,6 +11,8 @@ import { useHelo } from "@/lib/helo-state";
 import { GestureTriplet } from "@/components/ui";
 import { OverlayVeil } from "@/components/overlay-panel";
 import { ContextualEdit } from "@/components/contextual-edit";
+import { buildEditLink } from "@/lib/edit-link";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 
 // Modo rotina: as frases rápidas são DO PACIENTE (personalizáveis em
 // Ajustes), com espelho local — o modo continua funcionando sem IA e sem
@@ -18,12 +21,15 @@ import { ContextualEdit } from "@/components/contextual-edit";
 
 type Pending = {
   itemId: string | null;
+  /** Id estável para o Action Registry: itemId real ou defaultKey do padrão. */
+  actionKey: string;
   label: string;
   phrase: string;
   category: string;
 };
 
 export default function RotinaPage() {
+  const router = useRouter();
   const { speak } = useHelo();
   const gestures = useGestures();
   const { patientId } = usePatient();
@@ -41,6 +47,7 @@ export default function RotinaPage() {
     if (enabledItems.length > 0) {
       return enabledItems.map((i: ModeItem) => ({
         itemId: i.id,
+        actionKey: i.id,
         label: i.label,
         phrase: i.spokenText,
         category: i.category,
@@ -49,6 +56,7 @@ export default function RotinaPage() {
     if (loading) return [];
     return DEFAULT_ITEMS.rotina.map((d) => ({
       itemId: null,
+      actionKey: d.defaultKey,
       label: d.label,
       phrase: d.spokenText,
       category: d.category,
@@ -144,6 +152,43 @@ export default function RotinaPage() {
     },
     [pending, speak, patientId]
   );
+
+  // Action Registry: espelha o que está clicável agora — a grade de frases
+  // (com edição contextual quando permitida) ou, durante uma confirmação,
+  // os três gestos. Os handlers são os MESMOS do toque manual.
+  const registryActions = useMemo<HeloUIAction[]>(() => {
+    if (pending) {
+      const gestureRun = (g: Gesture) => () => onGesture(g);
+      return [
+        { actionId: "gesto.confirmar", label: `Confirmar: ${pending.phrase}`, type: "gesture", enabled: true, run: gestureRun("sim") },
+        { actionId: "gesto.reformular", label: "Não é bem isso", type: "gesture", enabled: true, run: gestureRun("talvez") },
+        { actionId: "gesto.recusar", label: "Descartar", type: "gesture", enabled: true, run: gestureRun("nao") },
+      ];
+    }
+    const list: HeloUIAction[] = [];
+    for (const item of items) {
+      list.push({
+        actionId: `rotina.item.${item.actionKey}`,
+        label: item.label,
+        type: "modeItem",
+        enabled: true,
+        run: () => void propose(item),
+      });
+      if (canEdit && item.itemId) {
+        const itemId = item.itemId;
+        list.push({
+          actionId: `rotina.editar.${itemId}`,
+          label: `Editar ${item.label}`,
+          type: "edit",
+          enabled: true,
+          requiredPermission: "editRoutine",
+          run: () => router.push(buildEditLink({ entityType: "modeItem", mode: "rotina", itemId }, "/rotina")),
+        });
+      }
+    }
+    return list;
+  }, [canEdit, items, onGesture, pending, propose, router]);
+  useRegisterHeloUIActions(registryActions);
 
   return (
     <div className="relative flex flex-1 flex-col">

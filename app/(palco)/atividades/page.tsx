@@ -8,14 +8,16 @@
 // O palco dos orbes persiste por baixo (layout do grupo (palco)); o
 // conteúdo flutua em overlay, como Rotina e Conversa.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { usePatient } from "@/lib/patient";
 import { redirectToLogin } from "@/lib/use-auth";
 import { OverlayVeil } from "@/components/overlay-panel";
 import { SessionPlayer } from "@/components/activity-player";
 import { ContextualEdit } from "@/components/contextual-edit";
-import { readSearchParams } from "@/lib/edit-link";
+import { buildEditLink, readSearchParams } from "@/lib/edit-link";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import {
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
@@ -30,6 +32,7 @@ type View =
   | { kind: "fim"; titulo: string; respondidos: number; total: number };
 
 export default function AtividadesPage() {
+  const router = useRouter();
   const { patient, patientId } = usePatient();
   const [templates, setTemplates] = useState<ActivityTemplate[] | null>(null);
   const [caps, setCaps] = useState<ActivityCaps | null>(null);
@@ -127,6 +130,66 @@ export default function AtividadesPage() {
     window.history.replaceState(null, "", "/atividades");
     if (template) void start(template, resumeCtx.itemId);
   }, [resumeCtx, state, templates, caps, start]);
+
+  // Action Registry da LISTA: iniciar cada sessão (com a permissão real de
+  // execução) e a edição contextual. Dentro de uma sessão, quem registra as
+  // ações é o SessionPlayer; na tela de fim, voltar à lista.
+  const registryActions = useMemo<HeloUIAction[]>(() => {
+    if (view.kind === "fim") {
+      return [{
+        actionId: "atividades.voltarLista",
+        label: "Voltar às atividades",
+        type: "activity",
+        enabled: true,
+        run: () => setView({ kind: "lista" }),
+      }];
+    }
+    if (view.kind !== "lista" || state !== "ok" || !templates) return [];
+    const list: HeloUIAction[] = [];
+    // Navegação sempre visível na lista (inclusive no estado vazio, quando
+    // são os ÚNICOS botões da tela): mesmos destinos dos links reais.
+    if (caps?.create || caps?.edit) {
+      list.push({
+        actionId: "atividades.gerenciar",
+        label: "Gerenciar atividades",
+        type: "activity",
+        enabled: true,
+        run: () => router.push("/atividades/gerenciar"),
+      });
+    }
+    if (caps?.create) {
+      list.push({
+        actionId: "atividades.criar",
+        label: "Criar sessão",
+        type: "activity",
+        enabled: true,
+        requiredPermission: "createActivities",
+        run: () => router.push("/atividades/gerenciar"),
+      });
+    }
+    for (const t of templates) {
+      list.push({
+        actionId: `atividades.iniciar.${t.id}`,
+        label: t.title,
+        type: "activity",
+        enabled: Boolean(caps?.run) && starting == null,
+        requiredPermission: "runActivities",
+        run: () => void start(t),
+      });
+      if (caps?.edit) {
+        list.push({
+          actionId: `atividades.editar.${t.id}`,
+          label: `Editar ${t.title}`,
+          type: "edit",
+          enabled: true,
+          requiredPermission: "editActivities",
+          run: () => router.push(buildEditLink({ entityType: "activity", activityId: t.id }, "/atividades")),
+        });
+      }
+    }
+    return list;
+  }, [caps, router, start, starting, state, templates, view]);
+  useRegisterHeloUIActions(registryActions);
 
   if (patientId == null) {
     return (

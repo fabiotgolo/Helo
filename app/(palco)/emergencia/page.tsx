@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { usePatient, usePatientItems } from "@/lib/patient";
 import { DEFAULT_ITEMS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import { OverlayVeil } from "@/components/overlay-panel";
 import { ContextualEdit } from "@/components/contextual-edit";
+import { buildEditLink } from "@/lib/edit-link";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 
 // Modo emergência: frases críticas DO PACIENTE (editáveis em Ajustes, nunca
 // aqui), sem IA e sem etapas. O toque do assistente é a confirmação — a voz
@@ -19,9 +22,16 @@ import { ContextualEdit } from "@/components/contextual-edit";
 // Diferente dos outros modos, o conteúdo entra SEM animação (nada de
 // fade-rise): as ações de socorro estão legíveis e clicáveis no primeiro
 // frame, enquanto a transição visual do orbe termina por conta própria.
-type EmergencyAction = { itemId: string | null; label: string; phrase: string };
+type EmergencyAction = {
+  itemId: string | null;
+  /** Id estável para o Action Registry: itemId real ou defaultKey do padrão. */
+  actionKey: string;
+  label: string;
+  phrase: string;
+};
 
 export default function EmergenciaPage() {
+  const router = useRouter();
   const { speak, prime } = useHelo();
   const { patientId } = usePatient();
   const { enabledItems, loading, canEdit } = usePatientItems("emergencia");
@@ -32,6 +42,7 @@ export default function EmergenciaPage() {
     if (enabledItems.length > 0) {
       return enabledItems.map((i) => ({
         itemId: i.id,
+        actionKey: i.id,
         label: i.label,
         phrase: i.spokenText,
       }));
@@ -39,6 +50,7 @@ export default function EmergenciaPage() {
     if (loading) return [];
     return DEFAULT_ITEMS.emergencia.map((d) => ({
       itemId: null,
+      actionKey: d.defaultKey,
       label: d.label,
       phrase: d.spokenText,
     }));
@@ -147,6 +159,35 @@ export default function EmergenciaPage() {
     },
     [speak, ensureSession, patientId]
   );
+
+  // Action Registry: as ações de socorro (e a edição contextual, quando
+  // permitida) com os MESMOS handlers do toque manual — o toque do Agent
+  // também é confirmação, pela regra do produto da Emergência.
+  const registryActions = useMemo<HeloUIAction[]>(() => {
+    const list: HeloUIAction[] = [];
+    for (const item of actions) {
+      list.push({
+        actionId: `emergencia.item.${item.actionKey}`,
+        label: item.label,
+        type: "modeItem",
+        enabled: true,
+        run: () => trigger(item),
+      });
+      if (canEdit && item.itemId) {
+        const itemId = item.itemId;
+        list.push({
+          actionId: `emergencia.editar.${itemId}`,
+          label: `Editar ${item.label}`,
+          type: "edit",
+          enabled: true,
+          requiredPermission: "editEmergency",
+          run: () => router.push(buildEditLink({ entityType: "modeItem", mode: "emergencia", itemId }, "/emergencia")),
+        });
+      }
+    }
+    return list;
+  }, [actions, canEdit, router, trigger]);
+  useRegisterHeloUIActions(registryActions);
 
   return (
     <div className="relative flex flex-1 flex-col">

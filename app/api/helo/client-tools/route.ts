@@ -1,6 +1,7 @@
 import { requirePatientAccess } from "@/lib/auth";
 import {
   isHeloNavigationArea,
+  isHeloPermission,
   isHeloSettingsSection,
   permissionForHeloTool,
   type HeloClientToolAction,
@@ -13,6 +14,9 @@ const ACTIONS: readonly HeloClientToolAction[] = [
   "openEmergencyMode",
   "openActivitiesMode",
   "showGestureChoices",
+  // getCurrentHeloActions é só leitura da tela e não passa por aqui;
+  // a execução de uma ação do registry passa, com a permissão declarada.
+  "interactWithHeloUI",
 ];
 
 /**
@@ -34,15 +38,21 @@ export async function POST(request: Request) {
 
   const area = body?.area;
   const section = body?.section;
+  const permission = body?.permission;
   if (area !== undefined && !isHeloNavigationArea(area)) {
     return Response.json({ ok: false, error: "Área de navegação inválida" }, { status: 400 });
   }
   if (section !== undefined && !isHeloSettingsSection(section)) {
     return Response.json({ ok: false, error: "Seção de ajustes inválida" }, { status: 400 });
   }
+  // A permissão declarada só APERTA a checagem (exige mais que o vínculo);
+  // a autorização real de cada escrita continua nas próprias rotas de dados.
+  if (permission !== undefined && !isHeloPermission(permission)) {
+    return Response.json({ ok: false, error: "Permissão desconhecida" }, { status: 400 });
+  }
 
   const typedAction = action as HeloClientToolAction;
-  const auth = await requirePatientAccess(request, patientId, permissionForHeloTool(typedAction, { area, section }));
+  const auth = await requirePatientAccess(request, patientId, permissionForHeloTool(typedAction, { area, section, permission }));
   if (auth instanceof Response) {
     const data = (await auth.json().catch(() => null)) as { error?: string } | null;
     return Response.json({ ok: false, error: data?.error ?? "Acesso negado" }, { status: auth.status });

@@ -1,4 +1,4 @@
-import type { Permission } from "@/lib/access-types";
+import { PERMISSIONS, type Permission } from "@/lib/access-types";
 
 // Contrato fechado entre as Client Tools configuradas no Agent e a interface.
 // Nunca derive URLs ou permissões de valores enviados pelo Agent.
@@ -30,7 +30,11 @@ export type HeloClientToolAction =
   | "openRoutineMode"
   | "openEmergencyMode"
   | "openActivitiesMode"
-  | "showGestureChoices";
+  | "showGestureChoices"
+  // Ponte com o Action Registry: descoberta é local (leitura da tela);
+  // execução autoriza no servidor com a permissão declarada pela ação.
+  | "getCurrentHeloActions"
+  | "interactWithHeloUI";
 
 export const HELO_AREA_ROUTES: Record<HeloNavigationArea, string> = {
   helo: "/helo",
@@ -65,11 +69,21 @@ export function isHeloSettingsSection(value: unknown): value is HeloSettingsSect
   return typeof value === "string" && (HELO_SETTINGS_SECTIONS as readonly string[]).includes(value);
 }
 
+export function isHeloPermission(value: unknown): value is Permission {
+  return typeof value === "string" && (PERMISSIONS as readonly string[]).includes(value);
+}
+
 /** Permissão mínima para autorizar uma navegação; indefinida significa vínculo ativo. */
 export function permissionForHeloTool(
   action: HeloClientToolAction,
-  options?: { area?: HeloNavigationArea; section?: HeloSettingsSection }
+  options?: {
+    area?: HeloNavigationArea;
+    section?: HeloSettingsSection;
+    /** Permissão declarada pela ação do registry (interactWithHeloUI). */
+    permission?: Permission;
+  }
 ): Permission | undefined {
+  if (options?.permission) return options.permission;
   if (options?.section) return SETTINGS_SECTION_PERMISSIONS[options.section];
   if (options?.area) return AREA_PERMISSIONS[options.area];
   return ACTION_PERMISSIONS[action];

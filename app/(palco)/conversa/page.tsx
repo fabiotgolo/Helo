@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { flow, compose, START_NODE, type FlowNode, type Option } from "@/lib/flow";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import { GESTURES, type Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
@@ -36,6 +38,7 @@ type Phase = "intro" | "node" | "confirm" | "done";
 type Person = { id: number; name: string; relation: string | null };
 
 export default function ConversaPage() {
+  const router = useRouter();
   // Voz global da Helo — a mesma do palco; o orbe reage a esta fala
   const { speak, speaking } = useHelo();
 
@@ -541,6 +544,79 @@ export default function ConversaPage() {
   const displayOptions: { label: string; ai: boolean }[] = aiOptions
     ? aiOptions.map((o) => ({ label: o.label, ai: true }))
     : batchOptions.map((o) => ({ label: o.label, ai: false }));
+
+  // Action Registry da Conversa guiada — espelha os botões visíveis por fase,
+  // com os MESMOS handlers do toque manual. Os gestos são o sinal do paciente
+  // relatado pelo operador; o Agent os aciona pela mesma semântica.
+  const registryActions = useMemo<HeloUIAction[]>(() => {
+    if (phase === "intro") {
+      const ready = !authLoading && !patientLoading && user != null && patientId != null;
+      return [{
+        actionId: "conversa.comecar",
+        label: "Começar",
+        type: "activity",
+        enabled: ready && !starting,
+        run: () => void begin(),
+      }];
+    }
+    if (phase === "done") {
+      return [
+        {
+          actionId: "conversa.continuar",
+          label: "Continuar a conversa",
+          type: "activity",
+          enabled: true,
+          run: () => { setConfirm(null); enterNode(START_NODE); },
+        },
+        {
+          actionId: "conversa.encerrar",
+          label: "Encerrar",
+          type: "activity",
+          enabled: true,
+          run: () => { finish(); router.push("/"); },
+        },
+      ];
+    }
+    const list: HeloUIAction[] = [];
+    // Gestos do paciente por fase — a semântica (confirmar/reformular/recusar)
+    // é a mesma dos três botões de gesto na tela.
+    if (phase === "confirm" && confirm) {
+      list.push(
+        { actionId: "gesto.confirmar", label: "Confirmar mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("sim") },
+        { actionId: "gesto.reformular", label: "Reformular mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("talvez") },
+        { actionId: "gesto.recusar", label: "Descartar mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("nao") },
+      );
+    } else if (phase === "node" && node.kind === "pergunta") {
+      list.push(
+        { actionId: "gesto.confirmar", label: "Responder sim", type: "gesture", enabled: !paused, run: () => onQuestionGesture("sim") },
+        { actionId: "gesto.reformular", label: "Responder talvez", type: "gesture", enabled: !paused, run: () => onQuestionGesture("talvez") },
+        { actionId: "gesto.recusar", label: "Responder não", type: "gesture", enabled: !paused, run: () => onQuestionGesture("nao") },
+      );
+    } else if (phase === "node" && node.kind === "opcoes") {
+      displayOptions.forEach((option, idx) => {
+        list.push({
+          actionId: `conversa.opcao.${idx + 1}`,
+          label: `Opção: ${option.label}`,
+          type: "gesture",
+          enabled: !paused && !aiLoading && !marks[idx],
+          run: (payload) => {
+            const g = payload?.gesto;
+            onOptionGesture(idx, g === "talvez" || g === "nao" ? g : "sim");
+          },
+        });
+      });
+    }
+    // Controles do assistente, sempre presentes nas fases ativas.
+    list.push(
+      { actionId: "conversa.repetir", label: "Repetir", type: "activity", enabled: !speaking, run: () => repeat() },
+      { actionId: "conversa.gestoIncerto", label: "Gesto incerto", type: "activity", enabled: true, run: () => uncertain() },
+      { actionId: paused ? "conversa.retomar" : "conversa.pausar", label: paused ? "Retomar" : "Pausar", type: "activity", enabled: true, run: () => togglePause() },
+      { actionId: "conversa.voltar", label: "Voltar", type: "activity", enabled: history.length > 0, run: () => goBack() },
+      { actionId: "conversa.encerrar", label: "Encerrar sessão", type: "activity", enabled: true, run: () => { finish(); router.push("/"); } },
+    );
+    return list;
+  }, [phase, authLoading, patientLoading, user, patientId, starting, begin, confirm, paused, node, displayOptions, aiLoading, marks, onConfirmGesture, onQuestionGesture, onOptionGesture, speaking, repeat, uncertain, togglePause, goBack, finish, history, enterNode, router]);
+  useRegisterHeloUIActions(registryActions);
 
   return (
     <div className="relative flex flex-1 flex-col">

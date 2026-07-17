@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContextualEdit } from "@/components/contextual-edit";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import type { Gesture } from "@/lib/types";
 import { useHelo } from "@/lib/helo-state";
 import { useGestures } from "@/lib/gestures";
@@ -430,6 +431,74 @@ export function SessionPlayer({
     stop();
     onExit({ status: "abandonada", respondidos, total: questionItems.length });
   }, [endRun, stop, onExit, respondidos, questionItems.length]);
+
+  // Action Registry da sessão em curso: navegação entre itens e o registro
+  // do gesto do paciente por alternativa (payload.gesto: sim/talvez/nao) —
+  // os MESMOS handlers dos toques manuais do operador.
+  const registryActions = useMemo<HeloUIAction[]>(() => {
+    if (!item) return [];
+    const lastItem = idx === items.length - 1;
+    const question = isQuestionItem(item);
+    const gesturesOn = question || item.gesturesEnabled;
+    const pickRun = (optionId: string) => (payload?: Record<string, unknown>) => {
+      const g = payload?.gesto;
+      if (g !== "sim" && g !== "talvez" && g !== "nao") {
+        throw new Error('Informe payload.gesto: "sim", "talvez" ou "nao".');
+      }
+      pick(optionId, g);
+    };
+    const list: HeloUIAction[] = [
+      {
+        actionId: "atividades.anterior",
+        label: "Item anterior",
+        type: "activity",
+        enabled: idx > 0,
+        run: () => setIdx((i) => Math.max(0, i - 1)),
+      },
+      {
+        actionId: "atividades.proxima",
+        label: "Próximo item",
+        type: "activity",
+        enabled: !lastItem,
+        run: () => setIdx((i) => Math.min(items.length - 1, i + 1)),
+      },
+      {
+        actionId: "atividades.concluir",
+        label: "Concluir sessão",
+        type: "activity",
+        enabled: lastItem,
+        run: () => finish(),
+      },
+      {
+        actionId: "atividades.encerrar",
+        label: "Encerrar sessão",
+        type: "activity",
+        enabled: true,
+        run: () => leave(),
+      },
+    ];
+    if (gesturesOn && item.options.length > 0) {
+      item.options.forEach((o, n) => {
+        list.push({
+          actionId: `atividades.resposta.${n + 1}`,
+          label: `Registrar gesto do paciente para: ${o.label}`,
+          type: "gesture",
+          enabled: true,
+          run: pickRun(o.id),
+        });
+      });
+    } else if (gesturesOn && question) {
+      list.push({
+        actionId: "atividades.resposta.pergunta",
+        label: "Registrar gesto do paciente para a pergunta",
+        type: "gesture",
+        enabled: true,
+        run: pickRun(BARE_QUESTION_OPTION_ID),
+      });
+    }
+    return list;
+  }, [finish, idx, item, items.length, leave, pick]);
+  useRegisterHeloUIActions(registryActions);
 
   if (!item) return null;
   const last = idx === items.length - 1;

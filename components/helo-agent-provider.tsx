@@ -22,6 +22,13 @@ import {
   type HeloClientToolAction,
 } from "@/lib/helo-client-tools";
 import {
+  findHeloUIAction,
+  listHeloUIActions,
+  useRegisterHeloUIActions,
+  type HeloUIAction,
+} from "@/lib/helo-action-registry";
+import type { Permission } from "@/lib/access-types";
+import {
   endSession as endLoggedSession,
   logEvent,
   startSession as startLoggedSession,
@@ -35,6 +42,20 @@ type ElevenLabsErrorEvent = { error_event?: Record<string, unknown> };
 type PatchableConversation = ElevenLabsConversation & {
   handleErrorEvent?: (event: ElevenLabsErrorEvent) => void;
   __heloIncompleteErrorEventPatch?: boolean;
+};
+
+// Nome de tela reportado ao Agent por getCurrentHeloActions — derivado da
+// rota, nunca declarado pelo Agent.
+const SCREEN_BY_PATH: Record<string, string> = {
+  "/": "home",
+  "/helo": "helo",
+  "/conversa": "conversar",
+  "/rotina": "rotina",
+  "/emergencia": "emergencia",
+  "/atividades": "atividades",
+  "/mensagem": "mensagem",
+  "/ajustes": "ajustes",
+  "/dashboard": "dashboard",
 };
 
 const ACTIVITY_THROTTLE_MS = 3000;
@@ -108,7 +129,7 @@ function HeloAgentSession({
   const toolResult = useCallback((value: Record<string, unknown>) => JSON.stringify(value), []);
   const authorizeTool = useCallback(async (
     action: HeloClientToolAction,
-    options?: { area?: string; section?: string }
+    options?: { area?: string; section?: string; permission?: Permission }
   ): Promise<{ ok: true } | { ok: false; error: string }> => {
     const activePatientId = patientIdRef.current;
     if (activePatientId == null) return { ok: false, error: "Paciente ativo não selecionado" };
@@ -136,7 +157,66 @@ function HeloAgentSession({
     return toolResult({ ok: true, action, targetArea: area });
   }, [authorizeTool, router, toolResult]);
 
-  const clientTools = useMemo(() => ({
+  const clientTools = useMemo(() => {
+    // Descoberta: o que está clicável AGORA na tela, direto do Action
+    // Registry — leitura local, sem efeito colateral (o que o operador já vê).
+    // debug.ping vai SEMPRE na frente: valida o round-trip ElevenLabs →
+    // client tool sem depender de login, tela ou registry. Handler único
+    // compartilhado pelos dois nomes que o painel pode usar.
+    const discoverActions = async () => {
+      console.log("[HELO TOOL] getCurrentHeloActions called");
+      const activePatientId = patientIdRef.current;
+      const debugAction = { actionId: "debug.ping", label: "Ping de teste", type: "debug", enabled: true };
+      return toolResult({
+        ok: true,
+        screen: activePatientId == null ? "debug" : SCREEN_BY_PATH[pathname] ?? pathname,
+        patientId: activePatientId ?? "debug",
+        actions: [debugAction, ...listHeloUIActions()],
+      });
+    };
+    // Execução: encontra o actionId no registry, autoriza no servidor (com a
+    // permissão declarada pela ação) e chama o MESMO handler do clique manual.
+    const interactWithUI = async (parameters: Record<string, unknown>) => {
+      // O parâmetro do actionId pode chegar com nomes diferentes conforme a
+      // declaração da tool no painel — aceitamos os mais prováveis.
+      const rawId = parameters.actionId ?? parameters.action ?? parameters.id;
+      console.log("[HELO TOOL] interactWithHeloUI called", rawId, parameters);
+      const actionId = typeof rawId === "string" ? rawId : "";
+      if (!actionId.trim()) {
+        return toolResult({ ok: false, reason: "actionId inválido" });
+      }
+      // Curto-circuito de diagnóstico: prova a execução ponta a ponta sem
+      // tocar no registry nem exigir sessão/permissão.
+      if (actionId === "debug.ping") {
+        return toolResult({ ok: true, actionId, message: "Tool interactWithHeloUI executada em modo debug." });
+      }
+      const payload =
+        parameters.payload && typeof parameters.payload === "object" && !Array.isArray(parameters.payload)
+          ? (parameters.payload as Record<string, unknown>)
+          : undefined;
+      const action = findHeloUIAction(actionId);
+      if (!action) {
+        return toolResult({ ok: false, reason: "Ação não encontrada na tela atual." });
+      }
+      if (!action.enabled) {
+        return toolResult({ ok: false, reason: `A ação "${action.label}" está indisponível agora.` });
+      }
+      const access = await authorizeTool(
+        "interactWithHeloUI",
+        action.requiredPermission ? { permission: action.requiredPermission } : undefined
+      );
+      if (!access.ok) return toolResult({ ok: false, reason: access.error });
+      try {
+        await action.run(payload);
+        return toolResult({ ok: true, actionId, message: `${action.label}: executado.` });
+      } catch (caught) {
+        return toolResult({
+          ok: false,
+          reason: caught instanceof Error && caught.message ? caught.message : "A ação falhou.",
+        });
+      }
+    };
+    return {
     navigateHeloArea: async (parameters: Record<string, unknown>) =>
       typeof parameters.targetArea === "string"
         ? navigateToArea("navigateHeloArea", parameters.targetArea)
@@ -172,7 +252,17 @@ function HeloAgentSession({
       }, GESTURE_CHOICES_HIGHLIGHT_MS);
       return toolResult({ ok: true, action: "showGestureChoices" });
     },
-  }), [authorizeTool, navigateToArea, pathname, router, toolResult]);
+    // O painel declara as tools como getVisibleHeloActions /
+    // interactWithVisibleHeloUI; registramos ESSES nomes E os da spec para o
+    // MESMO handler — o nome do painel não precisa mudar e a tool funciona
+    // dos dois jeitos.
+    getCurrentHeloActions: discoverActions,
+    getVisibleHeloActions: discoverActions,
+    interactWithHeloUI: interactWithUI,
+    interactWithVisibleHeloUI: interactWithUI,
+    executeHeloAction: interactWithUI,
+    };
+  }, [authorizeTool, navigateToArea, pathname, router, toolResult]);
 
   const {
     startSession,
@@ -186,7 +276,14 @@ function HeloAgentSession({
   } = useConversation({
     onConversationCreated: patchIncompleteElevenLabsErrorEvent,
     clientTools,
-    onUnhandledClientToolCall: () => {},
+    // Dispara quando o agente chama uma tool que NÃO existe no objeto
+    // clientTools — normalmente por divergência de nome. Se este log
+    // aparecer com "getCurrentHeloActions"/"interactWithHeloUI", o painel e
+    // o código estão com nomes diferentes; se NENHUM log de tool aparecer, o
+    // agente não está declarando/chamando a tool no painel da ElevenLabs.
+    onUnhandledClientToolCall: (call: unknown) => {
+      console.warn("[HELO TOOL] unhandled client tool call", call);
+    },
   });
 
   const end = useCallback(() => {
@@ -322,6 +419,11 @@ function HeloAgentSession({
       sessionPatientIdRef.current = requestedPatientId;
       setActiveSessionPatientId(requestedPatientId);
       startedRef.current = true;
+      // Diagnóstico: confirma QUAIS client tools o cliente registrou nesta
+      // sessão. Se as três não aparecerem aqui, o problema é o objeto; se
+      // aparecerem mas os logs "called" nunca dispararem, o problema é a
+      // DECLARAÇÃO da tool no painel da ElevenLabs (o agente não a conhece).
+      console.log("[HELO TOOL] registered client tools", Object.keys(clientTools));
       startSession({
         conversationToken: data.conversationToken,
         connectionType: "webrtc",
@@ -342,7 +444,7 @@ function HeloAgentSession({
       startingRef.current = false;
       setStarting(false);
     }
-  }, [onError, startSession, stop]);
+  }, [clientTools, onError, startSession, stop]);
 
   const restartForVoiceChange = useCallback(async (targetPatientId: number) => {
     if (
@@ -403,6 +505,73 @@ function HeloAgentSession({
       onError("Não foi possível registrar a resposta por gesto. Tente novamente.");
     }
   }, [onError, sendActivity, sendUserMessage]);
+
+  // Ações da tela /helo no Action Registry: os mesmos handlers dos botões
+  // (connect/end) e dos gestos (markGesture — o operador RELATA o gesto do
+  // paciente; a semântica registrada é idêntica ao toque manual).
+  const agentScreenActions = useMemo<HeloUIAction[]>(() => {
+    if (pathname !== "/helo") return [];
+    const connected = status === "connected";
+    const actions: HeloUIAction[] = [
+      {
+        actionId: "helo.conectar",
+        label: "Conectar com Helo",
+        type: "connect",
+        enabled: status === "disconnected" && !starting && !restarting,
+        run: async () => {
+          const ok = await connect();
+          if (!ok) throw new Error("Não foi possível conectar com a Helo.");
+        },
+      },
+      {
+        actionId: "helo.solicitarMicrofone",
+        label: "Solicitar acesso ao microfone",
+        type: "connect",
+        enabled: status === "disconnected",
+        run: async () => {
+          if (!navigator.mediaDevices?.getUserMedia) {
+            throw new Error("Seu navegador não oferece acesso ao microfone.");
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach((track) => track.stop());
+        },
+      },
+      {
+        actionId: "helo.encerrar",
+        label: "Encerrar conversa",
+        type: "connect",
+        enabled: connected,
+        run: () => end(),
+      },
+    ];
+    if (connected) {
+      actions.push(
+        {
+          actionId: "gesto.confirmar",
+          label: "Registrar gesto do paciente: sim",
+          type: "gesture",
+          enabled: !gesturePending,
+          run: () => markGesture("sim"),
+        },
+        {
+          actionId: "gesto.reformular",
+          label: "Registrar gesto do paciente: não é bem isso",
+          type: "gesture",
+          enabled: !gesturePending,
+          run: () => markGesture("talvez"),
+        },
+        {
+          actionId: "gesto.recusar",
+          label: "Registrar gesto do paciente: não",
+          type: "gesture",
+          enabled: !gesturePending,
+          run: () => markGesture("nao"),
+        }
+      );
+    }
+    return actions;
+  }, [connect, end, gesturePending, markGesture, pathname, restarting, starting, status]);
+  useRegisterHeloUIActions(agentScreenActions);
 
   const label = restarting
     ? "Reconectando Helo"
