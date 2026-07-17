@@ -265,6 +265,7 @@ export default function DashboardIndividualPage() {
         right={
           <>
             <PillLink href="/dashboard">← Pacientes</PillLink>
+            <PillLink href="/">Conversar</PillLink>
             <button
               type="button"
               onClick={() => window.print()}

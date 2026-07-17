@@ -213,7 +213,7 @@ export default function FeedbackPage() {
         right={
           <>
             <PillLink href="/dashboard">Pacientes</PillLink>
-            <PillLink href="/">Início</PillLink>
+            <PillLink href="/">Conversar</PillLink>
           </>
         }
       />

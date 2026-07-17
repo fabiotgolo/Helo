@@ -77,7 +77,7 @@ export function MobileTabBar({
     onTap?: () => void;
     show: boolean;
   }> = [
-    { id: "inicio", label: "Início", href: "/", show: true },
+    { id: "inicio", label: "Conversar", href: "/", show: true },
     // Mesmo critério do AdminLink: exibição por papel; autorização no servidor.
     { id: "admin", label: "Admin", href: "/admin", show: locked || user?.role === "admin" },
     { id: "suporte", label: "Suporte", href: "/feedback", show: true },

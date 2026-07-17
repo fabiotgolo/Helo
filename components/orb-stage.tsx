@@ -158,10 +158,18 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
 export default function OrbStage({
   className = "",
   variant = "aberto",
+  directEntry = false,
 }: {
   className?: string;
   /** Composição do palco — ver StageVariant. */
   variant?: StageVariant;
+  /**
+   * Entrada direta: qualquer orbe entra na sua experiência ao PRIMEIRO toque,
+   * sem a etapa de "trazer ao centro". Usado fora da Home (ex.: Dashboard),
+   * onde o palco é atalho de navegação, não seletor. Só afeta a variante
+   * "aberto" — as demais já entram direto.
+   */
+  directEntry?: boolean;
 }) {
   const { activeMode, setActiveMode, enterMode, modes, getAmplitude } = useHelo();
 
@@ -378,7 +386,10 @@ export default function OrbStage({
 
   const onOrbClick = useCallback(
     (mode: HeloMode) => {
-      if (variant !== "aberto") {
+      if (directEntry) {
+        // Atalho de navegação (ex.: Dashboard): todo orbe entra ao 1º toque.
+        enterMode(mode);
+      } else if (variant !== "aberto") {
         // Overlay aberto: trocar de modo troca a experiência, sem fechar nada
         if (mode !== activeMode) enterMode(mode);
       } else if (mode === activeMode || mode === "emergencia" || mode === "helo") {
@@ -391,7 +402,7 @@ export default function OrbStage({
         setActiveMode(mode); // trazer o orbe ao centro, ainda na home
       }
     },
-    [variant, activeMode, setActiveMode, enterMode]
+    [directEntry, variant, activeMode, setActiveMode, enterMode]
   );
 
   return (
@@ -449,13 +460,15 @@ export default function OrbStage({
               disabled={idle}
               aria-pressed={isActive}
               aria-label={
-                idle
-                  ? `${info.title} — modo ativo`
-                  : isActive
-                    ? `${info.title} — modo ativo. Entrar`
-                    : variant !== "aberto"
-                      ? `Mudar para ${info.title}`
-                      : `Ativar modo ${info.title}`
+                directEntry
+                  ? `Ir para ${info.title}`
+                  : idle
+                    ? `${info.title} — modo ativo`
+                    : isActive
+                      ? `${info.title} — modo ativo. Entrar`
+                      : variant !== "aberto"
+                        ? `Mudar para ${info.title}`
+                        : `Ativar modo ${info.title}`
               }
               className={`absolute rounded-full ${travel}
                 focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-4`}

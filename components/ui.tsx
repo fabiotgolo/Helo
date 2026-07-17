@@ -267,7 +267,7 @@ export function PatientSwitcher() {
   if (patients.length === 1) {
     return (
       <span
-        className="max-w-52 truncate rounded-full border border-line bg-card px-4 py-2.5 text-sm text-ink"
+        className="max-w-52 truncate px-2 py-2.5 text-sm font-semibold text-ink"
         title={`Paciente ativo: ${patient?.name ?? patients[0].name}`}
       >
         Paciente: {patient?.name ?? patients[0].name}

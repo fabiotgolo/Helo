@@ -10,9 +10,15 @@
 // clínica ("piorando", "risco") — isso não existe nesta camada.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TopBar, PillLink } from "@/components/ui";
+
+// Mesmo palco de orbes da Home ("aberto"): o orbe central entra na sua
+// experiência e os laterais vêm ao centro ao primeiro toque — idêntico à
+// tela Conversar. Só monta no cliente (WebGL), como no layout do palco.
+const OrbStage = dynamic(() => import("@/components/orb-stage"), { ssr: false });
 import { Avatar } from "@/components/dashboard-ui";
 import { usePatient } from "@/lib/patient";
 import { redirectToLogin, useAuthUser } from "@/lib/use-auth";
@@ -149,9 +155,16 @@ export default function DashboardGeralPage() {
         right={
           <>
             <PillLink href="/ajustes">Ajustes</PillLink>
-            <PillLink href="/">Início</PillLink>
+            <PillLink href="/">Conversar</PillLink>
           </>
         }
+      />
+
+      {/* Palco de orbes — mesma navegabilidade da tela Conversar */}
+      <OrbStage
+        variant="aberto"
+        directEntry
+        className="relative z-0 h-[280px] w-full shrink-0 sm:h-[340px]"
       />
 
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
