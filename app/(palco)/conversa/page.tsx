@@ -17,6 +17,11 @@ import {
   type AppUser,
 } from "@/lib/access-types";
 import { useHelo } from "@/lib/helo-state";
+import {
+  beginPatientVoiceOverride,
+  endPatientVoiceOverride,
+} from "@/lib/audio-coordinator";
+import type { SpeakResult } from "@/lib/useSpeech";
 import { GestureTriplet } from "@/components/ui";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 
@@ -144,6 +149,35 @@ export default function ConversaPage() {
       void speak(`Você quer dizer: ${phrase} — Confirma?`);
     },
     [speak]
+  );
+
+  // Fala FINAL atribuída ao PACIENTE (frase confirmada / repetida). Mesmo
+  // padrão validado da Emergência e das Atividades: prioridade máxima da voz
+  // do paciente (assume o áudio, interrompe a plataforma e SUPRIME o Agente
+  // Helo via beginPatientVoiceOverride) e atravessa o gate do Audio Manager
+  // com `priority: "patientResponse"` — sem isso a frase é silenciada quando o
+  // Agente está ativo. O mute global continua vencendo. A voz (clone do
+  // paciente → voz configurada em Ajustes → fallback aprovado) é resolvida no
+  // servidor por patientId; a condução da conversa segue na voz da plataforma.
+  const speakPatientPhrase = useCallback(
+    async (text: string): Promise<SpeakResult> => {
+      console.log("[HELO VOICE] source conversation");
+      console.log("[HELO VOICE] role patient");
+      console.log("[HELO AUDIO] suppressing platform narration");
+      beginPatientVoiceOverride();
+      try {
+        return await speak(text, {
+          speakerRole: "patient",
+          confirmationStatus: "confirmed",
+          patientId,
+          mode: "conversa",
+          priority: "patientResponse",
+        });
+      } finally {
+        endPatientVoiceOverride();
+      }
+    },
+    [speak, patientId]
   );
 
   // Quando as opções curadas se esgotam, a IA formula até 3 novas —
@@ -338,6 +372,7 @@ export default function ConversaPage() {
   const onConfirmGesture = useCallback(
     (g: Gesture) => {
       if (!confirm) return;
+      console.log("[HELO CONVERSAR] confirmation selected", g);
       logEvent({
         sessionId,
         patientId,
@@ -376,14 +411,10 @@ export default function ConversaPage() {
           confirmationStatus: "confirmed",
         });
         setPhase("done");
-        // Frase confirmada em nome do PACIENTE: sai na voz clonada dele
-        // (quando configurada) — a condução da conversa segue na voz da Helo.
-        void speak(confirm.phrase, {
-          speakerRole: "patient",
-          confirmationStatus: "confirmed",
-          patientId,
-          mode: "conversa",
-        });
+        // Frase confirmada em nome do PACIENTE: sai na voz do paciente (clone
+        // → voz configurada em Ajustes → fallback), com prioridade máxima.
+        console.log("[HELO CONVERSAR] patient message confirmed");
+        void speakPatientPhrase(confirm.phrase);
         return;
       }
 
@@ -423,7 +454,7 @@ export default function ConversaPage() {
       setConfirm(null);
       enterNode(START_NODE);
     },
-    [confirm, sessionId, patientId, speak, enterNode]
+    [confirm, sessionId, patientId, speak, speakPatientPhrase, enterNode]
   );
 
   // ——— Controles do assistente ———
@@ -562,6 +593,25 @@ export default function ConversaPage() {
     if (phase === "done") {
       return [
         {
+          // Repetir a mensagem final na VOZ DO PACIENTE (mesma da comunicação
+          // original) — nunca na voz da plataforma. O Agente não narra nada.
+          actionId: "conversa.repetir",
+          label: "Repetir mensagem",
+          type: "activity",
+          enabled: confirm != null && !speaking,
+          run: () => {
+            if (!confirm) return;
+            console.log("[HELO CONVERSAR] patient message repeated");
+            void speakPatientPhrase(confirm.phrase);
+          },
+          toolSuccess: {
+            result: "handled",
+            speechOwner: "patient",
+            suppressAgentSpeech: true,
+            suppressAssistantNarration: true,
+          },
+        },
+        {
           actionId: "conversa.continuar",
           label: "Continuar a conversa",
           type: "activity",
@@ -615,7 +665,7 @@ export default function ConversaPage() {
       { actionId: "conversa.encerrar", label: "Encerrar sessão", type: "activity", enabled: true, run: () => { finish(); router.push("/"); } },
     );
     return list;
-  }, [phase, authLoading, patientLoading, user, patientId, starting, begin, confirm, paused, node, displayOptions, aiLoading, marks, onConfirmGesture, onQuestionGesture, onOptionGesture, speaking, repeat, uncertain, togglePause, goBack, finish, history, enterNode, router]);
+  }, [phase, authLoading, patientLoading, user, patientId, starting, begin, confirm, paused, node, displayOptions, aiLoading, marks, onConfirmGesture, onQuestionGesture, onOptionGesture, speaking, speakPatientPhrase, repeat, uncertain, togglePause, goBack, finish, history, enterNode, router]);
   useRegisterHeloUIActions(registryActions);
 
   return (
@@ -745,14 +795,10 @@ export default function ConversaPage() {
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() =>
-                  void speak(confirm.phrase, {
-                    speakerRole: "patient",
-                    confirmationStatus: "confirmed",
-                    patientId,
-                    mode: "conversa",
-                  })
-                }
+                onClick={() => {
+                  console.log("[HELO CONVERSAR] patient message repeated");
+                  void speakPatientPhrase(confirm.phrase);
+                }}
                 className="rounded-full border border-line bg-card px-6 py-3 font-medium hover:border-ink-mute"
               >
                 🔊 Repetir
