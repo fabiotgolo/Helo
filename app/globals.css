@@ -178,6 +178,38 @@ body {
   background: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
+/* Campos de texto — legibilidade garantida em QUALQUER tema (a pedido do
+ * produto): o texto digitado é sempre escuro sobre fundo claro, inclusive no
+ * tema escuro, onde antes o texto claro podia sumir. Vale só para campos de
+ * ENTRADA DE TEXTO — sliders (escala de fonte), checkboxes, radios, cores e
+ * botões ficam intactos, com o estilo do tema. O !important vence as utilidades
+ * de fundo do Tailwind (bg-card, bg-cream…) aplicadas nos próprios campos. */
+input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+textarea,
+select {
+  color: #141414 !important;
+  -webkit-text-fill-color: #141414 !important;
+  background-color: #ffffff !important;
+  caret-color: #141414;
+}
+input:not([type="range"])::placeholder,
+textarea::placeholder {
+  color: #6e6d66 !important;
+  -webkit-text-fill-color: #6e6d66 !important;
+  opacity: 1;
+}
+/* Autofill do navegador (Chrome pinta fundo/texto por conta própria): mantém o
+ * texto escuro e um fundo claro consistente. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: #141414 !important;
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  caret-color: #141414;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

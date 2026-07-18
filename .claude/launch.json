@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:preview", "--", "-p", "3457"],
       "port": 3457
+    },
+    {
+      "name": "helo-verify",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "-p", "3461"],
+      "port": 3461
     }
   ]
 }

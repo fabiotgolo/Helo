@@ -240,17 +240,20 @@ export function useSpeech() {
       console.log("[HELO AUDIO] platform speak requested");
       const gate = canPlatformSpeak();
       if (!gate.ok) {
-        // Exceção da EMERGÊNCIA do paciente: a frase de socorro dele tem
-        // prioridade MÁXIMA — assume o áudio durante uma conversa com o Agente,
-        // que já foi suprimido pelo Audio Manager (beginPatientVoiceOverride).
-        // O mute, porém, SEMPRE vence (mutar a plataforma silencia até a
-        // emergência).
-        const emergencyPriority = options?.priority === "patientEmergency";
+        // Exceção da voz DO PACIENTE: a fala dele tem prioridade sobre o Agente
+        // e assume o áudio durante uma conversa (o Agente já foi suprimido pelo
+        // Audio Manager via beginPatientVoiceOverride). Vale tanto para a
+        // EMERGÊNCIA ("patientEmergency") quanto para a resposta da ROTINA
+        // ("patientResponse") — as duas são fala do paciente. O mute, porém,
+        // SEMPRE vence (mutar a plataforma silencia até a emergência).
+        const patientPriority =
+          options?.priority === "patientEmergency" ||
+          options?.priority === "patientResponse";
         if (isPlatformMuted()) {
           console.log("[HELO AUDIO] blocked by mute");
           return "silenciada";
         }
-        if (!emergencyPriority) {
+        if (!patientPriority) {
           console.log(
             gate.reason === "agent_active"
               ? "[HELO AUDIO] blocked: agent active"
@@ -260,8 +263,8 @@ export function useSpeech() {
           );
           return "silenciada";
         }
-        // Emergência do paciente autorizada a atravessar (assume o áudio,
-        // interrompendo/suprimindo Agente e plataforma).
+        // Fala do paciente (emergência ou resposta da Rotina) autorizada a
+        // atravessar (assume o áudio, interrompendo/suprimindo Agente e plataforma).
       }
       const speakerRole = options?.speakerRole ?? "helo";
       const confirmationStatus = options?.confirmationStatus ?? "notRequired";

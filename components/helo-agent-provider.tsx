@@ -22,7 +22,7 @@ import { usePatient } from "@/lib/patient";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import {
   HELO_AREA_ROUTES,
-  isHeloNavigationArea,
+  resolveHeloNavigationArea,
   isHeloSettingsSection,
   type HeloClientToolAction,
 } from "@/lib/helo-client-tools";
@@ -32,6 +32,7 @@ import {
   useRegisterHeloUIActions,
   type HeloUIAction,
 } from "@/lib/helo-action-registry";
+import { getHeloScreenContext } from "@/lib/helo-screen-context";
 import type { Permission } from "@/lib/access-types";
 import {
   endSession as endLoggedSession,
@@ -155,11 +156,18 @@ function HeloAgentSession({
   }, []);
 
   const navigateToArea = useCallback(async (action: HeloClientToolAction, area: string) => {
-    if (!isHeloNavigationArea(area)) return toolResult({ ok: false, error: "Área de navegação inválida" });
-    const access = await authorizeTool(action, { area });
+    // Resolução tolerante: aceita nome canônico, plural, inglês e frases com
+    // verbo ("abrir rotina", "ir para as rotinas", "modo rotina"). Nunca
+    // confunde áreas — o casamento é por token inteiro de sinônimo.
+    console.log("[HELO NAV] requested area", area);
+    const resolved = resolveHeloNavigationArea(area);
+    console.log("[HELO NAV] normalized area", resolved ?? "(não reconhecida)");
+    if (!resolved) return toolResult({ ok: false, error: "Área de navegação inválida" });
+    if (resolved === "rotina") console.log("[HELO NAV] opening routine");
+    const access = await authorizeTool(action, { area: resolved });
     if (!access.ok) return toolResult(access);
-    router.push(HELO_AREA_ROUTES[area]);
-    return toolResult({ ok: true, action, targetArea: area });
+    router.push(HELO_AREA_ROUTES[resolved]);
+    return toolResult({ ok: true, action, targetArea: resolved });
   }, [authorizeTool, router, toolResult]);
 
   const clientTools = useMemo(() => {
@@ -172,11 +180,24 @@ function HeloAgentSession({
       console.log("[HELO TOOL] getCurrentHeloActions called");
       const activePatientId = patientIdRef.current;
       const debugAction = { actionId: "debug.ping", label: "Ping de teste", type: "debug", enabled: true };
+      // A tela montada pode publicar um sub-estado (ex.: a Rotina distingue
+      // routine_menu de routine_question e informa a pergunta atual). Quando
+      // publicado, ele sobrepõe o nome derivado da rota e mescla campos extras.
+      const screenContext = activePatientId == null ? null : getHeloScreenContext();
+      const resolvedScreen =
+        activePatientId == null
+          ? "debug"
+          : screenContext?.screen ?? SCREEN_BY_PATH[pathname] ?? pathname;
+      const uiActions = listHeloUIActions();
+      if (typeof resolvedScreen === "string" && resolvedScreen.startsWith("routine")) {
+        console.log("[HELO TOOL] routine actions returned", uiActions.length);
+      }
       return toolResult({
         ok: true,
-        screen: activePatientId == null ? "debug" : SCREEN_BY_PATH[pathname] ?? pathname,
+        screen: resolvedScreen,
         patientId: activePatientId ?? "debug",
-        actions: [debugAction, ...listHeloUIActions()],
+        ...(screenContext?.extra ?? {}),
+        actions: [debugAction, ...uiActions],
       });
     };
     // Execução: encontra o actionId no registry, autoriza no servidor (com a
@@ -187,6 +208,7 @@ function HeloAgentSession({
       const rawId = parameters.actionId ?? parameters.action ?? parameters.id;
       console.log("[HELO TOOL] interactWithHeloUI called", rawId, parameters);
       const actionId = typeof rawId === "string" ? rawId : "";
+      console.log("[HELO TOOL] actionId received", actionId || "(vazio)");
       if (!actionId.trim()) {
         return toolResult({ ok: false, reason: "actionId inválido" });
       }
@@ -205,6 +227,12 @@ function HeloAgentSession({
       }
       if (!action.enabled) {
         return toolResult({ ok: false, reason: `A ação "${action.label}" está indisponível agora.` });
+      }
+      // Abertura de card da Rotina: sinaliza o caminho e a supressão de
+      // narração (a fala do paciente só vem ao selecionar SIM/TALVEZ/NÃO).
+      if (action.actionId.startsWith("routine.open.")) {
+        console.log("[HELO TOOL] opening routine card", action.actionId);
+        console.log("[HELO AGENT] suppress narration for routine card open");
       }
       const access = await authorizeTool(
         "interactWithHeloUI",
@@ -227,10 +255,14 @@ function HeloAgentSession({
       }
     };
     return {
-    navigateHeloArea: async (parameters: Record<string, unknown>) =>
-      typeof parameters.targetArea === "string"
-        ? navigateToArea("navigateHeloArea", parameters.targetArea)
-        : toolResult({ ok: false, error: "targetArea inválido" }),
+    navigateHeloArea: async (parameters: Record<string, unknown>) => {
+      // O nome do parâmetro varia conforme a declaração da tool no painel —
+      // aceitamos os mais prováveis. A resolução da área é tolerante depois.
+      const raw = parameters.targetArea ?? parameters.area ?? parameters.target ?? parameters.name;
+      return typeof raw === "string"
+        ? navigateToArea("navigateHeloArea", raw)
+        : toolResult({ ok: false, error: "targetArea inválido" });
+    },
     openPatientSettings: async (parameters: Record<string, unknown>) => {
       const section = parameters.section;
       if (!isHeloSettingsSection(section)) return toolResult({ ok: false, error: "Seção de ajustes inválida" });

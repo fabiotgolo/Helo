@@ -36,13 +36,18 @@ export interface SpeakOptions {
   patientId?: number | null;
   mode?: HeloItemMode;
   /**
-   * Prioridade da fala perante o Audio Manager. "patientEmergency": a frase de
-   * emergência DO PACIENTE tem prioridade MÁXIMA — interrompe/suprime a voz do
-   * Agente Helo e da plataforma e as bloqueia até terminar (nunca espera brecha).
-   * O mute SEMPRE bloqueia, inclusive esta. Sem o marcador, a fala segue a regra
+   * Prioridade da fala perante o Audio Manager.
+   * - "patientEmergency": a frase de emergência DO PACIENTE tem prioridade
+   *   MÁXIMA — interrompe/suprime a voz do Agente Helo e da plataforma e as
+   *   bloqueia até terminar (nunca espera brecha).
+   * - "patientResponse": a resposta DO PACIENTE na Rotina (SIM/TALVEZ/NÃO)
+   *   também é fala dele e prevalece sobre o Agente — atravessa o gate de
+   *   "Agente ativo" e assume o áudio como saída principal.
+   * Ambas respeitam a hierarquia (paciente > Agente > plataforma) e o MUTE
+   * SEMPRE bloqueia, inclusive estas. Sem o marcador, a fala segue a regra
    * padrão (bloqueada enquanto o Agente estiver ativo).
    */
-  priority?: "patientEmergency";
+  priority?: "patientEmergency" | "patientResponse";
 }
 
 /**
