@@ -12,6 +12,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Orb } from "@/components/ui";
 import { ThemeDots } from "@/components/theme-dots";
+import { PlatformMuteToggle } from "@/components/platform-mute-toggle";
 import { useAuthUser } from "@/lib/use-auth";
 import { usePatient } from "@/lib/patient";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
@@ -170,11 +171,12 @@ export function MobileHeader({ className = "" }: { className?: string }) {
             v{APP_VERSION}
           </span>
         </Link>
-        <ThemeDots
-          size="compact"
-          orientation="vertical"
-          className="absolute left-0 top-full mt-1"
-        />
+        {/* Coluna de temas sob a marca e, logo abaixo, o mute da voz da
+            plataforma — mesmo alvo de toque das bolinhas. */}
+        <div className="absolute left-0 top-full mt-1 flex flex-col items-center gap-1">
+          <ThemeDots size="compact" orientation="vertical" />
+          <PlatformMuteToggle size="compact" />
+        </div>
       </div>
       <MobilePatientArea />
     </header>

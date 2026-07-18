@@ -30,7 +30,7 @@ type Pending = {
 
 export default function RotinaPage() {
   const router = useRouter();
-  const { speak } = useHelo();
+  const { speak, stop } = useHelo();
   const gestures = useGestures();
   const { patientId } = usePatient();
   const { enabledItems, loading, canEdit } = usePatientItems("rotina");
@@ -81,6 +81,7 @@ export default function RotinaPage() {
 
   const propose = useCallback(
     async (item: Pending) => {
+      console.log("[HELO ROUTINE] item selected", item.label);
       const sid = await ensureSession();
       setPending(item);
       answeredRef.current = false;
@@ -124,12 +125,14 @@ export default function RotinaPage() {
           speakerRole: modeSpeakerRole("rotina"),
           confirmationStatus: "confirmed",
         });
-        // Definição atual do produto: a Rotina é dita pela voz da PLATAFORMA
-        // Helo, mesmo sendo necessidade do paciente. A autoria vem de
-        // modeSpeakerRole — quando um item ganhar autoria própria, a exceção
-        // entra lá, não aqui.
+        // A frase da Rotina é fala DO PACIENTE: sai na voz dele (clone/catálogo
+        // configurado em Ajustes) quando disponível, senão no fallback aprovado
+        // — nunca fingindo ser a voz do paciente. A autoria vem de
+        // modeSpeakerRole (ponto único); a resolução técnica é do servidor.
+        const speakerRole = modeSpeakerRole("rotina");
+        console.log("[HELO VOICE] role:", speakerRole);
         void speak(pending.phrase, {
-          speakerRole: modeSpeakerRole("rotina"),
+          speakerRole,
           confirmationStatus: "confirmed",
           patientId,
           mode: "rotina",
@@ -153,6 +156,17 @@ export default function RotinaPage() {
     [pending, speak, patientId]
   );
 
+  // Voltar da confirmação para a lista de rotinas, sem responder o gesto:
+  // interrompe a pergunta em curso e volta à grade — preserva paciente ativo,
+  // sessão e itens. Nunca navega para Home/Dashboard/Conversar. É o mesmo
+  // handler do botão "Voltar" e da ação routine.backToMenu do Agente.
+  const backToMenu = useCallback(() => {
+    console.log("[HELO ROUTINE] back to menu");
+    stop();
+    answeredRef.current = true; // um gesto atrasado não reabre a confirmação
+    setPending(null);
+  }, [stop]);
+
   // Action Registry: espelha o que está clicável agora — a grade de frases
   // (com edição contextual quando permitida) ou, durante uma confirmação,
   // os três gestos. Os handlers são os MESMOS do toque manual.
@@ -163,6 +177,8 @@ export default function RotinaPage() {
         { actionId: "gesto.confirmar", label: `Confirmar: ${pending.phrase}`, type: "gesture", enabled: true, run: gestureRun("sim") },
         { actionId: "gesto.reformular", label: "Não é bem isso", type: "gesture", enabled: true, run: gestureRun("talvez") },
         { actionId: "gesto.recusar", label: "Descartar", type: "gesture", enabled: true, run: gestureRun("nao") },
+        // O Agente Helo também volta ao menu por voz — mesmo handler do botão.
+        { actionId: "routine.backToMenu", label: "Voltar para menu de rotinas", type: "navigation", enabled: true, run: () => backToMenu() },
       ];
     }
     const list: HeloUIAction[] = [];
@@ -187,7 +203,7 @@ export default function RotinaPage() {
       }
     }
     return list;
-  }, [canEdit, items, onGesture, pending, propose, router]);
+  }, [backToMenu, canEdit, items, onGesture, pending, propose, router]);
   useRegisterHeloUIActions(registryActions);
 
   return (
@@ -205,6 +221,18 @@ export default function RotinaPage() {
             aria-label="Confirmar frase"
             className="fade-rise pointer-events-auto mx-auto flex w-full max-w-3xl flex-col items-center gap-10 py-8"
           >
+            {/* Voltar para a lista de rotinas sem responder — âncora clara de
+                retorno, alinhada à esquerda acima da frase. */}
+            <div className="flex w-full">
+              <button
+                type="button"
+                onClick={backToMenu}
+                className="flex items-center gap-2 rounded-full border border-line bg-card/70 px-4 py-2 text-sm font-medium text-ink-soft shadow-soft backdrop-blur-md transition-colors hover:border-ink-mute hover:text-ink"
+              >
+                <span aria-hidden="true">←</span>
+                Voltar para as rotinas
+              </button>
+            </div>
             <p className="text-sm font-semibold uppercase tracking-widest text-ink-soft">
               Confirmar mensagem
             </p>

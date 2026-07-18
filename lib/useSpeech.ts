@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ACTIVE_PATIENT_KEY } from "@/lib/patient";
 import {
+  canPlatformSpeak,
+  isPlatformMuted,
+  registerPlatformStop,
+} from "@/lib/audio-coordinator";
+import {
   audioCacheKey,
   patientCloneAllowed,
   type ActiveSpeaker,
@@ -21,20 +26,19 @@ function activePatientId(): number | null {
   }
 }
 
-// Registro global dos stops ativos: o logout precisa silenciar QUALQUER voz
-// em curso (Helo, paciente, emergência) sem depender de qual árvore React o
-// botão Sair habita. Cada instância de useSpeech se registra aqui.
-const activeStops = new Set<() => void>();
-
-/** Interrompe toda fala em curso, em qualquer instância de voz. */
-export function stopAllSpeech(): void {
-  for (const stop of activeStops) stop();
-}
+// Interrompe toda fala em curso, em qualquer instância de voz. O registro dos
+// stops ativos e o silenciamento global vivem no gerenciador de áudio (a
+// mesma trava usada pelo mute e pela prioridade do Agente). Reexportado com o
+// nome histórico para o logout (use-auth) que já o consumia.
+export { stopAllPlatformAudio as stopAllSpeech } from "@/lib/audio-coordinator";
 
 // Desfecho real de uma fala, derivado dos eventos de reprodução — nunca de
 // timers estimados. "bloqueada" = política de autoplay do navegador negou
 // a reprodução sem gesto do usuário (não é erro; tentar após interação).
-export type SpeakResult = "concluida" | "interrompida" | "bloqueada" | "erro";
+// "silenciada" = o gerenciador global negou a fala (Agente Helo ativo ou
+// plataforma mutada); não é erro nem falha de reprodução — a fala é
+// simplesmente descartada.
+export type SpeakResult = "concluida" | "interrompida" | "bloqueada" | "erro" | "silenciada";
 
 // ——— Orquestrador de voz da Helo (VoiceOrchestrator) ———
 // Duas vozes, ambas ElevenLabs, escolhidas pela AUTORIA da fala (não pela tela):
@@ -120,14 +124,10 @@ export function useSpeech() {
 
   useEffect(() => stop, [stop]);
 
-  // Disponível para o stopAllSpeech global (usado pelo logout) enquanto
-  // esta instância viver.
-  useEffect(() => {
-    activeStops.add(stop);
-    return () => {
-      activeStops.delete(stop);
-    };
-  }, [stop]);
+  // Registra este stop no gerenciador de áudio enquanto a instância viver: o
+  // logout, o mute e a ativação do Agente Helo silenciam por aqui QUALQUER voz
+  // em curso, sem depender de qual árvore React disparou.
+  useEffect(() => registerPlatformStop(stop), [stop]);
 
   // Fallback aprovado: voz local do navegador em pt-BR, claramente
   // identificada — nunca apresentada como voz da Helo nem do paciente.
@@ -232,6 +232,37 @@ export function useSpeech() {
   const speak = useCallback(
     async (text: string, options?: SpeakOptions): Promise<SpeakResult> => {
       if (!text.trim()) return "concluida";
+      // Gate global (ANTES de qualquer mecanismo de voz — ElevenLabs OU
+      // fallback speechSynthesis): a plataforma nunca fala por cima do Agente
+      // Helo nem quando o usuário mutou a voz. Vale para TODA fala automática,
+      // inclusive a da Emergência — a ação da tela executa à parte; só a voz é
+      // suprimida. Falas negadas são descartadas, não enfileiradas.
+      console.log("[HELO AUDIO] platform speak requested");
+      const gate = canPlatformSpeak();
+      if (!gate.ok) {
+        // Exceção da EMERGÊNCIA do paciente: a frase de socorro dele tem
+        // prioridade MÁXIMA — assume o áudio durante uma conversa com o Agente,
+        // que já foi suprimido pelo Audio Manager (beginPatientVoiceOverride).
+        // O mute, porém, SEMPRE vence (mutar a plataforma silencia até a
+        // emergência).
+        const emergencyPriority = options?.priority === "patientEmergency";
+        if (isPlatformMuted()) {
+          console.log("[HELO AUDIO] blocked by mute");
+          return "silenciada";
+        }
+        if (!emergencyPriority) {
+          console.log(
+            gate.reason === "agent_active"
+              ? "[HELO AUDIO] blocked: agent active"
+              : gate.reason === "patient_voice_active"
+                ? "[HELO AUDIO] blocked: patient voice active"
+                : "[HELO AUDIO] blocked: platform muted"
+          );
+          return "silenciada";
+        }
+        // Emergência do paciente autorizada a atravessar (assume o áudio,
+        // interrompendo/suprimindo Agente e plataforma).
+      }
       const speakerRole = options?.speakerRole ?? "helo";
       const confirmationStatus = options?.confirmationStatus ?? "notRequired";
       // Fallback do navegador é EXCLUSIVO da Emergência ("uma frase de
@@ -274,6 +305,19 @@ export function useSpeech() {
         if (entry) {
           setEngine("elevenlabs");
           setActiveVoiceSource(entry.source);
+          if (speakerRole === "patient") {
+            // Diagnóstico temporário: qual voz o SERVIDOR resolveu para a fala
+            // do paciente — clone dele, voz do catálogo configurada, ou
+            // fallback aprovado (transparente; nunca finge ser a voz do
+            // paciente).
+            if (entry.source === "patientElevenLabsClone") {
+              console.log("[HELO VOICE] patient cloned voice selected");
+            } else if (entry.source === "approvedFallback") {
+              console.log("[HELO VOICE] patientVoiceId missing, using fallback");
+            } else {
+              console.log("[HELO AUDIO] speaking with patient voice");
+            }
+          }
           const audio = ensureAudio();
           console.log("[EMERGENCY] audio object created; AudioContext:", audioCtxRef.current?.state ?? "sem Web Audio");
           // AudioContext suspenso = play() "funciona" mas SEM som — o áudio

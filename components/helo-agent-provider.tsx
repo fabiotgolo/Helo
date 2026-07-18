@@ -13,6 +13,11 @@ import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 import { GestureTriplet } from "@/components/ui";
 import { GESTURE_SEMANTIC_INTENTS, GESTURE_SEMANTIC_MESSAGES } from "@/lib/gestures";
 import { useHelo } from "@/lib/helo-state";
+import {
+  registerAgentSuppressor,
+  setAgentConversationActive,
+  setAgentSpeaking,
+} from "@/lib/audio-coordinator";
 import { usePatient } from "@/lib/patient";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import {
@@ -208,6 +213,11 @@ function HeloAgentSession({
       if (!access.ok) return toolResult({ ok: false, reason: access.error });
       try {
         await action.run(payload);
+        // Retorno silencioso quando a ação o declara (Emergência): técnico e
+        // curto, para o Agente NÃO narrar em voz alta que registrou.
+        if (action.toolSuccess) {
+          return toolResult({ ok: true, actionId, ...action.toolSuccess });
+        }
         return toolResult({ ok: true, actionId, message: `${action.label}: executado.` });
       } catch (caught) {
         return toolResult({
@@ -272,6 +282,7 @@ function HeloAgentSession({
     isListening,
     sendUserMessage,
     sendUserActivity,
+    setVolume,
     getOutputByteFrequencyData,
   } = useConversation({
     onConversationCreated: patchIncompleteElevenLabsErrorEvent,
@@ -313,6 +324,52 @@ function HeloAgentSession({
       lastActivitySentAtRef.current = 0;
     }
   }, [status]);
+
+  // Prioridade de voz: enquanto o Agente Helo está conectando/ativo, ele tem
+  // prioridade TOTAL — o gerenciador global bloqueia (e interrompe) qualquer
+  // voz automática da plataforma. Ao encerrar/erro/desconexão, o status volta
+  // a "disconnected" e a voz assistente da plataforma é liberada. Derivar do
+  // estado real (em vez de marcar em cada handler) cobre todos os caminhos de
+  // saída, inclusive falha de conexão e erro do provider.
+  useEffect(() => {
+    const agentActive =
+      starting || restarting || status === "connecting" || status === "connected";
+    setAgentConversationActive(agentActive);
+  }, [starting, restarting, status]);
+
+  // O Agente está FALANDO agora — alimenta o orbe/telemetria do Audio Manager.
+  useEffect(() => {
+    setAgentSpeaking(status === "connected" && isSpeaking);
+  }, [isSpeaking, status]);
+
+  // Prioridade MÁXIMA da voz do paciente: ao acionar uma frase de emergência,
+  // o Audio Manager pede para suprimirmos a voz do Agente — zeramos o volume de
+  // saída do SDK e restauramos ao término. Assim a voz clonada do paciente
+  // interrompe/silencia o Agente e nunca soa por baixo dele.
+  useEffect(() => {
+    return registerAgentSuppressor((suppress) => {
+      try {
+        setVolume({ volume: suppress ? 0 : 1 });
+        console.log(
+          suppress
+            ? "[HELO AUDIO] suppressing agent speech"
+            : "[HELO AUDIO] agent speech restored"
+        );
+      } catch {
+        // Sem sessão ativa: não há voz do Agente a suprimir.
+      }
+    });
+  }, [setVolume]);
+
+  // Rede de segurança: se este provider desmontar (ex.: logout), a trava do
+  // Agente não pode ficar presa impedindo a plataforma de falar.
+  useEffect(
+    () => () => {
+      setAgentSpeaking(false);
+      setAgentConversationActive(false);
+    },
+    []
+  );
 
   useEffect(() => {
     // A página é apenas o ponto visual. Com a persistência desligada, sair

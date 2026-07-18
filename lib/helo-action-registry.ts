@@ -22,6 +22,7 @@ export type HeloUIActionType =
   | "edit" // edição contextual (leva ao painel de gerenciamento)
   | "activity" // sessões de Atividades (iniciar, navegar, responder)
   | "gesture" // gesto do paciente relatado pelo operador (sim/talvez/não)
+  | "navigation" // navegação interna da tela (ex.: voltar ao menu do modo)
   | "connect"; // conexão/encerramento da conversa com a Helo
 
 export interface HeloUIAction {
@@ -32,6 +33,14 @@ export interface HeloUIAction {
   enabled: boolean;
   /** Permissão do vínculo exigida; ausente = basta o vínculo ativo. */
   requiredPermission?: Permission;
+  /**
+   * Retorno técnico enviado ao Agente quando a ação é executada por tool.
+   * Substitui a mensagem genérica "executado" — usado pela Emergência para
+   * devolver um resultado silencioso ({ silentRegistration, patientPhraseSpoken,
+   * ... }) que NÃO induz o Agente a anunciar em voz alta que registrou.
+   * Não vai na descoberta (listHeloUIActions) — é só do resultado da execução.
+   */
+  toolSuccess?: Record<string, unknown>;
   /**
    * O handler REAL — exatamente o mesmo caminho do clique manual. Lança
    * Error com mensagem clara quando o payload é inválido ou a ação falha.

@@ -35,6 +35,14 @@ export interface SpeakOptions {
   /** Paciente autor da fala — obrigatório quando speakerRole = "patient". */
   patientId?: number | null;
   mode?: HeloItemMode;
+  /**
+   * Prioridade da fala perante o Audio Manager. "patientEmergency": a frase de
+   * emergência DO PACIENTE tem prioridade MÁXIMA — interrompe/suprime a voz do
+   * Agente Helo e da plataforma e as bloqueia até terminar (nunca espera brecha).
+   * O mute SEMPRE bloqueia, inclusive esta. Sem o marcador, a fala segue a regra
+   * padrão (bloqueada enquanto o Agente estiver ativo).
+   */
+  priority?: "patientEmergency";
 }
 
 /**
@@ -54,16 +62,26 @@ export function patientCloneAllowed(
 }
 
 /**
- * Autoria por modo — definição ATUAL do produto:
- *   Rotina     → plataforma (mesmo que o texto seja necessidade do paciente);
- *   Emergência → paciente;
+ * Autoria por modo — as frases dos três modos representam o PACIENTE falando:
+ *   Rotina     → paciente ("Estou cansado", "Estou com dor"…): usa a voz dele
+ *                (clone/catálogo configurado em Ajustes), com fallback aprovado
+ *                quando não houver voz configurada;
+ *   Emergência → paciente ("Preciso de ajuda"…);
  *   Conversa   → paciente (as frases confirmadas; a condução é da plataforma).
+ * A CONDUÇÃO/instrução da plataforma ("Você quer dizer… — Confirma?") é falada
+ * à parte, por speak() sem opções → voz "helo". A resolução técnica do voiceId
+ * (clone → catálogo → fallback) é EXCLUSIVA do servidor (/api/tts).
  * Ponto único de resolução: quando um item individual ganhar autoria
  * explícita editável (o campo ModeItem.speakerRole já existe), a exceção
  * por item entra aqui — nunca hardcoded nas telas.
  */
+const MODE_SPEAKER_ROLE: Record<HeloItemMode, SpeakerRole> = {
+  rotina: "patient",
+  emergencia: "patient",
+  conversa: "patient",
+};
 export function modeSpeakerRole(mode: HeloItemMode): SpeakerRole {
-  return mode === "rotina" ? "helo" : "patient";
+  return MODE_SPEAKER_ROLE[mode];
 }
 
 /**

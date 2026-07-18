@@ -9,6 +9,7 @@ import { useGestures } from "@/lib/gestures";
 import { useAuthUser } from "@/lib/use-auth";
 import { usePatient } from "@/lib/patient";
 import { ThemeDots } from "@/components/theme-dots";
+import { PlatformMuteToggle } from "@/components/platform-mute-toggle";
 import { MobileHeader } from "@/components/mobile/mobile-header";
 import { MobileTabBar } from "@/components/mobile/mobile-tab-bar";
 import { APP_VERSION, APP_COMMIT } from "@/lib/version";
@@ -381,9 +382,13 @@ export function TopBar({
           </span>
         </Link>
         {/* Coluna de temas na margem esquerda, sob a marca: sobrepõe o vão
-            lateral sem empurrar o conteúdo da página. */}
+            lateral sem empurrar o conteúdo da página. Logo abaixo dos temas,
+            o mute da voz da plataforma. */}
         {showThemeDots && (
-          <ThemeDots orientation="vertical" className="absolute left-0 top-full mt-1" />
+          <div className="absolute left-0 top-full mt-1 flex flex-col items-center gap-1.5">
+            <ThemeDots orientation="vertical" />
+            <PlatformMuteToggle />
+          </div>
         )}
       </div>
       {/* flex-wrap: em telas estreitas os controles quebram de linha — o

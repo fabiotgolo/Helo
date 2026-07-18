@@ -6,6 +6,12 @@ import { usePatient, usePatientItems } from "@/lib/patient";
 import { DEFAULT_ITEMS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
+import type { SpeakResult } from "@/lib/useSpeech";
+import {
+  beginPatientVoiceOverride,
+  endPatientVoiceOverride,
+  isPlatformMuted,
+} from "@/lib/audio-coordinator";
 import { OverlayVeil } from "@/components/overlay-panel";
 import { ContextualEdit } from "@/components/contextual-edit";
 import { buildEditLink } from "@/lib/edit-link";
@@ -95,22 +101,40 @@ export default function EmergenciaPage() {
   // Feedback visível do toque: nenhum caminho pode ser silencioso — o
   // assistente sempre vê que o toque foi recebido e se a voz falhou.
   const [feedback, setFeedback] = useState<
-    { label: string; status: "falando" | "erro"; detail?: string } | null
+    { label: string; status: "falando" | "erro" | "silenciada"; detail?: string } | null
   >(null);
 
   const trigger = useCallback(
     (item: EmergencyAction) => {
+      console.log("[HELO EMERGENCY] card action requested", item.label);
+      console.log("[HELO VOICE] emergency phrase voiceRole patient");
+      // O registro é SILENCIOSO: nenhuma voz da plataforma nem do Agente diz
+      // "registrado" — a única fala é a frase do paciente.
+      console.log("[HELO EMERGENCY] suppressing platform confirmation voice");
       setFeedback({ label: item.label, status: "falando" });
-      // A voz sai PRIMEIRO — nenhuma rede ou registro na frente do socorro.
-      // Fala do PACIENTE: usa a voz clonada dele quando configurada; sem
-      // clone, o servidor aplica o fallback aprovado (voz neutra identificada).
-      speak(item.phrase, {
-        speakerRole: "patient",
-        confirmationStatus: "notRequired",
-        patientId,
-        mode: "emergencia",
-      })
+      // Fala do PACIENTE — prioridade MÁXIMA. Não espera brecha: assume o áudio
+      // na hora, interrompendo a plataforma e suprimindo a voz do Agente Helo
+      // (beginPatientVoiceOverride), que fica bloqueado até a frase terminar.
+      // "priority: patientEmergency" autoriza a fala a atravessar o gate do
+      // Audio Manager. O mute continua bloqueando tudo, inclusive esta.
+      const speakPatientPhrase = async (): Promise<SpeakResult> => {
+        beginPatientVoiceOverride();
+        try {
+          return await speak(item.phrase, {
+            speakerRole: "patient",
+            confirmationStatus: "notRequired",
+            patientId,
+            mode: "emergencia",
+            priority: "patientEmergency",
+          });
+        } finally {
+          endPatientVoiceOverride();
+        }
+      };
+      speakPatientPhrase()
         .then((result) => {
+          if (result === "concluida") console.log("[HELO AUDIO] patient phrase played");
+          if (result === "silenciada" && isPlatformMuted()) console.log("[HELO AUDIO] blocked by mute");
           if (result === "erro" || result === "bloqueada") {
             setFeedback({
               label: item.label,
@@ -120,6 +144,19 @@ export default function EmergenciaPage() {
             window.setTimeout(
               () => setFeedback((f) => (f?.status === "erro" ? null : f)),
               8000
+            );
+          } else if (result === "silenciada") {
+            // A ação de socorro foi registrada (log + mensagem seguem no
+            // segundo plano). A frase do paciente tem prioridade máxima e
+            // atravessa o Agente — só o MUTE a silencia.
+            setFeedback({
+              label: item.label,
+              status: "silenciada",
+              detail: "a voz da plataforma está mutada",
+            });
+            window.setTimeout(
+              () => setFeedback((f) => (f?.status === "silenciada" ? null : f)),
+              6000
             );
           } else {
             // concluída ou interrompida por outro toque: limpa só o próprio estado
@@ -134,7 +171,10 @@ export default function EmergenciaPage() {
           if (e?.stack) console.error("[EMERGENCY ERROR] stack:", e.stack);
           setFeedback({ label: item.label, status: "erro", detail: "erro inesperado na voz" });
         });
-      // Registro é segundo plano: falha de rede não silencia o pedido.
+      // Registro SILENCIOSO em segundo plano: salva no banco, atualiza
+      // histórico/logs — sem nenhuma confirmação vocal. Falha de rede não
+      // silencia o pedido.
+      console.log("[HELO EMERGENCY] internal registration silent");
       void ensureSession().then((sid) => {
         logEvent({
           sessionId: sid,
@@ -154,7 +194,7 @@ export default function EmergenciaPage() {
           // Regra do produto: em emergência o toque do assistente é a
           // confirmação — não há gesto na frente do socorro.
           confirmationStatus: "confirmed",
-        });
+        }).then(() => console.log("[HELO EMERGENCY] silent registration saved"));
       });
     },
     [speak, ensureSession, patientId]
@@ -172,6 +212,17 @@ export default function EmergenciaPage() {
         type: "modeItem",
         enabled: true,
         run: () => trigger(item),
+        // Retorno TÉCNICO e não-narrável ao Agente: acionar por tool executa o
+        // MESMO handler do clique (registro silencioso + fala do paciente com
+        // prioridade máxima). Sem mensagem em linguagem natural — o Agente não
+        // deve ler nada em voz alta; quem fala é o paciente.
+        toolSuccess: {
+          result: "handled",
+          mode: "silent",
+          speechOwner: "patient",
+          suppressAgentSpeech: true,
+          suppressAssistantNarration: true,
+        },
       });
       if (canEdit && item.itemId) {
         const itemId = item.itemId;
@@ -209,6 +260,11 @@ export default function EmergenciaPage() {
             {feedback?.status === "falando" && (
               <span className="inline-block rounded-full bg-nao px-5 py-2 text-base font-semibold text-white">
                 🔊 Falando: {feedback.label}
+              </span>
+            )}
+            {feedback?.status === "silenciada" && (
+              <span className="inline-block rounded-full border-2 border-line bg-card px-5 py-2 text-base font-semibold text-ink-soft">
+                ✅ Ação registrada ({feedback.detail}).
               </span>
             )}
             {feedback?.status === "erro" && (
