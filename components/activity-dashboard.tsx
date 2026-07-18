@@ -205,6 +205,9 @@ export function ActivitySection({
   }
 
   const t = data.stats.totals;
+  // Histórico detalhado: apenas sessões concluídas (abandonadas/em andamento
+  // ficam fora do log — nunca aparecem como sessão concluída).
+  const completedRuns = data.runs.filter((r) => r.status === "concluida");
   const noRuns = t.sessoes === 0;
   const hasCriterio = t.comCriterio > 0;
   const filtered = Boolean(templateFilter || categoryFilter || operatorFilter);
@@ -381,10 +384,16 @@ export function ActivitySection({
             </Card>
           </div>
 
-          {/* ——— Sessões (histórico detalhado sob demanda) ——— */}
+          {/* ——— Sessões (histórico detalhado sob demanda) ———
+              Só sessões CONCLUÍDAS ("Concluir sessão" ou "Sim" no modal de
+              conclusão) entram no histórico: uma atividade abandonada nunca
+              aparece como sessão concluída. Os totais acima mantêm a
+              contagem de abandonadas para acompanhamento. */}
           <Card
             title="Sessões de Atividades"
-            subtitle={`${data.runs.length} no período · toque para abrir o detalhe`}
+            subtitle={`${completedRuns.length} concluída${
+              completedRuns.length === 1 ? "" : "s"
+            } no período · toque para abrir o detalhe`}
           >
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -400,7 +409,7 @@ export function ActivitySection({
                   </tr>
                 </thead>
                 <tbody>
-                  {data.runs.map((r) => (
+                  {completedRuns.map((r) => (
                     <RunRow
                       key={r.id}
                       run={r}

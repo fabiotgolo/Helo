@@ -95,7 +95,11 @@ export default function AtividadesPage() {
 
   const start = useCallback(
     async (template: ActivityTemplate, initialItemId: string | null = null) => {
+      console.log("[HELO ACTIVITY] open requested");
+      console.log("[HELO ACTIVITY] activity title", template.title);
+      console.log("[HELO ACTIVITY] activity id", template.id);
       if (patientId == null || starting) return;
+      console.log("[HELO ACTIVITY] activity found — opening session");
       setStarting(template.id);
       setStartError(null);
       try {
@@ -169,6 +173,10 @@ export default function AtividadesPage() {
     }
     for (const t of templates) {
       list.push({
+        // Id estável baseado no ID REAL da atividade — nunca no texto visual
+        // (editável). Toda atividade criada em Gerenciar entra aqui
+        // automaticamente; o label casa com o card. Abrir por tool executa o
+        // MESMO handler do clique manual (start), abrindo a sessão de verdade.
         actionId: `atividades.iniciar.${t.id}`,
         label: t.title,
         type: "activity",
@@ -187,6 +195,7 @@ export default function AtividadesPage() {
         });
       }
     }
+    console.log("[HELO ACTIVITY] menu actions registered", list.length);
     return list;
   }, [caps, router, start, starting, state, templates, view]);
   useRegisterHeloUIActions(registryActions);
@@ -209,6 +218,7 @@ export default function AtividadesPage() {
             patientId={patientId}
             initialItemId={view.initialItemId}
             canEdit={Boolean(caps?.edit)}
+            onGoToMenu={() => setView({ kind: "lista" })}
             onExit={({ status, respondidos, total }) =>
               setView(
                 status === "concluida"

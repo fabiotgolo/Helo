@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ContextualEdit } from "@/components/contextual-edit";
+import { useHeloDialog } from "@/components/helo-dialog";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import { useHeloScreenContext } from "@/lib/helo-screen-context";
 import type { Gesture } from "@/lib/types";
@@ -314,6 +315,7 @@ export function SessionPlayer({
   run,
   patientId,
   onExit,
+  onGoToMenu,
   initialItemId = null,
   canEdit = false,
 }: {
@@ -321,6 +323,12 @@ export function SessionPlayer({
   patientId: number;
   /** Chamado ao encerrar (concluída ou saída manual). */
   onExit: (summary: { status: "concluida" | "abandonada"; respondidos: number; total: number }) => void;
+  /**
+   * Volta ao MENU DE ATIVIDADES (a tela com os cards). Diferente de onExit:
+   * não exibe a tela de "sessão concluída" — apenas retorna à lista de cards,
+   * preservando o paciente ativo. A conclusão/abandono já foi persistida antes.
+   */
+  onGoToMenu: () => void;
   /** Abre a sessão já neste item (retomada pós-edição contextual). */
   initialItemId?: string | null;
   /** Exibe a ação contextual "Editar este item" (capacidade do servidor). */
@@ -328,6 +336,7 @@ export function SessionPlayer({
 }) {
   const { speak, stop } = useHelo();
   const router = useRouter();
+  const dialog = useHeloDialog();
   const items = useMemo(
     () => [...run.items].sort((a, b) => a.order - b.order),
     [run.items]
@@ -502,29 +511,97 @@ export function SessionPlayer({
     [item, answers, patientId, run.id, speak]
   );
 
-  const finish = useCallback(() => {
+  // "Concluir sessão": conclui e vai para a tela de fim. Sem NENHUMA resposta,
+  // não faz sentido salvar uma sessão vazia — a Helo confirma no modal próprio
+  // se o usuário quer sair sem salvar (nunca alerta nativo).
+  const finish = useCallback(async () => {
+    if (finishedRef.current) return;
+    if (respondidos === 0) {
+      console.log("[HELO ACTIVITY EXIT] concluir with no responses");
+      const leaveEmpty = await dialog.confirm({
+        title: "Nenhuma resposta registrada",
+        message: "Esta atividade ainda não tem respostas. Deseja sair sem salvar?",
+        confirmLabel: "Sair sem salvar",
+        cancelLabel: "Continuar atividade",
+        tone: "warning",
+      });
+      if (!leaveEmpty) return; // continua na atividade
+      console.log("[HELO ACTIVITY EXIT] abandoned without responses");
+      endRun("abandonada");
+      stop();
+      onExit({ status: "abandonada", respondidos, total: questionItems.length });
+      return;
+    }
     endRun("concluida");
     stop();
     onExit({ status: "concluida", respondidos, total: questionItems.length });
-  }, [endRun, stop, onExit, respondidos, questionItems.length]);
+  }, [dialog, endRun, stop, onExit, respondidos, questionItems.length]);
 
-  const leave = useCallback(() => {
-    endRun("abandonada");
-    stop();
-    onExit({ status: "abandonada", respondidos, total: questionItems.length });
-  }, [endRun, stop, onExit, respondidos, questionItems.length]);
+  // ——— Conclusão antes de sair — SÓ quando há resposta ———
+  // Toda saída de uma atividade em andamento passa por aqui:
+  //   • Nenhuma resposta registrada (respondidos === 0) → desistência sem
+  //     conteúdo: sai DIRETO, sem modal, marcando a sessão como abandonada.
+  //   • Ao menos uma resposta → a Helo pergunta, no modal próprio (nunca
+  //     alerta nativo), "Concluir atividade?":
+  //       – "Sim" → conclui (status concluida) e salva no Dashboard;
+  //       – "Não" → sai sem concluir (status abandonada) — não vira sessão
+  //                 concluída no Dashboard.
+  // Em ambos os casos a navegação solicitada é executada em seguida. Se a
+  // sessão já foi encerrada (finishedRef), apenas navega. O mesmo caminho vale
+  // para o clique do operador e para a ação do Agente — o Agente não decide
+  // sozinho; quem escolhe é o usuário no modal.
+  const confirmCompleteThen = useCallback(
+    async (navigate: () => void) => {
+      if (finishedRef.current) {
+        navigate();
+        return;
+      }
+      console.log("[HELO ACTIVITY EXIT] requested");
+      console.log("[HELO ACTIVITY EXIT] answeredItemsCount", respondidos);
+      if (respondidos === 0) {
+        console.log("[HELO ACTIVITY EXIT] no responses, leaving without modal");
+        console.log("[HELO ACTIVITY EXIT] abandoned without responses");
+        endRun("abandonada");
+        stop();
+        navigate();
+        return;
+      }
+      console.log("[HELO ACTIVITY EXIT] responses found, showing completion modal");
+      const complete = await dialog.confirm({
+        title: "Concluir atividade?",
+        confirmLabel: "Sim",
+        cancelLabel: "Não",
+        tone: "info",
+      });
+      console.log(
+        complete
+          ? "[HELO ACTIVITY EXIT] user chose complete"
+          : "[HELO ACTIVITY EXIT] user chose discard"
+      );
+      endRun(complete ? "concluida" : "abandonada");
+      stop();
+      navigate();
+    },
+    [dialog, endRun, respondidos, stop]
+  );
 
-  // Volta à tela de Gerenciar Atividades sem perder nada: as respostas já
-  // foram salvas de forma incremental, e o desmonte da sessão encerra o run
-  // (abandonada) como em qualquer saída. Só navega — preserva o paciente ativo
-  // (contexto global) e nunca usa alerta nativo. Mesmo handler do botão e da
-  // ação do Agente (activity.goToManageActivities).
+  // Volta ao MENU DE ATIVIDADES (a tela com os cards). As respostas já foram
+  // salvas de forma incremental; preserva o paciente ativo (contexto global) e
+  // nunca usa alerta nativo. Mesmo handler do botão e da ação do Agente
+  // (activity.goToActivityMenu).
+  const goToActivityMenu = useCallback(() => {
+    console.log("[HELO ACTIVITY] go to activity menu clicked");
+    console.log("[HELO ACTIVITY] preserving current session state");
+    onGoToMenu();
+  }, [onGoToMenu]);
+
+  // Volta à tela de Gerenciar Atividades (área administrativa) — distinta do
+  // Menu de atividades. Só navega; preserva o paciente ativo. Mesmo handler do
+  // botão e da ação do Agente (activity.goToManageActivities).
   const goToManage = useCallback(() => {
     console.log("[HELO ACTIVITY] go to manage activities clicked");
-    console.log("[HELO ACTIVITY] preserving current session state");
-    stop();
     router.push("/atividades/gerenciar");
-  }, [router, stop]);
+  }, [router]);
 
   // Action Registry da sessão em curso: navegação entre itens e o registro
   // do gesto do paciente por alternativa (payload.gesto: sim/talvez/nao) —
@@ -543,14 +620,34 @@ export function SessionPlayer({
     };
     const list: HeloUIAction[] = [
       {
+        // Volta ao MENU DE ATIVIDADES (tela dos cards). "Atividades", "voltar
+        // para Atividades", "menu de atividades" convergem para esta ação.
+        // Primeiro da lista: no empate de tokens ("atividades"), vence sobre
+        // "Gerenciar atividades". Passa pela confirmação de conclusão — quem
+        // decide concluir é o usuário no modal, não o Agente.
+        actionId: "activity.goToActivityMenu",
+        label: "Menu de atividades",
+        type: "navigation",
+        enabled: true,
+        run: async () => {
+          console.log("[HELO TOOL] activity.goToActivityMenu handled");
+          await confirmCompleteThen(goToActivityMenu);
+        },
+        toolSuccess: {
+          result: "opened",
+          screen: "activity_menu",
+          suppressAssistantNarration: true,
+        },
+      },
+      {
         // Volta ao gerenciamento das atividades — o Agente também executa.
         actionId: "activity.goToManageActivities",
         label: "Gerenciar atividades",
         type: "navigation",
         enabled: true,
-        run: () => {
+        run: async () => {
           console.log("[HELO TOOL] activity.goToManageActivities handled");
-          goToManage();
+          await confirmCompleteThen(goToManage);
         },
         // Retorno técnico: é só navegação, sem fala do Agente nem confirmação.
         toolSuccess: {
@@ -578,14 +675,16 @@ export function SessionPlayer({
         label: "Concluir sessão",
         type: "activity",
         enabled: lastItem,
-        run: () => finish(),
+        run: () => void finish(),
       },
       {
+        // Encerrar sessão: também passa pela regra de saída (modal só se houver
+        // resposta; sem resposta, sai direto). Vai para o Menu de atividades.
         actionId: "atividades.encerrar",
         label: "Encerrar sessão",
         type: "activity",
         enabled: true,
-        run: () => leave(),
+        run: () => confirmCompleteThen(goToActivityMenu),
       },
     ];
     if (gesturesOn && item.options.length > 0) {
@@ -623,7 +722,7 @@ export function SessionPlayer({
       });
     }
     return list;
-  }, [finish, goToManage, idx, item, items.length, leave, pick]);
+  }, [confirmCompleteThen, finish, goToActivityMenu, goToManage, idx, item, items.length, pick]);
   useRegisterHeloUIActions(registryActions);
 
   // Exercício com respostas faladas: publica o sub-estado para o Agent, com a
@@ -662,12 +761,25 @@ export function SessionPlayer({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* Menu de atividades: volta à tela dos cards (Meu livro, Memória
+              pessoal, Nascimento…). Fica à ESQUERDA de "Gerenciar atividades".
+              Antes de sair, a Helo pergunta se deseja concluir a atividade. */}
+          <button
+            type="button"
+            onClick={() => void confirmCompleteThen(goToActivityMenu)}
+            aria-label="Menu de atividades"
+            className="inline-flex items-center gap-1.5 rounded-full border border-line bg-card/90 px-4 py-2 text-sm font-medium text-ink-soft backdrop-blur-sm transition-colors hover:border-ink-mute hover:text-ink"
+          >
+            <span aria-hidden="true">▦</span>
+            <span className="hidden sm:inline">Menu de atividades</span>
+            <span className="sm:hidden">Menu</span>
+          </button>
           {/* Voltar ao gerenciamento das atividades — visão geral (criar,
               organizar, editar), diferente do "Editar" que abre o item atual.
               Sempre disponível; preserva paciente e respostas já salvas. */}
           <button
             type="button"
-            onClick={goToManage}
+            onClick={() => void confirmCompleteThen(goToManage)}
             aria-label="Gerenciar atividades"
             className="inline-flex items-center gap-1.5 rounded-full border border-line bg-card/90 px-4 py-2 text-sm font-medium text-ink-soft backdrop-blur-sm transition-colors hover:border-ink-mute hover:text-ink"
           >
@@ -700,7 +812,7 @@ export function SessionPlayer({
           )}
           <button
             type="button"
-            onClick={leave}
+            onClick={() => void confirmCompleteThen(goToActivityMenu)}
             className="rounded-full border border-line bg-card px-4 py-2 text-sm font-medium hover:border-ink-mute"
           >
             Encerrar sessão
@@ -773,7 +885,7 @@ export function SessionPlayer({
         {last ? (
           <button
             type="button"
-            onClick={finish}
+            onClick={() => void finish()}
             className="min-h-12 rounded-full bg-accent px-8 py-2.5 font-medium text-on-accent hover:bg-accent-strong"
           >
             Concluir sessão
