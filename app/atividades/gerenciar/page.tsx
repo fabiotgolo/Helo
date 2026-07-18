@@ -22,14 +22,25 @@ import {
   ACTIVITY_CATEGORY_LABELS,
   MEDIA_ALLOWED_TYPES,
   MEDIA_MAX_BYTES,
+  suggestOptionResponses,
   youtubeEmbedUrl,
   type ActivityCaps,
   type ActivityCategory,
   type ActivityItem,
   type ActivityMedia,
+  type ActivityOption,
   type ActivityTemplate,
   type PatientMediaMeta,
 } from "@/lib/activity-types";
+import type { Gesture } from "@/lib/types";
+
+// Ordem canônica das respostas faladas no editor — SIM, TALVEZ, NÃO.
+const RESPONSE_GESTURES: { g: Gesture; label: string }[] = [
+  { g: "sim", label: "SIM" },
+  { g: "talvez", label: "TALVEZ" },
+  { g: "nao", label: "NÃO" },
+];
+const MAX_OPTIONS_UI = 6;
 
 let seq = 0;
 function newId(prefix: string): string {
@@ -65,7 +76,14 @@ function draftFrom(t: ActivityTemplate | null): Draft {
         title: t.title,
         description: t.description,
         category: t.category,
-        items: t.items.map((i) => ({ ...i, media: [...i.media], options: [...i.options] })),
+        items: t.items.map((i) => ({
+          ...i,
+          media: [...i.media],
+          options: i.options.map((o) => ({
+            ...o,
+            responses: o.responses ? { ...o.responses } : undefined,
+          })),
+        })),
       }
     : { id: null, title: "", description: "", category: "entretenimento", items: [blankItem()] };
 }
@@ -639,13 +657,46 @@ function ItemEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const setOption = (i: number, label: string) => {
+  const updateOption = (i: number, patch: Partial<ActivityOption>) => {
+    onChange({
+      options: item.options.map((o, j) => (j === i ? { ...o, ...patch } : o)),
+    });
+  };
+  const addOption = () => {
+    if (item.options.length >= MAX_OPTIONS_UI) return;
+    onChange({
+      options: [...item.options, { id: newId(`${item.id}o`), label: "" }],
+    });
+  };
+  const removeOption = (i: number) => {
+    const removed = item.options[i];
+    const options = item.options.filter((_, j) => j !== i);
+    const patch: Partial<ActivityItem> = { options };
+    if (removed && item.correctOptionId === removed.id) patch.correctOptionId = null;
+    onChange(patch);
+  };
+  const moveOption = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= item.options.length) return;
     const options = [...item.options];
-    while (options.length <= i) {
-      options.push({ id: newId(`${item.id}o`), label: "" });
-    }
-    options[i] = { ...options[i], label };
+    [options[i], options[j]] = [options[j], options[i]];
     onChange({ options });
+  };
+  const setResponse = (i: number, g: Gesture, text: string) => {
+    const cur = item.options[i]?.responses ?? {};
+    updateOption(i, { responses: { ...cur, [g]: text } });
+  };
+  const suggestResponses = (i: number) => {
+    const label = item.options[i]?.label ?? "";
+    updateOption(i, { responses: suggestOptionResponses(label) });
+  };
+  // Autofill discreto: ao sair do campo do rótulo, se ainda não há nenhuma
+  // resposta falada, sugere as três (editáveis). Não sobrescreve o que já existe.
+  const maybeSuggestOnBlur = (i: number) => {
+    const o = item.options[i];
+    if (!o || !o.label.trim()) return;
+    const has = Object.values(o.responses ?? {}).some((v) => (v ?? "").trim());
+    if (!has) suggestResponses(i);
   };
 
   return (
@@ -711,11 +762,21 @@ function ItemEditor({
           value={item.question}
           onChange={(e) => {
             const question = e.target.value;
-            onChange({
+            const patch: Partial<ActivityItem> = {
               question,
               // pergunta liga os gestos por padrão; item de conteúdo desliga
               gesturesEnabled: question.trim().length > 0,
-            });
+            };
+            // Ao virar pergunta pela primeira vez, semeia 3 alternativas em
+            // branco (padrão do brief). O usuário pode remover ou adicionar
+            // (até 6). Alternativas vazias não são salvas.
+            if (question.trim().length > 0 && item.options.length === 0) {
+              patch.options = [0, 1, 2].map(() => ({
+                id: newId(`${item.id}o`),
+                label: "",
+              }));
+            }
+            onChange(patch);
           }}
           placeholder='ex.: "Qual é o nome dele?"'
           className="w-full rounded-2xl border border-line bg-white px-4 py-2.5"
@@ -723,42 +784,117 @@ function ItemEditor({
       </Field>
 
       {isQuestion && (
-        <div className="flex flex-col gap-3 rounded-2xl bg-cream p-4">
-          <p className="text-sm font-medium text-ink-soft">
-            Opções de resposta (a resposta observada — diferente dos gestos 👍✋✊,
-            que ficam sempre visíveis)
-          </p>
-          {[0, 1, 2].map((i) => {
-            const opt = item.options[i];
-            return (
-              <div key={i} className="flex items-center gap-3">
+        <div className="flex flex-col gap-4 rounded-2xl bg-cream p-4">
+          <div>
+            <p className="text-sm font-medium text-ink-soft">
+              Alternativas de resposta
+            </p>
+            <p className="mt-0.5 text-xs text-ink-mute">
+              Cada alternativa tem os três gestos 👍✋✊ na execução. Preencha as
+              falas SIM/TALVEZ/NÃO para que a alternativa fale na voz do paciente
+              ao ser escolhida — deixe em branco para apenas registrar o gesto.
+            </p>
+          </div>
+
+          {item.options.map((opt, i) => (
+            <div
+              key={opt.id}
+              className="flex flex-col gap-3 rounded-2xl border border-line bg-white p-3"
+            >
+              <div className="flex items-center gap-2">
                 <input
-                  value={opt?.label ?? ""}
-                  onChange={(e) => setOption(i, e.target.value)}
-                  placeholder={`Opção ${i + 1}`}
+                  value={opt.label}
+                  onChange={(e) => updateOption(i, { label: e.target.value })}
+                  onBlur={() => maybeSuggestOnBlur(i)}
+                  placeholder={`Alternativa ${i + 1}`}
                   className="min-w-0 flex-1 rounded-2xl border border-line bg-white px-4 py-2.5"
                 />
                 <label className="flex shrink-0 items-center gap-1.5 text-sm text-ink-soft">
                   <input
                     type="radio"
                     name={`correta-${item.id}`}
-                    checked={Boolean(opt && item.correctOptionId === opt.id)}
-                    disabled={!opt?.label.trim()}
-                    onChange={() => opt && onChange({ correctOptionId: opt.id })}
+                    checked={item.correctOptionId === opt.id}
+                    disabled={!opt.label.trim()}
+                    onChange={() => onChange({ correctOptionId: opt.id })}
                   />
-                  correta
+                  esperada
                 </label>
+                <IconBtn
+                  label="Mover alternativa para cima"
+                  disabled={i === 0}
+                  onClick={() => moveOption(i, -1)}
+                >
+                  ↑
+                </IconBtn>
+                <IconBtn
+                  label="Mover alternativa para baixo"
+                  disabled={i === item.options.length - 1}
+                  onClick={() => moveOption(i, 1)}
+                >
+                  ↓
+                </IconBtn>
+                <IconBtn
+                  label="Remover alternativa"
+                  disabled={item.options.length <= 1}
+                  onClick={() => removeOption(i)}
+                >
+                  ✕
+                </IconBtn>
               </div>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => onChange({ correctOptionId: null })}
-            disabled={!item.correctOptionId}
-            className="w-fit rounded-full border border-line bg-white px-3 py-1 text-xs font-medium disabled:opacity-40"
-          >
-            Sem resposta correta (sem certo/errado)
-          </button>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-ink-soft">
+                    Falas do paciente (opcional)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => suggestResponses(i)}
+                    disabled={!opt.label.trim()}
+                    className="rounded-full border border-line bg-cream px-3 py-1 text-xs font-medium hover:border-ink-mute disabled:opacity-40"
+                  >
+                    ✨ Sugerir respostas
+                  </button>
+                </div>
+                {RESPONSE_GESTURES.map(({ g, label }) => (
+                  <label key={g} className="flex items-center gap-2">
+                    <span className="w-16 shrink-0 text-xs font-semibold uppercase tracking-wide text-ink-mute">
+                      {label}
+                    </span>
+                    <input
+                      value={opt.responses?.[g] ?? ""}
+                      onChange={(e) => setResponse(i, g, e.target.value)}
+                      placeholder={`fala do paciente ao escolher ${label}`}
+                      className="min-w-0 flex-1 rounded-xl border border-line bg-white px-3 py-2 text-sm"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={addOption}
+              disabled={item.options.length >= MAX_OPTIONS_UI}
+              className="w-fit rounded-full border border-line bg-white px-4 py-1.5 text-sm font-medium hover:border-ink-mute disabled:opacity-40"
+            >
+              + Adicionar alternativa
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ correctOptionId: null })}
+              disabled={!item.correctOptionId}
+              className="w-fit rounded-full border border-line bg-white px-3 py-1.5 text-xs font-medium disabled:opacity-40"
+            >
+              Sem resposta esperada (sem certo/errado)
+            </button>
+          </div>
+          <p className="text-xs text-ink-mute">
+            A “resposta esperada” é discreta: serve ao acompanhamento e ao
+            Dashboard, nunca vira “errado” na tela para o paciente.
+          </p>
         </div>
       )}
     </div>

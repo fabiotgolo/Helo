@@ -9,12 +9,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ContextualEdit } from "@/components/contextual-edit";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
+import { useHeloScreenContext } from "@/lib/helo-screen-context";
 import type { Gesture } from "@/lib/types";
 import { useHelo } from "@/lib/helo-state";
+import type { SpeakResult } from "@/lib/useSpeech";
 import { useGestures } from "@/lib/gestures";
+import {
+  beginPatientVoiceOverride,
+  endPatientVoiceOverride,
+  isPlatformMuted,
+} from "@/lib/audio-coordinator";
 import {
   BARE_QUESTION_OPTION_ID,
   isQuestionItem,
+  itemHasSpokenResponses,
+  optionSpeaks,
   youtubeEmbedUrl,
   type ActivityItem,
   type ActivityMedia,
@@ -202,39 +211,49 @@ function OptionGestures({
 }) {
   const gestures = useGestures();
   const answered = current != null;
+  // Quando a alternativa "fala", o gesto escolhido revela a frase-resposta do
+  // paciente — o mesmo texto que sai na voz dele.
+  const spokenText = current ? option.responses?.[current]?.trim() || null : null;
   return (
     <div
-      className={`flex w-full flex-col gap-2 rounded-3xl border px-4 py-3 transition-colors sm:flex-row sm:items-center sm:justify-between ${
+      className={`flex w-full flex-col gap-2 rounded-3xl border px-4 py-3 transition-colors ${
         answered ? "border-ink-mute bg-card" : "border-line/70 bg-card/80 backdrop-blur-md"
       }`}
     >
-      <span className="text-center text-xl font-medium tracking-tight sm:text-left">
-        {option.label}
-      </span>
-      <div
-        role="group"
-        aria-label={`Gesto do paciente para: ${option.label}`}
-        className="flex items-center justify-center gap-2"
-      >
-        {GESTURE_ORDER.map((g) => {
-          const on = current === g;
-          return (
-            <button
-              key={g}
-              type="button"
-              disabled={disabled}
-              aria-pressed={on}
-              aria-label={`${gestures[g].label} para ${option.label}`}
-              onClick={() => onPick(g)}
-              className={`flex h-14 w-14 items-center justify-center rounded-2xl border text-2xl transition-transform active:scale-95 disabled:opacity-50 ${
-                on ? GESTURE_ON[g] : "border-line bg-cream/60 opacity-70 hover:opacity-100"
-              }`}
-            >
-              <span aria-hidden="true">{gestures[g].emoji}</span>
-            </button>
-          );
-        })}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <span className="text-center text-xl font-medium tracking-tight sm:text-left">
+          {option.label}
+        </span>
+        <div
+          role="group"
+          aria-label={`Gesto do paciente para: ${option.label}`}
+          className="flex items-center justify-center gap-2"
+        >
+          {GESTURE_ORDER.map((g) => {
+            const on = current === g;
+            return (
+              <button
+                key={g}
+                type="button"
+                disabled={disabled}
+                aria-pressed={on}
+                aria-label={`${gestures[g].label} para ${option.label}`}
+                onClick={() => onPick(g)}
+                className={`flex h-14 w-14 items-center justify-center rounded-2xl border text-2xl transition-transform active:scale-95 disabled:opacity-50 ${
+                  on ? GESTURE_ON[g] : "border-line bg-cream/60 opacity-70 hover:opacity-100"
+                }`}
+              >
+                <span aria-hidden="true">{gestures[g].emoji}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
+      {spokenText && (
+        <p className="text-center text-lg font-medium leading-snug text-ink sm:text-left">
+          {spokenText}
+        </p>
+      )}
     </div>
   );
 }
@@ -260,18 +279,25 @@ export function ActivityItemView({
           {item.options.map((o) => (
             <div
               key={o.id}
-              className="flex flex-col gap-2 rounded-3xl border border-line/70 bg-card/80 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-2 rounded-3xl border border-line/70 bg-card/80 px-4 py-3"
             >
-              <span className="text-center text-xl font-medium tracking-tight sm:text-left">
-                {o.label}
-              </span>
-              <div className="flex items-center justify-center gap-2 opacity-50">
-                {GESTURE_ORDER.map((g) => (
-                  <span key={g} className="text-2xl" aria-hidden="true">
-                    {gestures[g].emoji}
-                  </span>
-                ))}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <span className="text-center text-xl font-medium tracking-tight sm:text-left">
+                  {o.label}
+                </span>
+                <div className="flex items-center justify-center gap-2 opacity-50">
+                  {GESTURE_ORDER.map((g) => (
+                    <span key={g} className="text-2xl" aria-hidden="true">
+                      {gestures[g].emoji}
+                    </span>
+                  ))}
+                </div>
               </div>
+              {optionSpeaks(o) && (
+                <p className="text-xs text-ink-mute sm:text-right">
+                  🔊 fala na voz do paciente ao escolher um gesto
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -315,6 +341,11 @@ export function SessionPlayer({
   const [answers, setAnswers] = useState<Record<string, ItemAnswers>>({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Estado da voz da resposta do paciente (só para itens com respostas faladas):
+  // perceptível na tela, sem NARRAÇÃO por voz da plataforma nem do Agente.
+  const [voiceFeedback, setVoiceFeedback] = useState<
+    { status: "silenciada" | "erro"; detail?: string } | null
+  >(null);
   // Tempo até o PRIMEIRO gesto de cada item (reação inicial).
   const firstGestureAt = useRef<Record<string, number>>({});
   const shownAt = useRef(0);
@@ -389,6 +420,55 @@ export function SessionPlayer({
       const nextMap: ItemAnswers = { ...(answers[itemId] ?? {}), [optionId]: g };
       setAnswers((prev) => ({ ...prev, [itemId]: nextMap }));
       setSaveError(null);
+
+      // Exercício "com SIM/TALVEZ/NÃO": a alternativa carrega falas do paciente.
+      // Escolher um gesto vocaliza a frase na voz DELE (clone/voz de Ajustes;
+      // resolução no servidor por patientId), com prioridade sobre o Agente e a
+      // plataforma. Registro segue SILENCIOSO: nada narra "selecionado".
+      const responseText = item.options
+        .find((o) => o.id === optionId)
+        ?.responses?.[g]
+        ?.trim();
+      if (responseText) {
+        console.log("[HELO ACTIVITY] patient response voiceRole patient", g);
+        setVoiceFeedback(null);
+        const speakResponse = async (): Promise<SpeakResult> => {
+          beginPatientVoiceOverride();
+          try {
+            return await speak(responseText, {
+              speakerRole: "patient",
+              confirmationStatus: "confirmed",
+              patientId,
+              priority: "patientResponse",
+            });
+          } finally {
+            endPatientVoiceOverride();
+          }
+        };
+        speakResponse()
+          .then((result) => {
+            if (result === "silenciada" && isPlatformMuted()) {
+              setVoiceFeedback({ status: "silenciada", detail: "a voz da plataforma está mutada" });
+              window.setTimeout(
+                () => setVoiceFeedback((f) => (f?.status === "silenciada" ? null : f)),
+                6000
+              );
+            } else if (result === "erro" || result === "bloqueada") {
+              setVoiceFeedback({
+                status: "erro",
+                detail: result === "bloqueada" ? "o navegador bloqueou o áudio" : "a reprodução falhou",
+              });
+              window.setTimeout(
+                () => setVoiceFeedback((f) => (f?.status === "erro" ? null : f)),
+                8000
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            console.error("[HELO ACTIVITY] erro na fala da resposta:", (err as Error)?.message ?? err);
+            setVoiceFeedback({ status: "erro", detail: "erro inesperado na voz" });
+          });
+      }
       pending.current += 1;
       setSaving(true);
       const payload = {
@@ -419,7 +499,7 @@ export function SessionPlayer({
           if (pending.current === 0) setSaving(false);
         });
     },
-    [item, answers, patientId, run.id]
+    [item, answers, patientId, run.id, speak]
   );
 
   const finish = useCallback(() => {
@@ -510,12 +590,27 @@ export function SessionPlayer({
     ];
     if (gesturesOn && item.options.length > 0) {
       item.options.forEach((o, n) => {
+        // Alternativa que fala: acionar por tool executa o MESMO handler do
+        // clique (resposta do paciente com prioridade). Retorno técnico e
+        // não-narrável — o Agente não lê nada em voz alta nem confirma.
+        const speaks = optionSpeaks(o);
         list.push({
           actionId: `atividades.resposta.${n + 1}`,
           label: `Registrar gesto do paciente para: ${o.label}`,
           type: "gesture",
           enabled: true,
           run: pickRun(o.id),
+          ...(speaks
+            ? {
+                toolSuccess: {
+                  result: "handled",
+                  audibleResponse: "patient_voice_only",
+                  speechOwner: "patient",
+                  suppressAgentSpeech: true,
+                  suppressAssistantNarration: true,
+                },
+              }
+            : {}),
         });
       });
     } else if (gesturesOn && question) {
@@ -530,6 +625,21 @@ export function SessionPlayer({
     return list;
   }, [finish, goToManage, idx, item, items.length, leave, pick]);
   useRegisterHeloUIActions(registryActions);
+
+  // Exercício com respostas faladas: publica o sub-estado para o Agent, com a
+  // pergunta atual. Assim ele entende que "Qual é a sua idade?" é a pergunta DA
+  // ATIVIDADE (dirigida ao paciente), não a ele. Itens comuns não publicam nada.
+  const screenContext = useMemo(
+    () =>
+      item && itemHasSpokenResponses(item)
+        ? {
+            screen: "activity_multiple_choice_gesture",
+            extra: { currentQuestion: item.question },
+          }
+        : null,
+    [item]
+  );
+  useHeloScreenContext(screenContext);
 
   if (!item) return null;
   const last = idx === items.length - 1;
@@ -636,6 +746,16 @@ export function SessionPlayer({
             )}
             {!saving && !saveError && itemAnswered && (
               <span className="text-ink-soft">✓ Registrado</span>
+            )}
+            {voiceFeedback?.status === "silenciada" && (
+              <span className="text-ink-mute">
+                Voz não reproduzida ({voiceFeedback.detail}).
+              </span>
+            )}
+            {voiceFeedback?.status === "erro" && (
+              <span role="alert" className="text-nao">
+                A voz não saiu ({voiceFeedback.detail}).
+              </span>
             )}
           </div>
         )}

@@ -12,6 +12,15 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--", "-p", "3461"],
       "port": 3461
+    },
+    {
+      "name": "helo-check",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "node scripts/gen-version.mjs && NEXT_DIST_DIR=.next-check next dev --webpack -p 3472"
+      ],
+      "port": 3472
     }
   ]
 }

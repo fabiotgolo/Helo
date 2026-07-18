@@ -58,7 +58,8 @@ function newId(prefix: string): string {
 
 const GESTURES: Gesture[] = ["sim", "talvez", "nao"];
 const MAX_ITEMS = 40;
-const MAX_OPTIONS = 3;
+const MAX_OPTIONS = 6;
+const RESPONSE_GESTURES: readonly Gesture[] = ["sim", "talvez", "nao"];
 const MAX_MEDIA_PER_ITEM = 8;
 
 function cleanText(v: unknown, max: number): string {
@@ -94,13 +95,24 @@ export function normalizeItems(raw: unknown): ActivityItem[] {
           .slice(0, MAX_OPTIONS)
           .map((o, oi) => {
             const ov = o as Partial<ActivityOption>;
-            return {
+            // Falas do paciente por gesto (opcional). Mantém só as três chaves
+            // conhecidas, com texto limitado; descarta vazias. Sem nenhuma
+            // resposta, o campo some — a alternativa volta a só registrar gesto.
+            const rawR = (ov.responses ?? {}) as Record<string, unknown>;
+            const responses: Partial<Record<Gesture, string>> = {};
+            for (const g of RESPONSE_GESTURES) {
+              const txt = cleanText(rawR[g], 300);
+              if (txt) responses[g] = txt;
+            }
+            const opt: ActivityOption = {
               id:
                 typeof ov.id === "string" && /^[\w-]{1,40}$/.test(ov.id)
                   ? ov.id
                   : `${id}_op${oi}`,
               label: cleanText(ov.label, 120),
             };
+            if (Object.keys(responses).length > 0) opt.responses = responses;
+            return opt;
           })
           .filter((o) => o.label.length > 0)
       : [];

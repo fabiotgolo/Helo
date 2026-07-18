@@ -81,7 +81,12 @@ type RunDetail = {
     itemId: string;
     title: string;
     question: string;
-    options: { id: string; label: string }[];
+    options: {
+      id: string;
+      label: string;
+      /** Falas do paciente por gesto — usadas só para exibir a frase falada. */
+      responses?: Partial<Record<Gesture, string>>;
+    }[];
     correctOptionId: string | null;
     hasMedia: boolean;
     response: {
@@ -519,20 +524,29 @@ function RunRow({
                             <ul className="mt-1.5 flex flex-col gap-1">
                               {it.options.map((o) => {
                                 const g = byOption.get(o.id);
+                                // Frase falada = derivada do snapshot (fala do
+                                // paciente para aquela alternativa + gesto). Só
+                                // aparece quando existe — nunca campo vazio.
+                                const phrase = g ? o.responses?.[g]?.trim() : "";
                                 return (
-                                  <li
-                                    key={o.id}
-                                    className="flex items-center justify-between gap-3 text-ink-soft"
-                                  >
-                                    <span>
-                                      {o.label}
-                                      {o.id === it.correctOptionId && (
-                                        <span className="ml-1 text-xs text-ink-mute">(correta)</span>
-                                      )}
-                                    </span>
-                                    <span className="shrink-0 tabular-nums">
-                                      {g ? `${GESTURE_EMOJI[g]} ${g}` : "—"}
-                                    </span>
+                                  <li key={o.id} className="flex flex-col gap-0.5">
+                                    <div className="flex items-center justify-between gap-3 text-ink-soft">
+                                      <span>
+                                        {o.label}
+                                        {o.id === it.correctOptionId && (
+                                          <span className="ml-1 text-xs text-ink-mute">(correta)</span>
+                                        )}
+                                      </span>
+                                      <span className="shrink-0 tabular-nums">
+                                        {g ? `${GESTURE_EMOJI[g]} ${g}` : "—"}
+                                      </span>
+                                    </div>
+                                    {phrase && (
+                                      <p className="text-xs text-ink-mute">
+                                        Fala do paciente:{" "}
+                                        <span className="italic text-ink-soft">“{phrase}”</span>
+                                      </p>
+                                    )}
                                   </li>
                                 );
                               })}

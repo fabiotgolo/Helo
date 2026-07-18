@@ -58,6 +58,48 @@ export interface ActivityMedia {
 export interface ActivityOption {
   id: string;
   label: string;
+  /**
+   * Falas DO PACIENTE, uma por gesto (👍 sim / ✋ talvez / ✊ não). OPCIONAL:
+   * quando presente, escolher um gesto nesta alternativa vocaliza a frase
+   * correspondente na voz do paciente (exercício "Pergunta com alternativas +
+   * SIM/TALVEZ/NÃO"). Ausente ou vazio → alternativa apenas registra o gesto,
+   * como sempre (migração defensiva: itens antigos não têm o campo).
+   */
+  responses?: Partial<Record<Gesture, string>>;
+}
+
+/**
+ * Sugestão de respostas faladas a partir do rótulo da alternativa (autofill
+ * editável). Número (idade/quantidade) ganha frase específica; qualquer outro
+ * rótulo usa um template genérico. O profissional pode reescrever tudo.
+ */
+export function suggestOptionResponses(label: string): Record<Gesture, string> {
+  const t = label.trim();
+  if (/^\d{1,3}$/.test(t)) {
+    return {
+      sim: `SIM, eu tenho ${t} anos.`,
+      talvez: `TALVEZ, acho que tenho ${t} anos.`,
+      nao: `NÃO, eu não tenho ${t} anos.`,
+    };
+  }
+  return {
+    sim: "SIM, é isso.",
+    talvez: "TALVEZ, acho que pode ser isso.",
+    nao: "NÃO, não é isso.",
+  };
+}
+
+/** A alternativa "fala" quando tem ao menos uma resposta não-vazia. */
+export function optionSpeaks(option: Pick<ActivityOption, "responses">): boolean {
+  const r = option.responses;
+  return !!r && Object.values(r).some((v) => (v ?? "").trim().length > 0);
+}
+
+/** O item é um exercício com respostas faladas quando alguma alternativa fala. */
+export function itemHasSpokenResponses(
+  item: Pick<ActivityItem, "options">
+): boolean {
+  return item.options.some(optionSpeaks);
 }
 
 // Um item é uma "tela" da sessão, na ordem definida pelo profissional.
