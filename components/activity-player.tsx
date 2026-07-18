@@ -6,6 +6,7 @@
 // oferece edição — o modo de edição vive em /atividades/gerenciar.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ContextualEdit } from "@/components/contextual-edit";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import type { Gesture } from "@/lib/types";
@@ -300,6 +301,7 @@ export function SessionPlayer({
   canEdit?: boolean;
 }) {
   const { speak, stop } = useHelo();
+  const router = useRouter();
   const items = useMemo(
     () => [...run.items].sort((a, b) => a.order - b.order),
     [run.items]
@@ -432,6 +434,18 @@ export function SessionPlayer({
     onExit({ status: "abandonada", respondidos, total: questionItems.length });
   }, [endRun, stop, onExit, respondidos, questionItems.length]);
 
+  // Volta à tela de Gerenciar Atividades sem perder nada: as respostas já
+  // foram salvas de forma incremental, e o desmonte da sessão encerra o run
+  // (abandonada) como em qualquer saída. Só navega — preserva o paciente ativo
+  // (contexto global) e nunca usa alerta nativo. Mesmo handler do botão e da
+  // ação do Agente (activity.goToManageActivities).
+  const goToManage = useCallback(() => {
+    console.log("[HELO ACTIVITY] go to manage activities clicked");
+    console.log("[HELO ACTIVITY] preserving current session state");
+    stop();
+    router.push("/atividades/gerenciar");
+  }, [router, stop]);
+
   // Action Registry da sessão em curso: navegação entre itens e o registro
   // do gesto do paciente por alternativa (payload.gesto: sim/talvez/nao) —
   // os MESMOS handlers dos toques manuais do operador.
@@ -448,6 +462,23 @@ export function SessionPlayer({
       pick(optionId, g);
     };
     const list: HeloUIAction[] = [
+      {
+        // Volta ao gerenciamento das atividades — o Agente também executa.
+        actionId: "activity.goToManageActivities",
+        label: "Gerenciar atividades",
+        type: "navigation",
+        enabled: true,
+        run: () => {
+          console.log("[HELO TOOL] activity.goToManageActivities handled");
+          goToManage();
+        },
+        // Retorno técnico: é só navegação, sem fala do Agente nem confirmação.
+        toolSuccess: {
+          result: "handled",
+          navigatedTo: "manage_activities",
+          suppressAssistantNarration: true,
+        },
+      },
       {
         actionId: "atividades.anterior",
         label: "Item anterior",
@@ -497,7 +528,7 @@ export function SessionPlayer({
       });
     }
     return list;
-  }, [finish, idx, item, items.length, leave, pick]);
+  }, [finish, goToManage, idx, item, items.length, leave, pick]);
   useRegisterHeloUIActions(registryActions);
 
   if (!item) return null;
@@ -520,7 +551,20 @@ export function SessionPlayer({
             {idx + 1} de {items.length}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Voltar ao gerenciamento das atividades — visão geral (criar,
+              organizar, editar), diferente do "Editar" que abre o item atual.
+              Sempre disponível; preserva paciente e respostas já salvas. */}
+          <button
+            type="button"
+            onClick={goToManage}
+            aria-label="Gerenciar atividades"
+            className="inline-flex items-center gap-1.5 rounded-full border border-line bg-card/90 px-4 py-2 text-sm font-medium text-ink-soft backdrop-blur-sm transition-colors hover:border-ink-mute hover:text-ink"
+          >
+            <span aria-hidden="true">⚙</span>
+            <span className="hidden sm:inline">Gerenciar atividades</span>
+            <span className="sm:hidden">Gerenciar</span>
+          </button>
           {/* Edição contextual do ITEM em exibição: abre Gerenciar já nesta
               questão. Sair encerra esta sessão (abandonada — o snapshot é
               imutável); o retorno recomeça a atividade neste mesmo item, já
@@ -534,11 +578,14 @@ export function SessionPlayer({
               }}
               source={`/atividades?start=${run.templateId}&item=${item.id}`}
               label={`item ${idx + 1} de ${run.templateTitle}`}
-              onNavigate={() =>
-                window.confirm(
-                  "Editar este item encerra a sessão atual (as respostas já registradas são preservadas). Depois de salvar, você volta direto a este item. Continuar?"
-                )
-              }
+              confirm={{
+                title: "Editar item?",
+                message:
+                  "Editar este item encerra a sessão atual. As respostas já registradas serão preservadas. Depois de salvar, você volta direto a este item.",
+                confirmLabel: "Continuar",
+                cancelLabel: "Cancelar",
+                tone: "warning",
+              }}
             />
           )}
           <button

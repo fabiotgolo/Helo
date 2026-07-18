@@ -5,6 +5,7 @@ import { PatientProvider } from "@/lib/patient";
 import { HeloProvider } from "@/lib/helo-state";
 import { ThemeProvider, THEME_INIT_SCRIPT } from "@/lib/theme";
 import { HeloAgentProvider } from "@/components/helo-agent-provider";
+import { HeloDialogProvider } from "@/components/helo-dialog";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -45,7 +46,9 @@ export default function RootLayout({
         <PatientProvider>
           <ThemeProvider>
             <HeloProvider>
-              <HeloAgentProvider>{children}</HeloAgentProvider>
+              <HeloDialogProvider>
+                <HeloAgentProvider>{children}</HeloAgentProvider>
+              </HeloDialogProvider>
             </HeloProvider>
           </ThemeProvider>
         </PatientProvider>

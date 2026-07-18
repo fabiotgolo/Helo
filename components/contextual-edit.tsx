@@ -7,14 +7,17 @@
 // quando a capacidade de edição veio do servidor — e mesmo assim a
 // autorização real continua nas rotas de escrita.
 
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { buildEditLink, type EditTarget } from "@/lib/edit-link";
+import { useHeloDialog } from "@/components/helo-dialog";
+import type { HeloConfirmOptions } from "@/components/helo-dialog";
 
 export function ContextualEdit({
   target,
   source,
   label,
-  onNavigate,
+  confirm,
   className = "",
 }: {
   target: EditTarget;
@@ -22,11 +25,17 @@ export function ContextualEdit({
   source: string;
   /** Nome do conteúdo, para o aria-label ("Editar <label>"). */
   label: string;
-  /** Confirmações antes de sair (ex.: encerrar sessão). Retornar false cancela. */
-  onNavigate?: () => boolean;
+  /**
+   * Confirmação (modal Helo) antes de navegar — ex.: editar durante uma sessão
+   * encerra a sessão atual. Cancelar mantém a tela como está. Ausente = navega
+   * direto. Substitui o antigo window.confirm nativo.
+   */
+  confirm?: HeloConfirmOptions;
   className?: string;
 }) {
   const href = buildEditLink(target, source);
+  const router = useRouter();
+  const dialog = useHeloDialog();
   return (
     <Link
       href={href}
@@ -36,7 +45,14 @@ export function ContextualEdit({
         // O clique não pode vazar para a ação principal do conteúdo
         // (falar, iniciar sessão…) — edição nunca dispara uso.
         e.stopPropagation();
-        if (onNavigate && !onNavigate()) e.preventDefault();
+        // Com confirmação, a navegação é assíncrona: segura o clique, abre o
+        // modal Helo e só navega no "Continuar".
+        if (confirm) {
+          e.preventDefault();
+          void dialog.confirm(confirm).then((ok) => {
+            if (ok) router.push(href);
+          });
+        }
       }}
       className={`inline-flex min-h-9 items-center gap-1 rounded-full border border-line bg-card/90 px-3 py-1.5 text-sm font-medium text-ink-soft backdrop-blur-sm transition-colors hover:border-ink-mute hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${className}`}
     >

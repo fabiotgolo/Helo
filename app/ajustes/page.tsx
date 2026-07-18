@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
 import { AppearanceSettings } from "@/components/appearance-settings";
+import { useHeloDialog } from "@/components/helo-dialog";
 import { HeloVoiceSettings } from "@/components/helo-voice-settings";
 import { GESTURES, type Gesture, type HeloItemMode, type ModeItem } from "@/lib/types";
 import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
@@ -911,6 +912,7 @@ function ModeItemsEditor({
   returnTo?: string | null;
 }) {
   const { patientId } = usePatient();
+  const dialog = useHeloDialog();
   const { items, reload, loading } = usePatientItems(mode);
   const [editing, setEditing] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
@@ -1016,16 +1018,28 @@ function ModeItemsEditor({
 
   const remove = useCallback(
     async (item: ModeItem) => {
-      const question = item.isDefault
-        ? `"${item.label}" é um item padrão: ele será desativado (pode voltar com Restaurar padrão). Continuar?`
-        : `Excluir "${item.label}" deste paciente?`;
-      if (!window.confirm(question)) return;
+      const confirmed = item.isDefault
+        ? await dialog.confirm({
+            title: "Desativar item padrão?",
+            message: `"${item.label}" é um item padrão: ele será desativado, mas pode voltar depois com "Restaurar padrão".`,
+            confirmLabel: "Desativar",
+            cancelLabel: "Cancelar",
+            tone: "warning",
+          })
+        : await dialog.confirm({
+            title: "Excluir item?",
+            message: `Excluir "${item.label}" deste paciente? Esta ação não pode ser desfeita.`,
+            confirmLabel: "Excluir",
+            cancelLabel: "Cancelar",
+            tone: "danger",
+          });
+      if (!confirmed) return;
       await api({
         method: "DELETE",
         body: JSON.stringify({ patientId, itemId: item.id }),
       });
     },
-    [api, patientId]
+    [api, dialog, patientId]
   );
 
   const move = useCallback(
@@ -1043,17 +1057,20 @@ function ModeItemsEditor({
   );
 
   const restore = useCallback(async () => {
-    if (
-      !window.confirm(
-        "Restaurar o conteúdo padrão? Itens padrão voltam ao texto e à ordem originais; os personalizados são mantidos."
-      )
-    )
-      return;
+    const confirmed = await dialog.confirm({
+      title: "Restaurar conteúdo padrão?",
+      message:
+        "Itens padrão voltam ao texto e à ordem originais; os personalizados são mantidos.",
+      confirmLabel: "Restaurar",
+      cancelLabel: "Cancelar",
+      tone: "warning",
+    });
+    if (!confirmed) return;
     await api({
       method: "POST",
       body: JSON.stringify({ patientId, mode, action: "restore" }),
     });
-  }, [api, patientId, mode]);
+  }, [api, dialog, patientId, mode]);
 
   return (
     <section ref={sectionRef} className="rounded-3xl border border-line bg-card p-6">

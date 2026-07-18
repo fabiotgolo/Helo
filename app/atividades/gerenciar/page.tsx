@@ -15,6 +15,7 @@ import { usePatient } from "@/lib/patient";
 import { redirectToLogin } from "@/lib/use-auth";
 import { readSearchParams, safeReturnTo } from "@/lib/edit-link";
 import { ActivityItemView, mediaSrc } from "@/components/activity-player";
+import { useHeloDialog } from "@/components/helo-dialog";
 import {
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_HINTS,
@@ -71,6 +72,7 @@ function draftFrom(t: ActivityTemplate | null): Draft {
 
 export default function GerenciarAtividadesPage() {
   const { patient, patientId } = usePatient();
+  const dialog = useHeloDialog();
   const [templates, setTemplates] = useState<ActivityTemplate[] | null>(null);
   const [caps, setCaps] = useState<ActivityCaps | null>(null);
   const [state, setState] = useState<"ok" | "carregando" | "negado" | "erro">("carregando");
@@ -363,12 +365,15 @@ export default function GerenciarAtividadesPage() {
                       {caps?.delete && (
                         <SmallBtn
                           danger
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                `Excluir "${t.title}"? O histórico de sessões já realizadas é preservado.`
-                              )
-                            ) {
+                          onClick={async () => {
+                            const ok = await dialog.confirm({
+                              title: "Excluir atividade?",
+                              message: `Excluir "${t.title}"? O histórico de sessões já realizadas é preservado.`,
+                              confirmLabel: "Excluir",
+                              cancelLabel: "Cancelar",
+                              tone: "danger",
+                            });
+                            if (ok) {
                               void act(
                                 "DELETE",
                                 { templateId: t.id },
