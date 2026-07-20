@@ -75,6 +75,14 @@ const MIC_METER_UPDATE_MS = 160;
 const MIC_DEBUG_LOG_MS = 1500;
 const MIC_DEVICE_STORAGE_KEY = "heloAgentInputDeviceId";
 
+type HeloConversationTokenResponse = {
+  conversationToken?: string;
+  dynamicVariables?: Record<string, string | number | boolean>;
+  overrides?: HeloApiOverrides;
+  voiceOverrideApplied?: boolean;
+  error?: string;
+};
+
 type HeloAgentContextValue = {
   activeSessionPatientId: number | null;
   sessionStatus: string;
@@ -103,6 +111,20 @@ function toSessionOverrides(overrides?: HeloApiOverrides): HeloSessionOverrides 
   // e o serializa como `conversation_config_override.tts.voice_id`.
   const voiceId = overrides?.tts?.voice_id?.trim();
   return voiceId ? { tts: { voiceId } } : undefined;
+}
+
+function describeConversationError(caught: unknown): string {
+  if (caught instanceof DOMException && caught.name === "NotAllowedError") {
+    return "Permissão do microfone negada. Autorize o microfone e tente novamente.";
+  }
+  if (caught instanceof Error && caught.message) return caught.message;
+  if (caught && typeof caught === "object") {
+    const record = caught as Record<string, unknown>;
+    for (const key of ["message", "error", "reason", "details"]) {
+      if (typeof record[key] === "string" && record[key]) return record[key];
+    }
+  }
+  return "Não foi possível iniciar a conversa.";
 }
 
 function canonicalAgentText(value: string): string {
@@ -757,19 +779,45 @@ function HeloAgentSession({
       await refreshInputDevices(true);
       const requestedPatientId = patientIdRef.current;
       if (requestedPatientId == null) throw new Error("Selecione um paciente antes de iniciar a conversa.");
-      const response = await fetch("/api/helo/conversation-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId: requestedPatientId }),
-      });
-      const data = (await response.json().catch(() => null)) as {
-        conversationToken?: string;
-        dynamicVariables?: Record<string, string | number | boolean>;
-        overrides?: HeloApiOverrides;
-        error?: string;
-      } | null;
-      if (!response.ok || !data?.conversationToken) throw new Error(data?.error ?? "Não foi possível preparar a conversa.");
-      if (patientIdRef.current !== requestedPatientId) return false;
+      const requestToken = async (disableVoiceOverride = false) => {
+        const response = await fetch("/api/helo/conversation-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ patientId: requestedPatientId, disableVoiceOverride }),
+        });
+        const data = (await response.json().catch(() => null)) as HeloConversationTokenResponse | null;
+        if (!response.ok || !data?.conversationToken) {
+          throw new Error(data?.error ?? "Não foi possível preparar a conversa.");
+        }
+        return data;
+      };
+      const startConversation = async (data: HeloConversationTokenResponse) => {
+        await startSession({
+          conversationToken: data.conversationToken!,
+          connectionType: "webrtc",
+          inputDeviceId: selectedInputDeviceIdRef.current || undefined,
+          dynamicVariables: data.dynamicVariables,
+          overrides: toSessionOverrides(data.overrides),
+        });
+      };
+      let data = await requestToken(false);
+      try {
+        await startConversation(data);
+      } catch (caught) {
+        if (!data.voiceOverrideApplied) throw caught;
+        console.warn("[HELO AUDIO] agent start failed with voice override; retrying without override", caught);
+        try {
+          endSession();
+        } catch {
+          // A primeira tentativa pode falhar antes de abrir uma sessão WebRTC completa.
+        }
+        data = await requestToken(true);
+        await startConversation(data);
+      }
+      if (patientIdRef.current !== requestedPatientId) {
+        endSession();
+        return false;
+      }
       const logged = await startLoggedSession("helo", requestedPatientId);
       loggedSessionIdRef.current = logged.id;
       sessionPatientIdRef.current = requestedPatientId;
@@ -781,28 +829,16 @@ function HeloAgentSession({
       // DECLARAÇÃO da tool no painel da ElevenLabs (o agente não a conhece).
       console.log("[HELO TOOL] registered client tools", Object.keys(clientTools));
       await refreshInputDevices(false);
-      startSession({
-        conversationToken: data.conversationToken,
-        connectionType: "webrtc",
-        inputDeviceId: selectedInputDeviceIdRef.current || undefined,
-        dynamicVariables: data.dynamicVariables,
-        overrides: toSessionOverrides(data.overrides),
-      });
       return true;
     } catch (caught) {
       startedRef.current = false;
-      const name = caught instanceof DOMException ? caught.name : "";
-      onError(
-        name === "NotAllowedError"
-          ? "Permissão do microfone negada. Autorize o microfone e tente novamente."
-          : caught instanceof Error ? caught.message : "Não foi possível iniciar a conversa."
-      );
+      onError(describeConversationError(caught));
       return false;
     } finally {
       startingRef.current = false;
       setStarting(false);
     }
-  }, [clientTools, onError, refreshInputDevices, startSession, stop]);
+  }, [clientTools, endSession, onError, refreshInputDevices, startSession, stop]);
 
   const restartForVoiceChange = useCallback(async (targetPatientId: number) => {
     if (

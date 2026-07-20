@@ -230,15 +230,7 @@ export async function createFeedback(input: {
 }
 
 export async function listFeedbackForUser(user: AppUser): Promise<FeedbackRequest[]> {
-  const [snapshot, votes] = await Promise.all([
-    requests().get(),
-    firestore.collectionGroup("votes").where("userId", "==", user.id).get(),
-  ]);
-  const voted = new Set(
-    votes.docs
-      .map((vote) => vote.ref.parent.parent?.id)
-      .filter((id): id is string => Boolean(id))
-  );
+  const snapshot = await requests().get();
   const visibleRequests = snapshot.docs
     .map((doc) => toStored(doc.id, doc.data()))
     .filter(
@@ -248,6 +240,14 @@ export async function listFeedbackForUser(user: AppUser): Promise<FeedbackReques
         (request.type === "feature" && request.visibility === "public" && !request.archived)
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const voteDocs = await Promise.all(
+    visibleRequests.map((request) => requests().doc(request.id).collection("votes").doc(user.id).get())
+  );
+  const voted = new Set(
+    voteDocs
+      .map((vote, index) => (vote.exists ? visibleRequests[index]?.id : null))
+      .filter((id): id is string => Boolean(id))
+  );
   return Promise.all(visibleRequests.map((request) => toUserRequest(request, user, voted)));
 }
 

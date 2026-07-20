@@ -75,7 +75,10 @@ function buildVoiceOverrides(voiceId: string | null): HeloConversationOverrides 
 // O SDK React usa WebRTC para conversas por voz. A credencial retornada aqui
 // expira e não dá acesso à API da ElevenLabs nem aos demais recursos da conta.
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as { patientId?: unknown };
+  const body = (await request.json().catch(() => ({}))) as {
+    patientId?: unknown;
+    disableVoiceOverride?: unknown;
+  };
   const patientId = Number(body.patientId);
   if (!Number.isInteger(patientId) || patientId <= 0) {
     return Response.json({ error: "patientId obrigatório" }, { status: 400 });
@@ -102,7 +105,7 @@ export async function POST(request: Request) {
       operatorRole: patientAuth.user.role,
     });
     const heloVoicePreference = patientVoicePreference(settings);
-    const voiceId = resolveVoiceOverride(heloVoicePreference);
+    const voiceId = body.disableVoiceOverride === true ? null : resolveVoiceOverride(heloVoicePreference);
     const voiceOverrideApplied = Boolean(voiceId);
     console.info("[HELO AGENT] voice override", {
       voiceOverrideApplied,
