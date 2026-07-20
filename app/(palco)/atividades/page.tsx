@@ -179,15 +179,33 @@ export default function AtividadesPage() {
         // MESMO handler do clique manual (start), abrindo a sessão de verdade.
         actionId: `atividades.iniciar.${t.id}`,
         label: t.title,
+        aliases: [
+          `abrir ${t.title}`,
+          `entrar em ${t.title}`,
+          `entrar na atividade ${t.title}`,
+          `iniciar ${t.title}`,
+          `iniciar atividade ${t.title}`,
+          `começar ${t.title}`,
+          `clique em ${t.title}`,
+          `atividade ${t.title}`,
+          `sessão ${t.title}`,
+        ],
         type: "activity",
         enabled: Boolean(caps?.run) && starting == null,
         requiredPermission: "runActivities",
         run: () => void start(t),
+        toolSuccess: {
+          result: "opened",
+          screen: "activity_session",
+          activityTitle: t.title,
+          suppressAssistantNarration: true,
+        },
       });
       if (caps?.edit) {
         list.push({
           actionId: `atividades.editar.${t.id}`,
           label: `Editar ${t.title}`,
+          aliases: [`editar ${t.title}`, `gerenciar ${t.title}`, `editar atividade ${t.title}`],
           type: "edit",
           enabled: true,
           requiredPermission: "editActivities",

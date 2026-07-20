@@ -21,6 +21,7 @@ import {
   isPlatformMuted,
 } from "@/lib/audio-coordinator";
 import { OverlayVeil } from "@/components/overlay-panel";
+import { useHeloAgent } from "@/components/helo-agent-provider";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import { useHeloScreenContext } from "@/lib/helo-screen-context";
 
@@ -41,6 +42,7 @@ type VoiceFeedback = { status: "falando" | "erro" | "silenciada"; detail?: strin
 
 export default function RotinaPage() {
   const { speak, stop } = useHelo();
+  const { sessionStatus, speakActivityQuestion } = useHeloAgent();
   const { patientId } = usePatient();
   const gestures = useGestures();
 
@@ -51,6 +53,7 @@ export default function RotinaPage() {
 
   const sessionRef = useRef<number | null>(null);
   const sessionPending = useRef<Promise<number | null> | null>(null);
+  const lastSpokenQuestionKey = useRef("");
 
   const openQuestion: RoutineQuestion | null = openKey
     ? ROUTINE_QUESTIONS_BY_KEY[openKey] ?? null
@@ -77,15 +80,16 @@ export default function RotinaPage() {
     };
   }, []);
 
-  // Abrir a pergunta de um card. NÃO fala nada: a pergunta é exibida em
-  // silêncio — só a resposta do paciente é vocalizada. Interrompe qualquer voz
-  // da plataforma em curso e zera a seleção anterior.
+  // Abrir a pergunta de um card. A tela exibe a pergunta e o Agent Helo fala a
+  // pergunta para o paciente; só a resposta SIM/TALVEZ/NÃO usa a voz do paciente.
+  // Interrompe qualquer voz da plataforma em curso e zera a seleção anterior.
   const openQuestionByKey = useCallback(
     (key: string) => {
       const question = ROUTINE_QUESTIONS_BY_KEY[key];
       if (!question) return;
       console.log("[HELO ROUTINE] question opened", question.key);
       stop();
+      lastSpokenQuestionKey.current = "";
       setOpenKey(key);
       setSelected(null);
       setFeedback(null);
@@ -101,6 +105,21 @@ export default function RotinaPage() {
     },
     [ensureSession, patientId, stop]
   );
+
+  useEffect(() => {
+    if (!openQuestion || selected) return;
+    const agentConnected = sessionStatus === "connected";
+    const questionKey = `${agentConnected ? "agent" : sessionStatus}:rotina:${openQuestion.key}:${openQuestion.question}`;
+    if (lastSpokenQuestionKey.current === questionKey) return;
+    lastSpokenQuestionKey.current = questionKey;
+    const handledByAgent =
+      agentConnected &&
+      speakActivityQuestion(openQuestion.question, {
+        activityId: "rotina",
+        itemId: openQuestion.key,
+      });
+    if (!handledByAgent && sessionStatus === "disconnected") void speak(openQuestion.question);
+  }, [openQuestion, selected, sessionStatus, speak, speakActivityQuestion]);
 
   // Selecionar uma resposta (SIM/TALVEZ/NÃO). A pergunta vira a frase-resposta,
   // que é fala DO PACIENTE: sai na voz dele (clone/voz de Ajustes; fallback
@@ -198,6 +217,7 @@ export default function RotinaPage() {
   // Responder de novo a MESMA pergunta: volta a exibir a pergunta, sem seleção.
   const answerAgain = useCallback(() => {
     stop();
+    lastSpokenQuestionKey.current = "";
     setSelected(null);
     setFeedback(null);
   }, [stop]);
@@ -208,6 +228,7 @@ export default function RotinaPage() {
   const backToMenu = useCallback(() => {
     console.log("[HELO ROUTINE] back to menu");
     stop();
+    lastSpokenQuestionKey.current = "";
     setOpenKey(null);
     setSelected(null);
     setFeedback(null);
@@ -233,7 +254,18 @@ export default function RotinaPage() {
       const q = openQuestion;
       const answerActions = ROUTINE_ANSWER_ORDER.map((ans) => ({
         actionId: `routine.answer.${q.key}.${ans}`,
-        label: ans === "yes" ? "SIM" : ans === "maybe" ? "TALVEZ" : "NÃO",
+        label:
+          ans === "yes"
+            ? "Clicar emoji 👍 SIM"
+            : ans === "maybe"
+              ? "Clicar emoji ✋ TALVEZ"
+              : "Clicar emoji ✊ NÃO",
+        aliases:
+          ans === "yes"
+            ? ["sim", "positivo", "confirmar", "clique no sim", "clicar no polegar", "emoji polegar", "joinha", "👍"]
+            : ans === "maybe"
+              ? ["talvez", "não é bem isso", "reformular", "clique no talvez", "clicar na mão", "emoji mão aberta", "✋"]
+              : ["não", "negativo", "recusar", "clique no não", "clicar no punho", "emoji punho", "✊"],
         type: "routineAnswer" as const,
         enabled: true,
         run: () => answer(q.key, ans),
@@ -252,11 +284,19 @@ export default function RotinaPage() {
         ...answerActions,
         {
           actionId: "routine.backToMenu",
-          label: "Voltar para menu de rotinas",
+          label: "Voltar para as Rotinas",
+          aliases: [
+            "voltar",
+            "voltar para rotinas",
+            "voltar para as rotinas",
+            "menu de rotinas",
+            "voltar ao menu",
+            "voltar para menu de rotinas",
+          ],
           type: "navigation",
           enabled: true,
           run: () => backToMenu(),
-          toolSuccess: { result: "handled", screen: "routine_menu" },
+          toolSuccess: { result: "handled", screen: "routine_menu", suppressAssistantNarration: true },
         },
       ];
     }

@@ -31,6 +31,8 @@ export interface HeloUIAction {
   /** Id estável, da aplicação — nunca derivado do texto visual. */
   actionId: string;
   label: string;
+  /** Frases curtas que o Agent pode usar para localizar a ação por linguagem natural. */
+  aliases?: readonly string[];
   type: HeloUIActionType;
   enabled: boolean;
   /** Permissão do vínculo exigida; ausente = basta o vínculo ativo. */
@@ -58,10 +60,11 @@ const groups = new Map<symbol, readonly HeloUIAction[]>();
 export function listHeloUIActions(): HeloUIActionSummary[] {
   const all: HeloUIActionSummary[] = [];
   for (const actions of groups.values()) {
-    for (const { actionId, label, type, enabled, requiredPermission } of actions) {
+    for (const { actionId, label, aliases, type, enabled, requiredPermission } of actions) {
       all.push({
         actionId,
         label,
+        ...(aliases ? { aliases } : {}),
         type,
         enabled,
         ...(requiredPermission ? { requiredPermission } : {}),
@@ -96,6 +99,25 @@ const LABEL_STOPWORDS = new Set([
   "o", "a", "os", "as", "de", "da", "do", "das", "dos", "no", "na", "nos",
   "nas", "em", "para", "pra", "com", "e", "ou", "um", "uma", "seu", "sua",
   "meu", "minha", "voce", "vc", "quer", "esta", "estou", "ir", "ao", "que",
+]);
+
+const AMBIGUOUS_GESTURE_TOKENS = new Set([
+  "sim",
+  "yes",
+  "positivo",
+  "confirmar",
+  "confirma",
+  "joinha",
+  "polegar",
+  "talvez",
+  "maybe",
+  "reformular",
+  "nao",
+  "no",
+  "negativo",
+  "recusar",
+  "recusa",
+  "punho",
 ]);
 
 function contentTokens(canon: string): string[] {
@@ -137,16 +159,32 @@ export function findHeloUIAction(actionId: string): HeloUIAction | undefined {
       ) {
         labelMatch = action;
       }
+      for (const alias of action.aliases ?? []) {
+        const canonAlias = canonical(alias);
+        if (
+          !labelMatch &&
+          canonAlias.length > 1 &&
+          (target === canonAlias || target.endsWith(`-${canonAlias}`))
+        ) {
+          labelMatch = action;
+        }
+      }
       // Sobreposição de tokens: todos os tokens de conteúdo do pedido devem
       // estar no rótulo. Sem tokens de conteúdo (pedido só com palavras
       // vazias), não tenta — evita casar qualquer coisa.
       if (targetTokens.length > 0) {
-        const labelTokens = contentTokens(canonLabel);
-        if (labelTokens.length > 0 && targetTokens.every((t) => labelTokens.includes(t))) {
-          const extra = labelTokens.length - targetTokens.length;
-          if (extra < tokenMatchExtra) {
-            tokenMatchExtra = extra;
-            tokenMatch = action;
+        const gestureOnly =
+          targetTokens.length === 1 && AMBIGUOUS_GESTURE_TOKENS.has(targetTokens[0]);
+        if (gestureOnly) continue;
+        const tokenSources = [canonLabel, ...(action.aliases ?? []).map(canonical)];
+        for (const source of tokenSources) {
+          const sourceTokens = contentTokens(source);
+          if (sourceTokens.length > 0 && targetTokens.every((t) => sourceTokens.includes(t))) {
+            const extra = sourceTokens.length - targetTokens.length;
+            if (extra < tokenMatchExtra) {
+              tokenMatchExtra = extra;
+              tokenMatch = action;
+            }
           }
         }
       }

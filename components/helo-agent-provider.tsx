@@ -79,6 +79,10 @@ type HeloAgentContextValue = {
   activeSessionPatientId: number | null;
   sessionStatus: string;
   restarting: boolean;
+  speakActivityQuestion: (
+    question: string,
+    options?: { activityId?: string; itemId?: string; runId?: string }
+  ) => boolean;
   restartForVoiceChange: (patientId: number) => Promise<{ ok: boolean; error?: string }>;
 };
 
@@ -99,6 +103,84 @@ function toSessionOverrides(overrides?: HeloApiOverrides): HeloSessionOverrides 
   // e o serializa como `conversation_config_override.tts.voice_id`.
   const voiceId = overrides?.tts?.voice_id?.trim();
   return voiceId ? { tts: { voiceId } } : undefined;
+}
+
+function canonicalAgentText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9👍✋✊]+/g, " ")
+    .trim();
+}
+
+function resolveGestureIntent(value: unknown): Gesture | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = canonicalAgentText(value);
+  if (!text) return undefined;
+  if (text.includes("👍") || /\b(sim|yes|positivo|confirmar|confirma|joinha|polegar)\b/.test(text)) return "sim";
+  if (text.includes("✋") || /\b(talvez|maybe|reformular|mao aberta|meio termo)\b/.test(text)) return "talvez";
+  if (text.includes("✊") || /\b(nao|no|negativo|recusar|recusa|punho)\b/.test(text)) return "nao";
+  return undefined;
+}
+
+function stringFromFields(source: Record<string, unknown> | undefined, fields: readonly string[]): string | undefined {
+  if (!source) return undefined;
+  for (const field of fields) {
+    const value = source[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function collectRequestStrings(source: Record<string, unknown> | undefined): string[] {
+  if (!source) return [];
+  const values: string[] = [];
+  for (const value of Object.values(source)) {
+    if (typeof value === "string" && value.trim()) values.push(value.trim());
+  }
+  return values;
+}
+
+function resolveRequestedUIAction(
+  actionId: string,
+  parameters: Record<string, unknown>,
+  payload?: Record<string, unknown>
+): HeloUIAction | undefined {
+  const direct = findHeloUIAction(actionId);
+  if (direct) return direct;
+
+  const allStrings = [
+    actionId,
+    ...collectRequestStrings(parameters),
+    ...collectRequestStrings(payload),
+  ].filter(Boolean);
+  const gesture =
+    resolveGestureIntent(stringFromFields(payload, ["gesto", "gesture", "resposta", "answer", "response", "choice", "value"])) ??
+    resolveGestureIntent(stringFromFields(parameters, ["gesto", "gesture", "resposta", "answer", "response", "choice", "value"])) ??
+    allStrings.map(resolveGestureIntent).find(Boolean);
+  const option =
+    stringFromFields(payload, ["opcao", "option", "alternativa", "alternative", "item", "itemLabel", "targetLabel", "label"]) ??
+    stringFromFields(parameters, ["opcao", "option", "alternativa", "alternative", "item", "itemLabel", "targetLabel"]);
+
+  const candidates = new Set<string>();
+  if (gesture) {
+    candidates.add(`${actionId}.${gesture}`);
+    if (option) {
+      candidates.add(`${gesture} de ${option}`);
+      candidates.add(`${gesture} em ${option}`);
+      candidates.add(`clique em ${gesture} em ${option}`);
+      candidates.add(`clique em ${gesture} de ${option}`);
+      candidates.add(`${actionId} ${gesture} ${option}`);
+    }
+  }
+  for (const text of allStrings) candidates.add(text);
+
+  for (const candidate of candidates) {
+    const action = findHeloUIAction(candidate);
+    if (action) return action;
+  }
+  return undefined;
 }
 
 function HeloAgentSession({
@@ -232,6 +314,19 @@ function HeloAgentSession({
     if (resolved === "rotina") console.log("[HELO NAV] opening routine");
     const access = await authorizeTool(action, { area: resolved });
     if (!access.ok) return toolResult(access);
+    if (resolved === "atividades") {
+      const activityMenuAction = findHeloUIAction("activity.goToActivityMenu");
+      if (activityMenuAction?.enabled) {
+        await activityMenuAction.run({ __source: "agent" });
+        return toolResult({
+          ok: true,
+          action,
+          targetArea: resolved,
+          delegatedActionId: activityMenuAction.actionId,
+          suppressAssistantNarration: true,
+        });
+      }
+    }
     router.push(HELO_AREA_ROUTES[resolved]);
     return toolResult({ ok: true, action, targetArea: resolved });
   }, [authorizeTool, router, toolResult]);
@@ -271,7 +366,14 @@ function HeloAgentSession({
     const interactWithUI = async (parameters: Record<string, unknown>) => {
       // O parâmetro do actionId pode chegar com nomes diferentes conforme a
       // declaração da tool no painel — aceitamos os mais prováveis.
-      const rawId = parameters.actionId ?? parameters.action ?? parameters.id;
+      const rawId =
+        parameters.actionId ??
+        parameters.action ??
+        parameters.id ??
+        parameters.name ??
+        parameters.label ??
+        parameters.target ??
+        parameters.command;
       console.log("[HELO TOOL] interactWithHeloUI called", rawId, parameters);
       const actionId = typeof rawId === "string" ? rawId : "";
       console.log("[HELO TOOL] actionId received", actionId || "(vazio)");
@@ -287,7 +389,7 @@ function HeloAgentSession({
         parameters.payload && typeof parameters.payload === "object" && !Array.isArray(parameters.payload)
           ? (parameters.payload as Record<string, unknown>)
           : undefined;
-      const action = findHeloUIAction(actionId);
+      const action = resolveRequestedUIAction(actionId, parameters, payload);
       if (!action) {
         return toolResult({ ok: false, reason: "Ação não encontrada na tela atual." });
       }
@@ -306,7 +408,7 @@ function HeloAgentSession({
       );
       if (!access.ok) return toolResult({ ok: false, reason: access.error });
       try {
-        await action.run(payload);
+        await action.run({ ...(payload ?? {}), __source: "agent" });
         // Retorno silencioso quando a ação o declara (Emergência): técnico e
         // curto, para o Agente NÃO narrar em voz alta que registrou.
         if (action.toolSuccess) {
@@ -380,6 +482,7 @@ function HeloAgentSession({
     isListening,
     isMuted,
     sendUserMessage,
+    sendContextualUpdate,
     sendUserActivity,
     setVolume,
     setMuted,
@@ -586,6 +689,30 @@ function HeloAgentSession({
       // A sessão pode ter encerrado entre o estado React e o envio.
     }
   }, [sendUserActivity]);
+
+  const speakActivityQuestion = useCallback(
+    (question: string, options?: { activityId?: string; itemId?: string; runId?: string }) => {
+      const text = question.trim();
+      if (!text || !connectedRef.current) return false;
+      const contextId = ["activity-question", options?.runId, options?.activityId, options?.itemId]
+        .filter(Boolean)
+        .join(":");
+      try {
+        sendContextualUpdate(
+          `Pergunta atual dirigida ao paciente: "${text}". A próxima fala deve ser a Helo lendo essa pergunta para o paciente, sem explicar nem responder por ele.`,
+          contextId ? { contextId } : undefined
+        );
+        sendUserMessage(
+          `Leia agora para o paciente, com a voz da Helo, exatamente esta pergunta e nada mais: "${text}"`
+        );
+        return true;
+      } catch (caught) {
+        console.warn("[HELO AUDIO] activity question prompt failed", caught);
+        return false;
+      }
+    },
+    [sendContextualUpdate, sendUserMessage]
+  );
 
   const handleInputDeviceChange = useCallback(async (deviceId: string) => {
     selectedInputDeviceIdRef.current = deviceId;
@@ -895,8 +1022,9 @@ function HeloAgentSession({
     activeSessionPatientId,
     sessionStatus: status,
     restarting,
+    speakActivityQuestion,
     restartForVoiceChange,
-  }), [activeSessionPatientId, restartForVoiceChange, restarting, status]);
+  }), [activeSessionPatientId, restartForVoiceChange, restarting, speakActivityQuestion, status]);
 
   return (
     <HeloAgentContext.Provider value={agentContext}>

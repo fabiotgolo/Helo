@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ContextualEdit } from "@/components/contextual-edit";
 import { useHeloDialog } from "@/components/helo-dialog";
+import { useHeloAgent } from "@/components/helo-agent-provider";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import { useHeloScreenContext } from "@/lib/helo-screen-context";
 import type { Gesture } from "@/lib/types";
@@ -41,6 +42,24 @@ const GESTURE_ON: Record<Gesture, string> = {
   sim: "border-sim bg-sim-soft text-sim",
   talvez: "border-talvez bg-talvez-soft text-talvez",
   nao: "border-nao bg-nao-soft text-nao",
+};
+
+const GESTURE_COMMAND_LABELS: Record<Gesture, { label: string; emoji: string; aliases: string[] }> = {
+  sim: {
+    label: "SIM",
+    emoji: "👍",
+    aliases: ["sim", "positivo", "confirmar", "joinha", "polegar"],
+  },
+  talvez: {
+    label: "TALVEZ",
+    emoji: "✋",
+    aliases: ["talvez", "não é bem isso", "reformular", "mão aberta", "mao aberta"],
+  },
+  nao: {
+    label: "NÃO",
+    emoji: "✊",
+    aliases: ["não", "nao", "negativo", "recusar", "punho"],
+  },
 };
 
 /** Fonte da imagem: biblioteca interna (rota autorizada) ou URL externa. */
@@ -335,6 +354,7 @@ export function SessionPlayer({
   canEdit?: boolean;
 }) {
   const { speak, stop } = useHelo();
+  const { sessionStatus, speakActivityQuestion } = useHeloAgent();
   const router = useRouter();
   const dialog = useHeloDialog();
   const items = useMemo(
@@ -363,6 +383,7 @@ export function SessionPlayer({
   // atual; a fila garante que o último estado é o que fica gravado.
   const saveChain = useRef<Promise<void>>(Promise.resolve());
   const pending = useRef(0);
+  const lastSpokenQuestionKey = useRef("");
 
   const item = items[idx];
   const isQuestion = item ? isQuestionItem(item) : false;
@@ -372,15 +393,30 @@ export function SessionPlayer({
     (id) => Object.keys(answers[id] ?? {}).length > 0
   ).length;
 
-  // A pergunta é fala da PLATAFORMA (speakerRole padrão do orquestrador) —
-  // nunca atribuída ao paciente.
+  // A pergunta é dirigida ao paciente. Quando o Agent Helo está conectado, ele
+  // lê a pergunta com a voz oficial; sem sessão ativa, cai para a voz da
+  // plataforma como fallback.
   useEffect(() => {
     if (!item) return;
     shownAt.current = Date.now();
-    setSaveError(null);
-    if (isQuestionItem(item)) void speak(item.question);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, run.id]);
+    const resetSaveError = window.setTimeout(() => setSaveError(null), 0);
+    if (isQuestionItem(item)) {
+      const agentConnected = sessionStatus === "connected";
+      const questionKey = `${agentConnected ? "agent" : sessionStatus}:${run.id}:${item.id}:${item.question}`;
+      if (lastSpokenQuestionKey.current !== questionKey) {
+        lastSpokenQuestionKey.current = questionKey;
+        const handledByAgent =
+          agentConnected &&
+          speakActivityQuestion(item.question, {
+            activityId: run.templateId,
+            itemId: item.id,
+            runId: run.id,
+          });
+        if (!handledByAgent && sessionStatus === "disconnected") void speak(item.question);
+      }
+    }
+    return () => window.clearTimeout(resetSaveError);
+  }, [idx, item, run.id, run.templateId, sessionStatus, speak, speakActivityQuestion]);
 
   const endRun = useCallback(
     (status: "concluida" | "abandonada", keepalive = false) => {
@@ -611,6 +647,7 @@ export function SessionPlayer({
     const lastItem = idx === items.length - 1;
     const question = isQuestionItem(item);
     const gesturesOn = question || item.gesturesEnabled;
+    const fromAgent = (payload?: Record<string, unknown>) => payload?.__source === "agent";
     const pickRun = (optionId: string) => (payload?: Record<string, unknown>) => {
       const g = payload?.gesto;
       if (g !== "sim" && g !== "talvez" && g !== "nao") {
@@ -627,15 +664,28 @@ export function SessionPlayer({
         // decide concluir é o usuário no modal, não o Agente.
         actionId: "activity.goToActivityMenu",
         label: "Menu de atividades",
+        aliases: [
+          "menu de atividades",
+          "ir para menu de atividades",
+          "voltar para atividades",
+          "voltar para menu de atividades",
+          "abrir atividades",
+          "atividades",
+        ],
         type: "navigation",
         enabled: true,
-        run: async () => {
+        run: async (payload) => {
           console.log("[HELO TOOL] activity.goToActivityMenu handled");
-          await confirmCompleteThen(goToActivityMenu);
+          if (fromAgent(payload)) {
+            void confirmCompleteThen(goToActivityMenu);
+          } else {
+            await confirmCompleteThen(goToActivityMenu);
+          }
         },
         toolSuccess: {
           result: "opened",
           screen: "activity_menu",
+          mayRequireDialogChoice: respondidos > 0,
           suppressAssistantNarration: true,
         },
       },
@@ -643,16 +693,22 @@ export function SessionPlayer({
         // Volta ao gerenciamento das atividades — o Agente também executa.
         actionId: "activity.goToManageActivities",
         label: "Gerenciar atividades",
+        aliases: ["gerenciar atividades", "editar atividades", "gestão de atividades"],
         type: "navigation",
         enabled: true,
-        run: async () => {
+        run: async (payload) => {
           console.log("[HELO TOOL] activity.goToManageActivities handled");
-          await confirmCompleteThen(goToManage);
+          if (fromAgent(payload)) {
+            void confirmCompleteThen(goToManage);
+          } else {
+            await confirmCompleteThen(goToManage);
+          }
         },
         // Retorno técnico: é só navegação, sem fala do Agente nem confirmação.
         toolSuccess: {
           result: "handled",
           navigatedTo: "manage_activities",
+          mayRequireDialogChoice: respondidos > 0,
           suppressAssistantNarration: true,
         },
       },
@@ -684,7 +740,18 @@ export function SessionPlayer({
         label: "Encerrar sessão",
         type: "activity",
         enabled: true,
-        run: () => confirmCompleteThen(goToActivityMenu),
+        run: (payload) => {
+          if (fromAgent(payload)) {
+            void confirmCompleteThen(goToActivityMenu);
+          } else {
+            return confirmCompleteThen(goToActivityMenu);
+          }
+        },
+        toolSuccess: {
+          result: "handled",
+          mayRequireDialogChoice: respondidos > 0,
+          suppressAssistantNarration: true,
+        },
       },
     ];
     if (gesturesOn && item.options.length > 0) {
@@ -693,24 +760,58 @@ export function SessionPlayer({
         // clique (resposta do paciente com prioridade). Retorno técnico e
         // não-narrável — o Agente não lê nada em voz alta nem confirma.
         const speaks = optionSpeaks(o);
-        list.push({
-          actionId: `atividades.resposta.${n + 1}`,
-          label: `Registrar gesto do paciente para: ${o.label}`,
-          type: "gesture",
-          enabled: true,
-          run: pickRun(o.id),
-          ...(speaks
-            ? {
-                toolSuccess: {
-                  result: "handled",
+        const silentToolSuccess = {
+          toolSuccess: {
+            result: "handled",
+            ...(speaks
+              ? {
                   audibleResponse: "patient_voice_only",
                   speechOwner: "patient",
                   suppressAgentSpeech: true,
-                  suppressAssistantNarration: true,
-                },
-              }
-            : {}),
-        });
+                }
+              : {}),
+            suppressAssistantNarration: true,
+          },
+        };
+        for (const gesture of GESTURE_ORDER) {
+          const command = GESTURE_COMMAND_LABELS[gesture];
+          const optionLabel = o.label.trim();
+          list.push({
+            actionId: `atividades.resposta.${n + 1}.${gesture}`,
+            label: `${optionLabel}: clicar emoji ${command.emoji} ${command.label}`,
+            aliases: [
+              `${optionLabel} ${command.label}`,
+              `${optionLabel}: ${command.label}`,
+              `${optionLabel}: clicar ${command.label}`,
+              `${optionLabel}: clicar emoji ${command.emoji} ${command.label}`,
+              `${command.label} de ${optionLabel}`,
+              `${command.label} em ${optionLabel}`,
+              `${command.label} na opção ${optionLabel}`,
+              `${command.label} na alternativa ${optionLabel}`,
+              `clique em ${command.label} de ${optionLabel}`,
+              `clique em ${command.label} em ${optionLabel}`,
+              `clicar em ${command.label} de ${optionLabel}`,
+              `clicar em ${command.label} em ${optionLabel}`,
+              `clique no ${command.label} de ${optionLabel}`,
+              `clique no ${command.label} em ${optionLabel}`,
+              `clicar no ${command.label} de ${optionLabel}`,
+              `clicar no ${command.label} em ${optionLabel}`,
+              `${command.emoji} de ${optionLabel}`,
+              `${command.emoji} em ${optionLabel}`,
+              `emoji ${command.emoji} de ${optionLabel}`,
+              `emoji ${command.emoji} em ${optionLabel}`,
+              ...command.aliases.flatMap((alias) => [
+                `${alias} de ${optionLabel}`,
+                `${alias} em ${optionLabel}`,
+                `${alias} na opção ${optionLabel}`,
+              ]),
+            ],
+            type: "gesture",
+            enabled: true,
+            run: () => pick(o.id, gesture),
+            ...silentToolSuccess,
+          });
+        }
       });
     } else if (gesturesOn && question) {
       list.push({
@@ -722,7 +823,7 @@ export function SessionPlayer({
       });
     }
     return list;
-  }, [confirmCompleteThen, finish, goToActivityMenu, goToManage, idx, item, items.length, pick]);
+  }, [confirmCompleteThen, finish, goToActivityMenu, goToManage, idx, item, items.length, pick, respondidos]);
   useRegisterHeloUIActions(registryActions);
 
   // Exercício com respostas faladas: publica o sub-estado para o Agent, com a
@@ -733,7 +834,24 @@ export function SessionPlayer({
       item && itemHasSpokenResponses(item)
         ? {
             screen: "activity_multiple_choice_gesture",
-            extra: { currentQuestion: item.question },
+            extra: {
+              currentQuestion: item.question,
+              currentOptions: item.options.map((option, optionIndex) => ({
+                option: option.label,
+                commands: GESTURE_ORDER.map((gesture) => {
+                  const command = GESTURE_COMMAND_LABELS[gesture];
+                  return {
+                    gesture,
+                    label: command.label,
+                    actionId: `atividades.resposta.${optionIndex + 1}.${gesture}`,
+                    spokenExamples: [
+                      `clique em ${command.label} em ${option.label}`,
+                      `${command.label} de ${option.label}`,
+                    ],
+                  };
+                }),
+              })),
+            },
           }
         : null,
     [item]

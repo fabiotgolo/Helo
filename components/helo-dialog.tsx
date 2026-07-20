@@ -25,6 +25,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 
 export type HeloDialogTone = "info" | "warning" | "danger" | "error" | "success";
 
@@ -187,6 +188,52 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
   const confirmLabel = request?.options.confirmLabel ?? (isConfirm ? "Continuar" : "Entendi");
   const cancelLabel = request?.options.cancelLabel ?? "Cancelar";
   const danger = isDangerTone(tone);
+  const dialogActions = useMemo<HeloUIAction[]>(() => {
+    if (!request) return [];
+    const title = request.options.title;
+    const actions: HeloUIAction[] = [];
+    if (isConfirm) {
+      actions.push({
+        actionId: "dialog.cancel",
+        label: `${cancelLabel} — ${title}`,
+        aliases: [
+          cancelLabel,
+          cancelLabel.toLowerCase(),
+          "não",
+          "nao",
+          "clicar não",
+          "clicar em não",
+          "clique em não",
+          "cancelar",
+          "manter aberto",
+        ],
+        type: "navigation",
+        enabled: true,
+        run: () => settle(false),
+        toolSuccess: { result: "handled", dialog: "closed", value: false, suppressAssistantNarration: true },
+      });
+    }
+    actions.push({
+      actionId: "dialog.confirm",
+      label: `${confirmLabel} — ${title}`,
+      aliases: [
+        confirmLabel,
+        confirmLabel.toLowerCase(),
+        "sim",
+        "clicar sim",
+        "clicar em sim",
+        "clique em sim",
+        "confirmar",
+        "continuar",
+      ],
+      type: "navigation",
+      enabled: true,
+      run: () => settle(true),
+      toolSuccess: { result: "handled", dialog: "closed", value: true, suppressAssistantNarration: true },
+    });
+    return actions;
+  }, [cancelLabel, confirmLabel, isConfirm, request, settle]);
+  useRegisterHeloUIActions(dialogActions);
 
   return (
     <HeloDialogContext.Provider value={api}>
