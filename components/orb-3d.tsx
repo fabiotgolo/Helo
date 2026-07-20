@@ -80,8 +80,10 @@ export default function Orb3D({
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
+      scene.remove(mesh);
       geometry.dispose();
       material.dispose();
+      renderer.renderLists.dispose();
       renderer.dispose();
     };
   }, [palette]);

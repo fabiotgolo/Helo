@@ -45,6 +45,7 @@ type HeloApiOverrides = { tts?: { voice_id?: string } };
 type HeloSessionOverrides = NonNullable<SessionConfig["overrides"]>;
 type ActivitySource = "gesture" | "typing" | "field-focus" | "heartbeat";
 type ElevenLabsErrorEvent = { error_event?: Record<string, unknown> };
+type MicInputDevice = { deviceId: string; label: string };
 type PatchableConversation = ElevenLabsConversation & {
   handleErrorEvent?: (event: ElevenLabsErrorEvent) => void;
   __heloIncompleteErrorEventPatch?: boolean;
@@ -69,6 +70,10 @@ const ACTIVITY_HEARTBEAT_MS = 15000;
 const ACTIVE_WINDOW_MS = 60000;
 const GESTURE_RESPONSE_LOCK_MS = 1200;
 const GESTURE_CHOICES_HIGHLIGHT_MS = 8000;
+const MIC_ACTIVITY_THRESHOLD = 0.02;
+const MIC_METER_UPDATE_MS = 160;
+const MIC_DEBUG_LOG_MS = 1500;
+const MIC_DEVICE_STORAGE_KEY = "heloAgentInputDeviceId";
 
 type HeloAgentContextValue = {
   activeSessionPatientId: number | null;
@@ -119,6 +124,10 @@ function HeloAgentSession({
   const [note, setNote] = useState("");
   const [noteFocused, setNoteFocused] = useState(false);
   const [mount, setMount] = useState<HTMLElement | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
+  const [inputDevices, setInputDevices] = useState<MicInputDevice[]>([]);
+  const [selectedInputDeviceId, setSelectedInputDeviceId] = useState("");
+  const [inputDeviceError, setInputDeviceError] = useState("");
   const startedRef = useRef(false);
   const startingRef = useRef(false);
   const connectedRef = useRef(false);
@@ -131,6 +140,63 @@ function HeloAgentSession({
   const gestureLockRef = useRef(false);
   const gestureUnlockRef = useRef<number | null>(null);
   const gestureHighlightRef = useRef<number | null>(null);
+  const lastMicMeterUpdateRef = useRef(0);
+  const lastMicDebugLogRef = useRef(0);
+  const selectedInputDeviceIdRef = useRef("");
+
+  const clearLocalSessionState = useCallback(() => {
+    activeUntilRef.current = 0;
+    lastActivitySentAtRef.current = 0;
+    gestureLockRef.current = false;
+    if (gestureUnlockRef.current != null) window.clearTimeout(gestureUnlockRef.current);
+    gestureUnlockRef.current = null;
+    setGesturePending(false);
+    endLoggedSession(loggedSessionIdRef.current);
+    loggedSessionIdRef.current = null;
+    sessionPatientIdRef.current = null;
+    setActiveSessionPatientId(null);
+    startedRef.current = false;
+    setMicLevel(0);
+    setAgentAmplitude(null);
+  }, [setAgentAmplitude]);
+
+  const refreshInputDevices = useCallback(async (requestPermission = false) => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      setInputDeviceError("Este navegador não permite listar microfones.");
+      return;
+    }
+    let permissionStream: MediaStream | null = null;
+    try {
+      if (requestPermission) {
+        permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const microphones = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microfone ${index + 1}`,
+        }));
+      setInputDevices(microphones);
+      setInputDeviceError("");
+      if (
+        selectedInputDeviceIdRef.current &&
+        !microphones.some((device) => device.deviceId === selectedInputDeviceIdRef.current)
+      ) {
+        selectedInputDeviceIdRef.current = "";
+        setSelectedInputDeviceId("");
+      }
+    } catch (caught) {
+      const name = caught instanceof DOMException ? caught.name : "";
+      setInputDeviceError(
+        name === "NotAllowedError"
+          ? "Permissão do microfone negada pelo navegador."
+          : "Não foi possível listar os microfones."
+      );
+    } finally {
+      permissionStream?.getTracks().forEach((track) => track.stop());
+    }
+  }, []);
 
   const toolResult = useCallback((value: Record<string, unknown>) => JSON.stringify(value), []);
   const authorizeTool = useCallback(async (
@@ -312,13 +378,46 @@ function HeloAgentSession({
     status,
     isSpeaking,
     isListening,
+    isMuted,
     sendUserMessage,
     sendUserActivity,
     setVolume,
+    setMuted,
+    changeInputDevice,
+    getInputVolume,
     getOutputByteFrequencyData,
   } = useConversation({
     onConversationCreated: patchIncompleteElevenLabsErrorEvent,
     clientTools,
+    onConnect: ({ conversationId }) => {
+      console.log("[HELO AUDIO] agent connected", { conversationId });
+      onError(null);
+    },
+    onDisconnect: (details) => {
+      console.log("[HELO AUDIO] agent disconnected", details);
+      clearLocalSessionState();
+      if (details.reason !== "user") {
+        onError("A conexão da Helo caiu. Se acontecer novamente, selecione o microfone físico e conecte de novo.");
+      }
+    },
+    onError: (message, context) => {
+      console.error("[HELO AUDIO] agent error", message, context);
+      clearLocalSessionState();
+      onError(message || "A conversa foi interrompida. Verifique sua conexão e tente novamente.");
+    },
+    onModeChange: ({ mode }) => {
+      console.log("[HELO AUDIO] agent mode", mode);
+    },
+    onVadScore: ({ vadScore }) => {
+      const now = Date.now();
+      if (vadScore > MIC_ACTIVITY_THRESHOLD && now - lastMicDebugLogRef.current > MIC_DEBUG_LOG_MS) {
+        lastMicDebugLogRef.current = now;
+        console.log("[HELO AUDIO] voice activity detected", { vadScore: Number(vadScore.toFixed(3)) });
+      }
+    },
+    onDebug: (event: unknown) => {
+      console.log("[HELO AUDIO] sdk debug", typeof event === "object" && event && "type" in event ? { type: event.type } : { type: typeof event });
+    },
     // Dispara quando o agente chama uma tool que NÃO existe no objeto
     // clientTools — normalmente por divergência de nome. Se este log
     // aparecer com "getCurrentHeloActions"/"interactWithHeloUI", o painel e
@@ -330,23 +429,35 @@ function HeloAgentSession({
   });
 
   const end = useCallback(() => {
-    activeUntilRef.current = 0;
-    gestureLockRef.current = false;
-    if (gestureUnlockRef.current != null) window.clearTimeout(gestureUnlockRef.current);
-    gestureUnlockRef.current = null;
-    setGesturePending(false);
-    endLoggedSession(loggedSessionIdRef.current);
-    loggedSessionIdRef.current = null;
-    sessionPatientIdRef.current = null;
-    setActiveSessionPatientId(null);
-    if (startedRef.current) endSession();
-    startedRef.current = false;
-    setAgentAmplitude(null);
-  }, [endSession, setAgentAmplitude]);
+    const wasStarted = startedRef.current;
+    clearLocalSessionState();
+    if (wasStarted) endSession();
+  }, [clearLocalSessionState, endSession]);
 
   useEffect(() => {
     patientIdRef.current = patientId;
   }, [patientId]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(MIC_DEVICE_STORAGE_KEY) || "";
+      selectedInputDeviceIdRef.current = stored;
+      setSelectedInputDeviceId(stored);
+    } catch {
+      // Sem localStorage: usa o microfone padrão do navegador.
+    }
+    void refreshInputDevices(false);
+  }, [refreshInputDevices]);
+
+  useEffect(() => {
+    selectedInputDeviceIdRef.current = selectedInputDeviceId;
+    try {
+      if (selectedInputDeviceId) localStorage.setItem(MIC_DEVICE_STORAGE_KEY, selectedInputDeviceId);
+      else localStorage.removeItem(MIC_DEVICE_STORAGE_KEY);
+    } catch {
+      // Preferência não persistida, mas a sessão atual continua válida.
+    }
+  }, [selectedInputDeviceId]);
 
   useEffect(() => {
     connectedRef.current = status === "connected";
@@ -356,6 +467,15 @@ function HeloAgentSession({
       lastActivitySentAtRef.current = 0;
     }
   }, [status]);
+
+  useEffect(() => {
+    if (status !== "connected" || !isMuted) return;
+    try {
+      setMuted(false);
+    } catch {
+      // A sessão pode ter encerrado entre o status e a chamada.
+    }
+  }, [isMuted, setMuted, status]);
 
   // Prioridade de voz: enquanto o Agente Helo está conectando/ativo, ele tem
   // prioridade TOTAL — o gerenciador global bloqueia (e interrompe) qualquer
@@ -438,11 +558,18 @@ function HeloAgentSession({
       let total = 0;
       for (const value of bytes) total += value * value;
       setAgentAmplitude(bytes.length ? Math.min(1, Math.sqrt(total / bytes.length) / 128) : 0);
+      if (statusRef.current === "connected") {
+        const now = Date.now();
+        if (now - lastMicMeterUpdateRef.current >= MIC_METER_UPDATE_MS) {
+          lastMicMeterUpdateRef.current = now;
+          setMicLevel(getInputVolume());
+        }
+      }
       frame = requestAnimationFrame(measure);
     };
     frame = requestAnimationFrame(measure);
     return () => cancelAnimationFrame(frame);
-  }, [getOutputByteFrequencyData, setAgentAmplitude]);
+  }, [getInputVolume, getOutputByteFrequencyData, setAgentAmplitude]);
 
   const sendActivity = useCallback((source: ActivitySource, immediate = false) => {
     if (!connectedRef.current) return;
@@ -459,6 +586,20 @@ function HeloAgentSession({
       // A sessão pode ter encerrado entre o estado React e o envio.
     }
   }, [sendUserActivity]);
+
+  const handleInputDeviceChange = useCallback(async (deviceId: string) => {
+    selectedInputDeviceIdRef.current = deviceId;
+    setSelectedInputDeviceId(deviceId);
+    setInputDeviceError("");
+    if (statusRef.current !== "connected") return;
+    setMicLevel(0);
+    try {
+      await changeInputDevice({ inputDeviceId: deviceId || undefined });
+    } catch (caught) {
+      console.warn("[HELO AUDIO] input device change failed", caught);
+      setInputDeviceError("Não foi possível trocar o microfone nesta sessão. Encerre e conecte novamente.");
+    }
+  }, [changeInputDevice]);
 
   useEffect(() => {
     if (status !== "connected") return;
@@ -486,8 +627,7 @@ function HeloAgentSession({
     stop();
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Seu navegador não oferece acesso ao microfone.");
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
+      await refreshInputDevices(true);
       const requestedPatientId = patientIdRef.current;
       if (requestedPatientId == null) throw new Error("Selecione um paciente antes de iniciar a conversa.");
       const response = await fetch("/api/helo/conversation-token", {
@@ -513,9 +653,11 @@ function HeloAgentSession({
       // aparecerem mas os logs "called" nunca dispararem, o problema é a
       // DECLARAÇÃO da tool no painel da ElevenLabs (o agente não a conhece).
       console.log("[HELO TOOL] registered client tools", Object.keys(clientTools));
+      await refreshInputDevices(false);
       startSession({
         conversationToken: data.conversationToken,
         connectionType: "webrtc",
+        inputDeviceId: selectedInputDeviceIdRef.current || undefined,
         dynamicVariables: data.dynamicVariables,
         overrides: toSessionOverrides(data.overrides),
       });
@@ -533,7 +675,7 @@ function HeloAgentSession({
       startingRef.current = false;
       setStarting(false);
     }
-  }, [clientTools, onError, startSession, stop]);
+  }, [clientTools, onError, refreshInputDevices, startSession, stop]);
 
   const restartForVoiceChange = useCallback(async (targetPatientId: number) => {
     if (
@@ -674,6 +816,14 @@ function HeloAgentSession({
           ? "Helo aguardando"
           : "Helo encerrada";
   const sessionVisible = restarting || starting || status !== "disconnected";
+  const micActive = status === "connected" && !isMuted && micLevel > MIC_ACTIVITY_THRESHOLD;
+  const micStatusLabel = isMuted
+    ? "Microfone mutado"
+    : micActive
+      ? "Microfone captando"
+      : status === "connected"
+        ? "Aguardando fala no microfone selecionado"
+        : "Aguardando sinal do microfone";
 
   const stage = (
     <main className="relative flex flex-1 items-center px-4 pb-8 sm:px-6">
@@ -692,6 +842,39 @@ function HeloAgentSession({
           {status === "connected" && (
             <section className="flex w-full flex-col items-center gap-4 pt-2" aria-label="Atividade do paciente">
               <GestureTriplet onGesture={markGesture} size="compacto" disabled={gesturePending} highlighted={gesturesHighlighted} />
+              <div className="flex w-full max-w-md flex-col gap-2 text-left">
+                <label className="text-sm font-medium text-ink-soft" htmlFor="helo-input-device">Microfone</label>
+                <div className="flex gap-2">
+                  <select
+                    id="helo-input-device"
+                    className="min-w-0 flex-1 rounded-2xl border border-line bg-card/80 px-4 py-3 text-sm text-ink outline-none focus:border-ink-mute"
+                    value={selectedInputDeviceId}
+                    onChange={(event) => void handleInputDeviceChange(event.target.value)}
+                  >
+                    <option value="">Microfone padrão do navegador</option>
+                    {inputDevices.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-2xl border border-line bg-card px-4 text-sm font-medium text-ink hover:border-ink-mute"
+                    onClick={() => void refreshInputDevices(true)}
+                  >
+                    Atualizar
+                  </button>
+                </div>
+                {inputDeviceError && <p role="alert" className="text-xs text-danger">{inputDeviceError}</p>}
+              </div>
+              <div className="flex w-full max-w-md items-center gap-3 rounded-2xl border border-line bg-card/70 px-4 py-3 text-left">
+                <span className={`size-2.5 shrink-0 rounded-full ${micActive ? "bg-sim" : "bg-ink-mute"}`} aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-ink">{micStatusLabel}</p>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line" aria-hidden="true">
+                    <div className="h-full rounded-full bg-accent transition-[width] duration-150" style={{ width: `${Math.min(100, Math.round(micLevel * 100))}%` }} />
+                  </div>
+                </div>
+              </div>
               <div className="min-h-5 text-sm text-ink-soft" aria-live="polite">
                 {gesturePending ? "Registrando resposta..." : lastGesture ? `Resposta registrada: ${GESTURE_SEMANTIC_INTENTS[lastGesture]}.` : "Helo continua disponível durante a navegação quando o assistente persistente está ativado."}
               </div>

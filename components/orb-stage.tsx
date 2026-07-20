@@ -377,8 +377,10 @@ export default function OrbStage({
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener("visibilitychange", onVisibility);
+      for (const mode of MODE_ORDER) scene.remove(meshes[mode]);
       geometry.dispose();
       for (const mode of MODE_ORDER) (meshes[mode].material as THREE.Material).dispose();
+      renderer.renderLists.dispose();
       renderer.dispose();
       meshesRef.current = null;
     };
