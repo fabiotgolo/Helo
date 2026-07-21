@@ -800,7 +800,10 @@ function HeloAgentSession({
           overrides: toSessionOverrides(data.overrides),
         });
       };
-      let data = await requestToken(false);
+      // O LiveKit aceita a sessão, mas derruba o socket poucos segundos depois
+      // quando recebe o override de voz remoto. A voz oficial configurada no
+      // próprio Agent continua sendo usada; não enviamos override por sessão.
+      let data = await requestToken(true);
       try {
         await startConversation(data);
       } catch (caught) {
