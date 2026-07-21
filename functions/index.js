@@ -2,15 +2,17 @@ const { onRequest } = require("firebase-functions/v2/https");
 const express = require("express");
 const cors = require("cors");
 const { ElevenLabsClient } = require("@elevenlabs/elevenlabs-js");
+const admin = require("firebase-admin");
+
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
 
 const app = express();
-
-// Permite requisições do ElevenAgents e do Frontend
 app.use(cors({ origin: true }));
 app.use(express.json());
 
-// Endpoint chamado pelo ElevenAgents
-app.post("/generate_music", async (req, res) => {
+app.post(["/generate_music", "/webhook/generate_music"], async (req, res) => {
   try {
     const { prompt, duration_ms = 30000 } = req.body;
 
@@ -18,21 +20,37 @@ app.post("/generate_music", async (req, res) => {
       return res.status(400).json({ error: "O parâmetro 'prompt' é obrigatório." });
     }
 
-    // Inicializa o cliente com a chave injetada pelo Secret Manager em tempo de execução
     const elevenlabs = new ElevenLabsClient({
       apiKey: process.env.ELEVENLABS_API_KEY,
     });
 
-    // Chama a API de composição musical da ElevenLabs
+    // 1. Gera o stream da música
     const audioStream = await elevenlabs.music.compose({
       prompt: prompt,
       musicLengthMs: duration_ms,
       modelId: "music_v2",
     });
 
-    // TODO: Salvar o stream no Firebase Storage para obter a URL pública do MP3
-    const audioUrl = "https://heloapp.web.app/audios/exemplo.mp3";
+    // 2. Converte Stream para Buffer
+    const chunks = [];
+    for await (const chunk of audioStream) {
+      chunks.push(chunk);
+    }
+    const audioBuffer = Buffer.concat(chunks);
 
+    // 3. Salva no Firebase Storage como arquivo público
+    const bucket = admin.storage().bucket();
+    const fileName = `musicas/${Date.now()}_musica.mp3`;
+    const file = bucket.file(fileName);
+
+    await file.save(audioBuffer, {
+      metadata: { contentType: "audio/mpeg" },
+      public: true,
+    });
+
+    const audioUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+    // Retorna a URL limpa no JSON
     return res.status(200).json({
       status: "success",
       message: "Música gerada com sucesso!",
@@ -44,5 +62,4 @@ app.post("/generate_music", async (req, res) => {
   }
 });
 
-// Exporta a função declarando a permissão ao secret
 exports.api = onRequest({ secrets: ["ELEVENLABS_API_KEY"] }, app);
