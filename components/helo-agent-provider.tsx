@@ -65,6 +65,18 @@ const SCREEN_BY_PATH: Record<string, string> = {
   "/dashboard": "dashboard",
 };
 
+const GLOBAL_HELO_ROUTES = [
+  { actionId: "navigate-home", label: "Ir para Home", path: "/" },
+  { actionId: "navigate-helo", label: "Ir para Helo", path: "/helo", area: "helo" },
+  { actionId: "navigate-conversar", label: "Ir para Conversar", path: "/conversa", area: "conversar" },
+  { actionId: "navigate-rotina", label: "Ir para Rotina", path: "/rotina", area: "rotina" },
+  { actionId: "navigate-emergencia", label: "Ir para Emergência", path: "/emergencia", area: "emergencia" },
+  { actionId: "navigate-atividades", label: "Ir para Atividades", path: "/atividades", area: "atividades" },
+  { actionId: "navigate-mensagem", label: "Ir para Mensagens", path: "/mensagem" },
+  { actionId: "navigate-ajustes", label: "Ir para Ajustes", path: "/ajustes", area: "ajustes" },
+  { actionId: "navigate-dashboard", label: "Ir para Dashboard", path: "/dashboard", area: "dashboard" },
+] as const;
+
 const ACTIVITY_THROTTLE_MS = 3000;
 const ACTIVITY_HEARTBEAT_MS = 15000;
 const ACTIVE_WINDOW_MS = 60000;
@@ -225,6 +237,7 @@ function HeloAgentSession({
   const lastMicMeterUpdateRef = useRef(0);
   const lastMicDebugLogRef = useRef(0);
   const selectedInputDeviceIdRef = useRef("");
+  const generatedMusicRef = useRef<HTMLAudioElement | null>(null);
 
   const clearLocalSessionState = useCallback(() => {
     activeUntilRef.current = 0;
@@ -278,6 +291,44 @@ function HeloAgentSession({
     } finally {
       permissionStream?.getTracks().forEach((track) => track.stop());
     }
+  }, []);
+
+  const generateMusicClientTool = useCallback(async (parameters: { prompt?: string }) => {
+    try {
+      const response = await fetch("https://helo-app-7fbf8.web.app/webhook/generate_music", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: parameters.prompt }),
+      });
+      const data = (await response.json().catch(() => null)) as { audio_url?: unknown } | null;
+      const audioUrl = typeof data?.audio_url === "string" ? data.audio_url : "";
+
+      if (!response.ok || !audioUrl) {
+        return { ok: false, reason: "URL de áudio não retornada pelo servidor." };
+      }
+
+      generatedMusicRef.current?.pause();
+      const audio = new Audio(audioUrl);
+      generatedMusicRef.current = audio;
+      audio.addEventListener("ended", () => {
+        if (generatedMusicRef.current === audio) generatedMusicRef.current = null;
+      }, { once: true });
+
+      await audio.play();
+      console.log("[HELO MUSIC] generated audio playback started", { audioUrl });
+      return { ok: true, audio_url: audioUrl, playing: true };
+    } catch (caught) {
+      console.warn("[HELO MUSIC] music generation or playback failed", caught);
+      return {
+        ok: false,
+        reason: "O navegador bloqueou a reprodução automática ou houve falha na rede.",
+      };
+    }
+  }, []);
+
+  useEffect(() => () => {
+    generatedMusicRef.current?.pause();
+    generatedMusicRef.current = null;
   }, []);
 
   const toolResult = useCallback((value: Record<string, unknown>) => JSON.stringify(value), []);
@@ -350,15 +401,36 @@ function HeloAgentSession({
           ? "debug"
           : screenContext?.screen ?? SCREEN_BY_PATH[pathname] ?? pathname;
       const uiActions = listHeloUIActions();
+      const localElements = typeof document === "undefined"
+        ? []
+        : Array.from(document.querySelectorAll<HTMLElement>("button, a"))
+          .map((element, index) => {
+            const label = element.textContent?.trim();
+            if (!label) return null;
+            return {
+              actionId: element.id || label || `local-${index + 1}`,
+              label,
+              source: "local" as const,
+              ...(element instanceof HTMLAnchorElement ? { path: element.pathname } : {}),
+            };
+          })
+          .filter((element): element is NonNullable<typeof element> => element != null);
       if (typeof resolvedScreen === "string" && resolvedScreen.startsWith("routine")) {
         console.log("[HELO TOOL] routine actions returned", uiActions.length);
       }
       return toolResult({
         ok: true,
+        currentPath: pathname,
         screen: resolvedScreen,
         patientId: activePatientId ?? "debug",
         ...(screenContext?.extra ?? {}),
-        actions: [debugAction, ...uiActions],
+        globalRoutes: GLOBAL_HELO_ROUTES,
+        localElements,
+        availableActions: [
+          ...GLOBAL_HELO_ROUTES.map((route) => ({ ...route, source: "global" as const })),
+          ...localElements,
+        ],
+        actions: [debugAction, ...GLOBAL_HELO_ROUTES, ...uiActions],
       });
     };
     // Execução: encontra o actionId no registry, autoriza no servidor (com a
@@ -384,6 +456,16 @@ function HeloAgentSession({
       // tocar no registry nem exigir sessão/permissão.
       if (actionId === "debug.ping") {
         return toolResult({ ok: true, actionId, message: "Tool interactWithHeloUI executada em modo debug." });
+      }
+      const globalRoute = GLOBAL_HELO_ROUTES.find((route) => route.actionId === actionId);
+      if (globalRoute) {
+        if ("area" in globalRoute) {
+          return navigateToArea("navigateHeloArea", globalRoute.area);
+        }
+        const access = await authorizeTool("navigateHeloArea");
+        if (!access.ok) return toolResult(access);
+        router.push(globalRoute.path);
+        return toolResult({ ok: true, actionId, path: globalRoute.path });
       }
       const payload =
         parameters.payload && typeof parameters.payload === "object" && !Array.isArray(parameters.payload)
@@ -462,6 +544,11 @@ function HeloAgentSession({
       }, GESTURE_CHOICES_HIGHLIGHT_MS);
       return toolResult({ ok: true, action: "showGestureChoices" });
     },
+    generate_music: async (parameters: Record<string, unknown>) => {
+      return toolResult(await generateMusicClientTool({
+        prompt: typeof parameters.prompt === "string" ? parameters.prompt : undefined,
+      }));
+    },
     // O painel declara as tools como getVisibleHeloActions /
     // interactWithVisibleHeloUI; registramos ESSES nomes E os da spec para o
     // MESMO handler — o nome do painel não precisa mudar e a tool funciona
@@ -472,7 +559,7 @@ function HeloAgentSession({
     interactWithVisibleHeloUI: interactWithUI,
     executeHeloAction: interactWithUI,
     };
-  }, [authorizeTool, navigateToArea, pathname, router, toolResult]);
+  }, [authorizeTool, generateMusicClientTool, navigateToArea, pathname, router, toolResult]);
 
   const {
     startSession,
