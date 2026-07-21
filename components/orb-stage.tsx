@@ -253,6 +253,12 @@ export default function OrbStage({
         fragmentShader: ORB_FRAGMENT,
         uniforms: makeOrbUniforms(HELO_MODES[mode].palette),
         transparent: true,
+        // Os orbes ocupam a mesma cena e o ativo fica sobre o conteúdo.
+        // A ordem é controlada abaixo por renderOrder; sem depthTest, um
+        // mesh inativo nunca abre um recorte escuro dentro do protagonista.
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
       });
       const mesh = new THREE.Mesh(geometry, material);
       // Fases de tempo distintas — cada orbe flui diferente, como três presenças
@@ -321,8 +327,8 @@ export default function OrbStage({
         swapOut = prevActive;
         swapStart = now;
         prevActive = activeRef.current;
-        meshes[swapIn].position.z = 60;
-        meshes[swapOut].position.z = -60;
+        meshes[swapIn].position.z = -60;
+        meshes[swapOut].position.z = 60;
       }
       // Progresso do arco: 0→1 em SWAP_MS; sin(π·p) sobe e volta a zero,
       // então o desvio nunca deixa resíduo na posição final.
@@ -343,13 +349,16 @@ export default function OrbStage({
         // O que chega ao centro arqueia por cima; o que sai mergulha de leve
         const arcY = mode === swapIn ? arc : mode === swapOut ? -arc * 0.6 : 0;
         const ty = h / 2 - target.y + arcY;
-        const tz = isActive ? 60 : -60;
+        // A câmera ortográfica olha para -Z: valores menores ficam à frente.
+        // O ativo precisa permanecer na frente durante toda a transição.
+        const tz = isActive ? -60 : 60;
         mesh.position.x += (tx - mesh.position.x) * f;
         mesh.position.y += (ty - mesh.position.y) * f;
         // Profundidade converge ~3× mais rápido que a posição: quem chega
         // assume a frente logo no início — nunca há interseção ambígua.
         const fz = reducedMotion || !placed ? 1 : 1 - Math.exp(-14 * dt);
         mesh.position.z += (tz - mesh.position.z) * fz;
+        mesh.renderOrder = isActive ? 10 : 0;
         const s = mesh.scale.x + (target.d - mesh.scale.x) * f;
         mesh.scale.setScalar(s);
         material.uniforms.uTime.value = t + (mesh.userData.timeOffset as number);
