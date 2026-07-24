@@ -11,6 +11,8 @@ export type PatientPlaylistTrack = {
   createdAt: string;
   dateKey: string;
   period: PlaylistPeriod;
+  /** Caminho interno no Storage; ausente em registros antigos. */
+  storagePath?: string;
 };
 
 function readString(value: unknown): string {
@@ -59,8 +61,19 @@ export function toPlaylistTrack(id: string, value: FirebaseFirestore.DocumentDat
   const createdAt = readString(value.createdAt);
   const dateKey = readString(value.dateKey) || (createdAt ? brazilDateKey(new Date(createdAt)) : "");
   const period = readString(value.period);
+  const storagePath = readString(value.storagePath);
   if (!title || !prompt || !audioUrl || !createdAt || !dateKey || !isPeriod(period)) return null;
-  return { id, title, prompt, genre, audioUrl, createdAt, dateKey, period };
+  return {
+    id,
+    title,
+    prompt,
+    genre,
+    audioUrl,
+    createdAt,
+    dateKey,
+    period,
+    ...(storagePath ? { storagePath } : {}),
+  };
 }
 
 export async function listPatientPlaylist(patientId: number): Promise<PatientPlaylistTrack[]> {

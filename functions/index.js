@@ -154,6 +154,7 @@ async function generateMusicHandler(req, res) {
           prompt,
           genre,
           audioUrl,
+          storagePath: fileName,
           createdAt: createdAt.toISOString(),
           dateKey,
           period,

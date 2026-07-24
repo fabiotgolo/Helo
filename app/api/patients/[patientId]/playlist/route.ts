@@ -1,5 +1,38 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { hasPermission } from "@/lib/access-types";
+import { logAudit } from "@/lib/access";
+import { firestore } from "@/lib/firestore";
 import { findPlaylistTracks, listPatientPlaylist } from "@/lib/playlist";
+import { getStorage } from "firebase-admin/storage";
+
+function canManagePlaylist(auth: {
+  user: { role: string };
+  link: Parameters<typeof hasPermission>[0];
+}): boolean {
+  return auth.user.role === "admin" || hasPermission(auth.link, "deleteActivities");
+}
+
+/** Obtém apenas caminhos da pasta de músicas do bucket desta aplicação. */
+function storagePathFromUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const marker = "/o/";
+    const markerIndex = url.pathname.indexOf(marker);
+    if (markerIndex >= 0) {
+      const path = decodeURIComponent(url.pathname.slice(markerIndex + marker.length));
+      return path.startsWith("musics/") ? path : null;
+    }
+    if (url.hostname === "storage.googleapis.com") {
+      const segments = url.pathname.split("/").filter(Boolean);
+      // URLs deste bucket têm o bucket como primeiro segmento.
+      const path = decodeURIComponent(segments.slice(1).join("/"));
+      return path.startsWith("musics/") ? path : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 export async function GET(
   request: Request,
@@ -19,5 +52,68 @@ export async function GET(
     period: url.searchParams.get("period") ?? undefined,
     genre: url.searchParams.get("genre") ?? undefined,
   });
-  return Response.json({ tracks });
+  return Response.json({ tracks, canManage: canManagePlaylist(auth) });
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ patientId: string }> }
+) {
+  const { patientId: rawPatientId } = await params;
+  const patientId = Number(rawPatientId);
+  if (!patientId || Number.isNaN(patientId)) {
+    return Response.json({ error: "patientId inválido" }, { status: 400 });
+  }
+
+  const auth = await requirePatientAccess(request, patientId);
+  if (auth instanceof Response) return auth;
+  if (!canManagePlaylist(auth)) {
+    return Response.json({ error: "permissão necessária: deleteActivities" }, { status: 403 });
+  }
+
+  let body: { id?: string };
+  try {
+    body = (await request.json()) as { id?: string };
+  } catch {
+    return Response.json({ error: "corpo inválido" }, { status: 400 });
+  }
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(id)) {
+    return Response.json({ error: "id obrigatório" }, { status: 400 });
+  }
+
+  const trackRef = firestore
+    .collection("patients")
+    .doc(String(patientId))
+    .collection("playlist")
+    .doc(id);
+  const track = await trackRef.get();
+  if (!track.exists) return Response.json({ error: "música não encontrada" }, { status: 404 });
+
+  const data = track.data() ?? {};
+  const storedPath = typeof data.storagePath === "string" ? data.storagePath.trim() : "";
+  const storagePath = storedPath.startsWith("musics/")
+    ? storedPath
+    : storagePathFromUrl(typeof data.audioUrl === "string" ? data.audioUrl : "");
+
+  try {
+    if (storagePath) {
+      await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+    }
+    await trackRef.delete();
+  } catch (error) {
+    console.error("[PLAYLIST] falha ao excluir música", error);
+    return Response.json({ error: "não foi possível excluir a música" }, { status: 500 });
+  }
+
+  void logAudit({
+    userId: auth.user.id,
+    userName: auth.user.name,
+    patientId,
+    action: "playlist.delete",
+    entityType: "playlist",
+    entityId: id,
+    metadata: { title: String(data.title ?? "") },
+  });
+  return Response.json({ ok: true });
 }
