@@ -58,7 +58,7 @@ type MusicPlayerState = {
   source: MusicTrackSource;
   period: "manhã" | "tarde" | "noite" | null;
 };
-type MusicToolOutcome = "ended" | "cancelled" | "replaced" | "failed";
+type MusicToolOutcome = "ended" | "cancelled" | "replaced" | "failed" | "ready";
 type ElevenLabsErrorEvent = { error_event?: Record<string, unknown> };
 type MicInputDevice = { deviceId: string; label: string };
 type PatchableConversation = ElevenLabsConversation & {
@@ -587,7 +587,20 @@ function HeloAgentSession({
       source: track.source,
       period: track.period ?? null,
     });
-    await audio.play();
+    try {
+      await audio.play();
+    } catch (caught) {
+      // Chamadas de Client Tool chegam pelo WebSocket, e portanto não contam
+      // como um gesto direto do usuário para a política de autoplay. A faixa
+      // já foi gerada e carregada: mantemos o player pronto para o cuidador
+      // iniciar a reprodução com o botão Tocar, em vez de descartar o áudio.
+      if (caught instanceof DOMException && caught.name === "NotAllowedError") {
+        console.info("[HELO MUSIC] reprodução aguardando gesto do usuário");
+        finishMusicPlayback("ready", { persistent: true });
+        return await playbackFinished;
+      }
+      throw caught;
+    }
     console.log("[HELO MUSIC] playback started", { source: track.source, audioUrl: track.audioUrl });
     return await playbackFinished;
   }, [finishMusicPlayback]);
@@ -663,14 +676,16 @@ function HeloAgentSession({
         source: "generated",
       });
       return {
-        ok: outcome === "ended",
+        ok: outcome === "ended" || outcome === "ready",
         audioUrl,
         title,
         outcome,
         message:
           outcome === "ended"
             ? "A música terminou e a conversa por voz foi retomada."
-            : "A música foi interrompida e a conversa por voz foi retomada.",
+            : outcome === "ready"
+              ? "A música está pronta. Toque em Tocar para iniciar a reprodução."
+              : "A música foi interrompida e a conversa por voz foi retomada.",
       };
     } catch (caught) {
       musicGenerationAbortRef.current = null;
@@ -1731,6 +1746,11 @@ function HeloAgentSession({
                           {musicPlayer.genre ? `${musicPlayer.genre} · ` : ""}
                           {musicPlayer.prompt}
                         </p>
+                        {musicPlayer.status === "paused" && musicPlayer.currentTime === 0 && (
+                          <p className="mt-2 text-xs font-medium text-ink-soft">
+                            Música pronta. Toque em Tocar para iniciar.
+                          </p>
+                        )}
                       </div>
                       <div>
                         <div className="mb-2 flex items-center justify-between text-xs tabular-nums text-ink-mute">
@@ -1796,20 +1816,24 @@ function HeloAgentSession({
                             : () => void resumeMusicPlayback()
                         }
                         className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong"
-                        aria-label={
-                          musicPlayer.status === "playing"
-                            ? "Pausar música e reativar a conversa com a Helo"
-                            : musicPlayer.status === "ended"
-                              ? "Tocar música novamente desde o começo"
-                              : "Retomar música"
-                        }
-                        title={
-                          musicPlayer.status === "playing"
-                            ? "Pausar"
-                            : musicPlayer.status === "ended"
-                              ? "Tocar novamente"
-                              : "Retomar"
-                        }
+                          aria-label={
+                            musicPlayer.status === "playing"
+                              ? "Pausar música e reativar a conversa com a Helo"
+                              : musicPlayer.status === "ended"
+                                ? "Tocar música novamente desde o começo"
+                                : musicPlayer.currentTime === 0
+                                  ? "Tocar música"
+                                : "Retomar música"
+                          }
+                          title={
+                            musicPlayer.status === "playing"
+                              ? "Pausar"
+                              : musicPlayer.status === "ended"
+                                ? "Tocar novamente"
+                                : musicPlayer.currentTime === 0
+                                  ? "Tocar"
+                                : "Retomar"
+                          }
                       >
                         {musicPlayer.status === "playing"
                           ? <PauseIcon />
@@ -1821,6 +1845,8 @@ function HeloAgentSession({
                             ? "Pausar"
                             : musicPlayer.status === "ended"
                               ? "Tocar novamente"
+                              : musicPlayer.currentTime === 0
+                                ? "Tocar"
                               : "Retomar"}
                         </span>
                       </button>
