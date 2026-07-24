@@ -395,6 +395,8 @@ export async function insertEvent(e: HeloEvent): Promise<void> {
     gesture: e.gesture ?? null,
     detail: e.detail ?? null,
     responseMs: e.responseMs ?? null,
+    authorRole: e.authorRole ?? null,
+    source: e.source ?? null,
     ts: new Date().toISOString(),
   });
 }
@@ -696,6 +698,12 @@ export async function getStats(period: Period, patientId: number) {
     .slice(0, 20)
     .map((e) => ({ ts: localTs(e.ts), text: e.detail ?? "" }));
 
+  const observacoesAcompanhante = events
+    .filter((e) => e.type === "observacao_acompanhante" && e.detail)
+    .sort((a, b) => b.ts.localeCompare(a.ts))
+    .slice(0, 100)
+    .map((e) => ({ ts: localTs(e.ts), text: e.detail ?? "" }));
+
   // gestos por tipo
   const gestoMap = new Map<string, number>();
   for (const e of events) {
@@ -775,6 +783,7 @@ export async function getStats(period: Period, patientId: number) {
     relatosDor,
     rotinaMaisUsadas,
     emergenciasRecentes,
+    observacoesAcompanhante,
     mensagens,
   };
 }

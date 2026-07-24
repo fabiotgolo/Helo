@@ -49,6 +49,7 @@ type Stats = {
   relatosDor: { ts: string; text: string }[];
   rotinaMaisUsadas: { text: string; n: number }[];
   emergenciasRecentes: { ts: string; text: string }[];
+  observacoesAcompanhante: { ts: string; text: string }[];
   mensagens: {
     id: string;
     ts: string;
@@ -630,6 +631,27 @@ export default function DashboardIndividualPage() {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </Card>
+
+            <Card
+              title="Mensagens para a Helo"
+              subtitle={`${stats!.observacoesAcompanhante.length} registro(s) no período`}
+            >
+              {stats!.observacoesAcompanhante.length === 0 ? (
+                <Empty>Nenhuma mensagem enviada pelo acompanhante neste período.</Empty>
+              ) : (
+                <ul className="flex max-h-64 flex-col gap-2 overflow-y-auto text-sm">
+                  {stats!.observacoesAcompanhante.map((observation, index) => (
+                    <li
+                      key={`${observation.ts}-${index}`}
+                      className="flex items-baseline justify-between gap-4 border-b border-line pb-2"
+                    >
+                      <span>{observation.text}</span>
+                      <span className="shrink-0 text-ink-soft">{fmtTs(observation.ts)}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
             </Card>
 

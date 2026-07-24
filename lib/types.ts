@@ -72,7 +72,8 @@ export type EventType =
   | "confirmacao"
   | "reformulacao"
   | "descarte"
-  | "emergencia";
+  | "emergencia"
+  | "observacao_acompanhante";
 
 export interface HeloEvent {
   sessionId: number | null;
@@ -86,6 +87,9 @@ export interface HeloEvent {
   responseMs?: number;
   /** Item de modo associado ao gesto (auditoria da resposta observada). */
   itemId?: string;
+  /** Origem e autoria de uma observação registrada durante a sessão ao vivo. */
+  authorRole?: "caregiver";
+  source?: "live_session_observation";
 }
 
 export interface HeloMessage {

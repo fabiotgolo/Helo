@@ -258,8 +258,10 @@ function HeloAgentSession({
   const [lastGesture, setLastGesture] = useState<Gesture | null>(null);
   const [gesturePending, setGesturePending] = useState(false);
   const [gesturesHighlighted, setGesturesHighlighted] = useState(false);
-  const [note, setNote] = useState("");
-  const [noteFocused, setNoteFocused] = useState(false);
+  const [caregiverMessage, setCaregiverMessage] = useState("");
+  const [messageFocused, setMessageFocused] = useState(false);
+  const [messageSending, setMessageSending] = useState(false);
+  const [messageError, setMessageError] = useState("");
   const [mount, setMount] = useState<HTMLElement | null>(null);
   const [micLevel, setMicLevel] = useState(0);
   const [inputDevices, setInputDevices] = useState<MicInputDevice[]>([]);
@@ -788,6 +790,10 @@ function HeloAgentSession({
     } else if (status === "connecting") {
       // Enquanto o primeiro ping do SDK não chega, a conexão ainda está em avaliação.
       setConnectionStatus("fair");
+    } else if (status === "connected") {
+      // Confirma a saúde inicial também pelo estado reativo do SDK. Isso cobre
+      // sessões nas quais o evento onConnect aconteceu antes de o listener montar.
+      setConnectionStatus("good");
     }
   }, [status]);
 
@@ -870,7 +876,8 @@ function HeloAgentSession({
   useEffect(() => {
     if (!startedRef.current || sessionPatientIdRef.current === patientId) return;
     setLastGesture(null);
-    setNote("");
+    setCaregiverMessage("");
+    setMessageError("");
     setGesturesHighlighted(false);
     end();
     onError("A conversa foi encerrada porque o paciente ativo foi alterado.");
@@ -924,6 +931,58 @@ function HeloAgentSession({
       // A sessão pode ter encerrado entre o estado React e o envio.
     }
   }, [sendUserActivity]);
+
+  const sendCaregiverMessage = useCallback(async () => {
+    const message = caregiverMessage.trim();
+    const activePatientId = patientIdRef.current;
+    if (!message || messageSending || !activePatientId || statusRef.current !== "connected") return;
+
+    setMessageSending(true);
+    setMessageError("");
+    let deliveredToAgent = false;
+    try {
+      // A atualização contextual chega à sessão atual sem interromper a fala
+      // ou o fluxo de escuta do paciente.
+      sendContextualUpdate(
+        `Observação do acompanhante em tempo real: ${message}`,
+        { contextId: `caregiver-observation:${Date.now()}` }
+      );
+      // contextual_update mantém o contexto da sessão, mas não cria um turno
+      // de resposta. A mensagem do acompanhante abaixo pede que a Helo a
+      // responda em voz, sem confundi-la com uma fala do paciente.
+      sendUserMessage(
+        `Mensagem escrita pelo acompanhante: "${message}". Responda diretamente ao acompanhante em voz, de forma breve e adequada ao contexto atual.`
+      );
+      deliveredToAgent = true;
+
+      const response = await fetch(`/api/patients/${activePatientId}/observations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patientId: String(activePatientId),
+          authorRole: "caregiver",
+          message,
+          timestamp: new Date().toISOString(),
+          source: "live_session_observation",
+          sessionId: loggedSessionIdRef.current,
+        }),
+      });
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) throw new Error(data?.error ?? "Não foi possível registrar a mensagem.");
+
+      setCaregiverMessage("");
+    } catch (caught) {
+      const detail = caught instanceof Error ? caught.message : "Não foi possível enviar a mensagem.";
+      setMessageError(
+        deliveredToAgent
+          ? `A Helo recebeu a mensagem, mas ela não foi registrada no dashboard: ${detail}`
+          : detail
+      );
+      if (deliveredToAgent) setCaregiverMessage("");
+    } finally {
+      setMessageSending(false);
+    }
+  }, [caregiverMessage, messageSending, sendContextualUpdate, sendUserMessage]);
 
   const speakActivityQuestion = useCallback(
     (question: string, options?: { activityId?: string; itemId?: string; runId?: string }) => {
@@ -1201,6 +1260,8 @@ function HeloAgentSession({
         ? "Aguardando fala no microfone selecionado"
         : "Aguardando sinal do microfone";
   const connectionStatusDetails = CONNECTION_STATUS_DETAILS[connectionStatus];
+  const canSendCaregiverMessage =
+    caregiverMessage.trim().length > 0 && !messageSending && status === "connected";
 
   const stage = (
     <main className="relative flex flex-1 items-center px-4 pb-8 sm:px-6">
@@ -1255,11 +1316,57 @@ function HeloAgentSession({
               <div className="min-h-5 text-sm text-ink-soft" aria-live="polite">
                 {gesturePending ? "Registrando resposta..." : lastGesture ? `Resposta registrada: ${GESTURE_SEMANTIC_INTENTS[lastGesture]}.` : "Helo continua disponível durante a navegação quando o assistente persistente está ativado."}
               </div>
-              <label className="flex w-full max-w-md flex-col gap-2 text-left text-sm text-ink-soft">
-                Observação em andamento
-                <textarea value={note} onFocus={() => setNoteFocused(true)} onBlur={() => setNoteFocused(false)} onChange={(event) => { setNote(event.target.value); sendActivity("typing"); }} placeholder="Anote apenas para orientar o cuidado nesta tela." rows={3} className="w-full resize-none rounded-2xl border border-line bg-card/80 px-4 py-3 text-base text-ink outline-none focus:border-ink-mute" />
-              </label>
-              {noteFocused && <p className="max-w-md text-xs text-ink-mute">Enquanto há edição real, a Helo recebe apenas sinal de atividade.</p>}
+              <div className="flex w-full max-w-md flex-col gap-2 text-left">
+                <label className="text-sm text-ink-soft" htmlFor="helo-caregiver-message">
+                  Mensagem para a Helo
+                </label>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                  <textarea
+                    id="helo-caregiver-message"
+                    aria-label="Mensagem para a Helo"
+                    value={caregiverMessage}
+                    onFocus={() => setMessageFocused(true)}
+                    onBlur={() => setMessageFocused(false)}
+                    onChange={(event) => {
+                      setCaregiverMessage(event.target.value);
+                      setMessageError("");
+                      sendActivity("typing");
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void sendCaregiverMessage();
+                      }
+                    }}
+                    placeholder="Escreva uma mensagem para orientar a Helo."
+                    rows={3}
+                    className="min-h-24 w-full resize-none rounded-2xl border border-line bg-card/80 px-4 py-3 text-base text-ink outline-none focus:border-ink-mute"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Enviar mensagem para a Helo"
+                    onClick={() => void sendCaregiverMessage()}
+                    disabled={!canSendCaregiverMessage}
+                    className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-2xl bg-accent px-4 py-3 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60 sm:self-end"
+                  >
+                    {messageSending ? (
+                      <svg aria-hidden="true" className="size-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" />
+                        <path className="opacity-75" fill="currentColor" d="M12 3a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6V3Z" />
+                      </svg>
+                    ) : (
+                      <svg aria-hidden="true" className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m22 2-7 20-4-9-9-4Z" />
+                        <path d="M22 2 11 13" />
+                      </svg>
+                    )}
+                    {messageSending ? "Enviando" : "Enviar"}
+                  </button>
+                </div>
+                <p className="text-xs text-ink-mute">Pressione Enter para enviar ou Shift+Enter para uma nova linha.</p>
+                {messageFocused && <p className="text-xs text-ink-mute">A Helo recebe a mensagem durante a conversa e ela é registrada no dashboard do paciente.</p>}
+                {messageError && <p role="alert" className="text-xs text-danger">{messageError}</p>}
+              </div>
             </section>
           )}
           {error && <p role="alert" className="text-center text-sm text-danger">{error}</p>}
