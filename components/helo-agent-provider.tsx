@@ -46,6 +46,7 @@ type HeloSessionOverrides = NonNullable<SessionConfig["overrides"]>;
 type ActivitySource = "gesture" | "typing" | "field-focus" | "heartbeat";
 type ConnectionStatus = "good" | "fair" | "poor" | "offline";
 type MusicPlayerStatus = "idle" | "generating" | "playing" | "error";
+type MusicTrackSource = "generated" | "history" | null;
 type MusicPlayerState = {
   status: MusicPlayerStatus;
   prompt: string;
@@ -54,6 +55,8 @@ type MusicPlayerState = {
   currentTime: number;
   duration: number;
   error: string;
+  source: MusicTrackSource;
+  period: "manhã" | "tarde" | "noite" | null;
 };
 type MusicToolOutcome = "ended" | "cancelled" | "replaced" | "failed";
 type ElevenLabsErrorEvent = { error_event?: Record<string, unknown> };
@@ -116,6 +119,8 @@ const INITIAL_MUSIC_PLAYER_STATE: MusicPlayerState = {
   currentTime: 0,
   duration: 0,
   error: "",
+  source: null,
+  period: null,
 };
 
 type HeloConversationTokenResponse = {
@@ -324,6 +329,9 @@ function HeloAgentSession({
     setMuted: (muted: boolean) => void;
     setVolume: (options: { volume: number }) => void;
   } | null>(null);
+  const conversationTextControlsRef = useRef<{
+    sendContextualUpdate: (text: string, options?: { contextId?: string }) => void;
+  } | null>(null);
   const silenceReminderCountRef = useRef(0);
   const nextSilenceReminderAtRef = useRef(0);
 
@@ -435,6 +443,64 @@ function HeloAgentSession({
     finishMusicPlayback("cancelled");
   }, [finishMusicPlayback]);
 
+  const playMusicTrack = useCallback(async (track: {
+    audioUrl: string;
+    title: string;
+    prompt: string;
+    genre: string;
+    source: Exclude<MusicTrackSource, null>;
+    period?: "manhã" | "tarde" | "noite";
+  }) => {
+    const audio = new Audio(track.audioUrl);
+    audio.preload = "auto";
+    generatedMusicRef.current = audio;
+    const playbackFinished = new Promise<MusicToolOutcome>((resolve) => {
+      musicToolCompletionRef.current = resolve;
+    });
+    audio.addEventListener("loadedmetadata", () => {
+      if (generatedMusicRef.current !== audio) return;
+      setMusicPlayer((current) => ({
+        ...current,
+        duration: Number.isFinite(audio.duration) ? audio.duration : 0,
+      }));
+    });
+    audio.addEventListener("timeupdate", () => {
+      if (generatedMusicRef.current !== audio) return;
+      setMusicPlayer((current) => ({
+        ...current,
+        currentTime: audio.currentTime,
+        duration: Number.isFinite(audio.duration) ? audio.duration : current.duration,
+      }));
+    });
+    audio.addEventListener("ended", () => {
+      if (generatedMusicRef.current === audio) finishMusicPlayback("ended");
+    }, { once: true });
+    audio.addEventListener("error", () => {
+      if (generatedMusicRef.current === audio) {
+        finishMusicPlayback("failed", { error: "O arquivo da música não pôde ser reproduzido." });
+      }
+    }, { once: true });
+
+    musicPreviousMutedRef.current = currentMutedRef.current;
+    musicMicSuspendedRef.current = true;
+    conversationAudioControlsRef.current?.setMuted(true);
+    conversationAudioControlsRef.current?.setVolume({ volume: 0 });
+    setMusicPlayer({
+      status: "playing",
+      prompt: track.prompt,
+      genre: track.genre,
+      title: track.title,
+      currentTime: 0,
+      duration: 0,
+      error: "",
+      source: track.source,
+      period: track.period ?? null,
+    });
+    await audio.play();
+    console.log("[HELO MUSIC] playback started", { source: track.source, audioUrl: track.audioUrl });
+    return await playbackFinished;
+  }, [finishMusicPlayback]);
+
   const generateMusicClientTool = useCallback(async (parameters: { prompt?: string; genre?: string }) => {
     const prompt = parameters.prompt?.trim() || "";
     const genre = parameters.genre?.trim() || "";
@@ -463,7 +529,11 @@ function HeloAgentSession({
       const response = await fetch(GENERATE_MUSIC_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, genre: genre || undefined }),
+        body: JSON.stringify({
+          patientId: patientIdRef.current,
+          prompt,
+          genre: genre || undefined,
+        }),
         signal: abortController.signal,
       });
       const data = (await response.json().catch(() => null)) as {
@@ -494,61 +564,13 @@ function HeloAgentSession({
       }
 
       musicGenerationAbortRef.current = null;
-      const audio = new Audio(audioUrl);
-      audio.preload = "auto";
-      generatedMusicRef.current = audio;
-
-      const playbackFinished = new Promise<MusicToolOutcome>((resolve) => {
-        musicToolCompletionRef.current = resolve;
-      });
-      audio.addEventListener("loadedmetadata", () => {
-        if (generatedMusicRef.current !== audio) return;
-        setMusicPlayer((current) => ({
-          ...current,
-          duration: Number.isFinite(audio.duration) ? audio.duration : 0,
-        }));
-      });
-      audio.addEventListener("timeupdate", () => {
-        if (generatedMusicRef.current !== audio) return;
-        setMusicPlayer((current) => ({
-          ...current,
-          currentTime: audio.currentTime,
-          duration: Number.isFinite(audio.duration) ? audio.duration : current.duration,
-        }));
-      });
-      audio.addEventListener(
-        "ended",
-        () => {
-          if (generatedMusicRef.current === audio) finishMusicPlayback("ended");
-        },
-        { once: true }
-      );
-      audio.addEventListener(
-        "error",
-        () => {
-          if (generatedMusicRef.current === audio) {
-            finishMusicPlayback("failed", { error: "O arquivo da música não pôde ser reproduzido." });
-          }
-        },
-        { once: true }
-      );
-
-      musicPreviousMutedRef.current = currentMutedRef.current;
-      musicMicSuspendedRef.current = true;
-      conversationAudioControlsRef.current?.setMuted(true);
-      conversationAudioControlsRef.current?.setVolume({ volume: 0 });
-      setMusicPlayer({
-        status: "playing",
+      const outcome = await playMusicTrack({
+        audioUrl,
+        title,
         prompt,
         genre,
-        title,
-        currentTime: 0,
-        duration: 0,
-        error: "",
+        source: "generated",
       });
-      await audio.play();
-      console.log("[HELO MUSIC] generated audio playback started", { audioUrl });
-      const outcome = await playbackFinished;
       return {
         ok: outcome === "ended",
         audioUrl,
@@ -576,7 +598,67 @@ function HeloAgentSession({
         reason,
       };
     }
-  }, [finishMusicPlayback]);
+  }, [finishMusicPlayback, playMusicTrack]);
+
+  const playExistingMusicClientTool = useCallback(async (parameters: {
+    date_reference?: string;
+    period?: string;
+    genre?: string;
+  }) => {
+    const activePatientId = patientIdRef.current;
+    if (!activePatientId) return { ok: false, found: false, reason: "Nenhum paciente está ativo." };
+    try {
+      const search = new URLSearchParams();
+      if (parameters.date_reference?.trim()) search.set("dateReference", parameters.date_reference.trim());
+      if (parameters.period?.trim()) search.set("period", parameters.period.trim());
+      if (parameters.genre?.trim()) search.set("genre", parameters.genre.trim());
+      const response = await fetch(`/api/patients/${activePatientId}/playlist?${search.toString()}`);
+      const data = (await response.json().catch(() => null)) as {
+        tracks?: Array<{
+          id: string;
+          title: string;
+          prompt: string;
+          genre: string;
+          audioUrl: string;
+          period: "manhã" | "tarde" | "noite";
+        }>;
+        error?: string;
+      } | null;
+      const track = data?.tracks?.[0];
+      if (!response.ok || !track) {
+        const details = [parameters.date_reference, parameters.period, parameters.genre]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join(", ");
+        const message = details
+          ? `Não encontrei na playlist uma música correspondente a: ${details}.`
+          : "Não encontrei músicas anteriores na playlist deste paciente.";
+        conversationTextControlsRef.current?.sendContextualUpdate(message, {
+          contextId: `playlist-not-found:${Date.now()}`,
+        });
+        return { ok: false, found: false, reason: message };
+      }
+      if (generatedMusicRef.current || musicGenerationAbortRef.current) stopGeneratedMusic();
+      const outcome = await playMusicTrack({
+        audioUrl: track.audioUrl,
+        title: track.title,
+        prompt: track.prompt,
+        genre: track.genre,
+        source: "history",
+        period: track.period,
+      });
+      return {
+        ok: outcome === "ended",
+        found: true,
+        title: track.title,
+        period: track.period,
+        outcome,
+      };
+    } catch (caught) {
+      const reason = caught instanceof Error ? caught.message : "Não foi possível buscar a playlist.";
+      console.warn("[HELO MUSIC] existing music playback failed", caught);
+      return { ok: false, found: false, reason };
+    }
+  }, [playMusicTrack, stopGeneratedMusic]);
 
   useEffect(() => () => {
     musicGenerationAbortRef.current?.abort();
@@ -855,6 +937,13 @@ function HeloAgentSession({
         genre: typeof parameters.genre === "string" ? parameters.genre : undefined,
       }));
     },
+    play_existing_music: async (parameters: Record<string, unknown>) => {
+      return toolResult(await playExistingMusicClientTool({
+        date_reference: typeof parameters.date_reference === "string" ? parameters.date_reference : undefined,
+        period: typeof parameters.period === "string" ? parameters.period : undefined,
+        genre: typeof parameters.genre === "string" ? parameters.genre : undefined,
+      }));
+    },
     checkUserSilence,
     // O painel declara as tools como getVisibleHeloActions /
     // interactWithVisibleHeloUI; registramos ESSES nomes E os da spec para o
@@ -866,7 +955,7 @@ function HeloAgentSession({
     interactWithVisibleHeloUI: interactWithUI,
     executeHeloAction: interactWithUI,
     };
-  }, [authorizeTool, generateMusicClientTool, navigateToArea, pathname, router, toolResult]);
+  }, [authorizeTool, generateMusicClientTool, navigateToArea, pathname, playExistingMusicClientTool, router, toolResult]);
 
   const {
     startSession,
@@ -949,6 +1038,10 @@ function HeloAgentSession({
     conversationAudioControlsRef.current = { setMuted, setVolume };
     currentMutedRef.current = isMuted;
   }, [isMuted, setMuted, setVolume]);
+
+  useEffect(() => {
+    conversationTextControlsRef.current = { sendContextualUpdate };
+  }, [sendContextualUpdate]);
 
   const end = useCallback(() => {
     const wasStarted = startedRef.current;
@@ -1461,7 +1554,9 @@ function HeloAgentSession({
   const label = musicPlayer.status === "generating"
     ? "Compondo uma música especial para você..."
     : musicPlayer.status === "playing"
-      ? "Helo tocando música"
+      ? musicPlayer.source === "history"
+        ? `Reproduzindo música do histórico: ${musicPlayer.title} (${musicPlayer.period ?? "histórico"})`
+        : "Helo tocando música"
       : restarting
         ? "Reconectando Helo"
         : starting || status === "connecting"
@@ -1530,6 +1625,9 @@ function HeloAgentSession({
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium text-ink">{musicPlayer.title}</p>
                         <p className="mt-1 line-clamp-2 text-xs text-ink-soft">
+                          {musicPlayer.source === "history" && musicPlayer.period
+                            ? `Histórico · ${musicPlayer.period} · `
+                            : ""}
                           {musicPlayer.genre ? `${musicPlayer.genre} · ` : ""}
                           {musicPlayer.prompt}
                         </p>

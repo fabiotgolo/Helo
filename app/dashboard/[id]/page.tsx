@@ -21,6 +21,7 @@ import {
   fmtTs,
 } from "@/components/dashboard-ui";
 import { ActivitySection } from "@/components/activity-dashboard";
+import { PatientPlaylistWidget } from "@/components/patient-playlist-widget";
 import { usePatient } from "@/lib/patient";
 import { redirectToLogin } from "@/lib/use-auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
@@ -417,6 +418,8 @@ export default function DashboardIndividualPage() {
                   </ul>
                 )}
               </Card>
+
+              <PatientPlaylistWidget patientId={patientId} />
 
               {/* ——— Resumo de Rotina ——— */}
               <Card

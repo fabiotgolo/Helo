@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const { getDownloadURL } = require("firebase-admin/storage");
+const { getFirestore } = require("firebase-admin/firestore");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -15,6 +16,7 @@ app.use(express.json({ limit: "16kb" }));
 const MUSIC_LENGTH_MS = 30000;
 const MAX_PROMPT_LENGTH = 4100;
 const MAX_GENRE_LENGTH = 100;
+const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || "helo-db";
 
 function textParameter(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -28,6 +30,23 @@ function musicTitle(prompt, genre) {
   return genre ? `${genre}: ${shortPrompt}` : shortPrompt;
 }
 
+function playlistTime(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const hour = Number(values.hour);
+  return {
+    dateKey: `${values.year}-${values.month}-${values.day}`,
+    period: hour >= 5 && hour < 12 ? "manhã" : hour >= 12 && hour < 18 ? "tarde" : "noite",
+  };
+}
+
 async function generateMusicHandler(req, res) {
   if (req.method !== "POST") {
     res.set("Allow", "POST");
@@ -37,10 +56,14 @@ async function generateMusicHandler(req, res) {
   try {
     const prompt = textParameter(req.body?.prompt);
     const genre = textParameter(req.body?.genre);
+    const patientId = Number(req.body?.patientId);
     const apiKey = process.env.ELEVENLABS_API_KEY;
 
     if (!prompt) {
       return res.status(400).json({ error: "O parâmetro 'prompt' é obrigatório." });
+    }
+    if (!Number.isSafeInteger(patientId) || patientId <= 0) {
+      return res.status(400).json({ error: "O parâmetro 'patientId' é obrigatório." });
     }
     if (prompt.length > MAX_PROMPT_LENGTH) {
       return res.status(400).json({ error: `O prompt deve ter no máximo ${MAX_PROMPT_LENGTH} caracteres.` });
@@ -118,9 +141,33 @@ async function generateMusicHandler(req, res) {
     });
 
     const audioUrl = await getDownloadURL(file);
+    const createdAt = new Date();
+    const { dateKey, period } = playlistTime(createdAt);
+    const title = musicTitle(prompt, genre) || "Música especial da Helo";
+    try {
+      await getFirestore(admin.app(), FIRESTORE_DATABASE_ID)
+        .collection("patients")
+        .doc(String(patientId))
+        .collection("playlist")
+        .add({
+          title,
+          prompt,
+          genre,
+          audioUrl,
+          createdAt: createdAt.toISOString(),
+          dateKey,
+          period,
+        });
+    } catch (firestoreError) {
+      // Evita manter um MP3 órfão quando seu histórico não pôde ser salvo.
+      await file.delete({ ignoreNotFound: true }).catch(() => {});
+      throw firestoreError;
+    }
     return res.status(200).json({
       audioUrl,
-      title: musicTitle(prompt, genre) || "Música especial da Helo",
+      title,
+      createdAt: createdAt.toISOString(),
+      period,
     });
   } catch (error) {
     console.error("[HELO MUSIC] Falha inesperada na geração da música.", error);
