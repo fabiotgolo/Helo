@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { HeloVoicePreference } from "@/lib/access-types";
-import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
+import { isHeloPersistentAssistantEnabled, PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { usePatient } from "@/lib/patient";
 import { useHeloAgent } from "@/components/helo-agent-provider";
 
@@ -26,7 +26,7 @@ export function HeloVoiceSettings() {
   const [restartPrompt, setRestartPrompt] = useState(false);
   const selected = pending && pending.patientId === patientId ? pending.value : current;
   const hasPersistentSession =
-    settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] === "true" &&
+    isHeloPersistentAssistantEnabled(settings) &&
     activeSessionPatientId === patientId &&
     sessionStatus !== "disconnected";
 
