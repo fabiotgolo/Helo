@@ -1,8 +1,8 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const express = require("express");
 const cors = require("cors");
-const { ElevenLabsClient } = require("@elevenlabs/elevenlabs-js");
 const admin = require("firebase-admin");
+const { getDownloadURL } = require("firebase-admin/storage");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -10,56 +10,145 @@ if (!admin.apps.length) {
 
 const app = express();
 app.use(cors({ origin: true }));
-app.use(express.json());
+app.use(express.json({ limit: "16kb" }));
 
-app.post(["/generate_music", "/webhook/generate_music"], async (req, res) => {
+const MUSIC_LENGTH_MS = 30000;
+const MAX_PROMPT_LENGTH = 4100;
+const MAX_GENRE_LENGTH = 100;
+
+function textParameter(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function musicTitle(prompt, genre) {
+  const cleanPrompt = prompt.replace(/\s+/g, " ").trim();
+  const shortPrompt = cleanPrompt.length > 64
+    ? `${cleanPrompt.slice(0, 61).trimEnd()}...`
+    : cleanPrompt;
+  return genre ? `${genre}: ${shortPrompt}` : shortPrompt;
+}
+
+async function generateMusicHandler(req, res) {
+  if (req.method !== "POST") {
+    res.set("Allow", "POST");
+    return res.status(405).json({ error: "Método não permitido." });
+  }
+
   try {
-    const { prompt, duration_ms = 30000 } = req.body;
+    const prompt = textParameter(req.body?.prompt);
+    const genre = textParameter(req.body?.genre);
+    const apiKey = process.env.ELEVENLABS_API_KEY;
 
     if (!prompt) {
       return res.status(400).json({ error: "O parâmetro 'prompt' é obrigatório." });
     }
-
-    const elevenlabs = new ElevenLabsClient({
-      apiKey: process.env.ELEVENLABS_API_KEY,
-    });
-
-    // 1. Gera o stream da música
-    const audioStream = await elevenlabs.music.compose({
-      prompt: prompt,
-      musicLengthMs: duration_ms,
-      modelId: "music_v2",
-    });
-
-    // 2. Converte Stream para Buffer
-    const chunks = [];
-    for await (const chunk of audioStream) {
-      chunks.push(chunk);
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ error: `O prompt deve ter no máximo ${MAX_PROMPT_LENGTH} caracteres.` });
     }
-    const audioBuffer = Buffer.concat(chunks);
+    if (genre.length > MAX_GENRE_LENGTH) {
+      return res.status(400).json({ error: `O gênero deve ter no máximo ${MAX_GENRE_LENGTH} caracteres.` });
+    }
+    if (!apiKey) {
+      console.error("[HELO MUSIC] ELEVENLABS_API_KEY não está disponível.");
+      return res.status(503).json({ error: "O serviço de música não está configurado." });
+    }
 
-    // 3. Salva no Firebase Storage como arquivo público
+    // A Music API não possui um campo separado para gênero; ele é incorporado
+    // ao prompt para orientar a composição sem enviar parâmetros desconhecidos.
+    const compositionPrompt = genre
+      ? `${prompt}\nGênero musical solicitado: ${genre}.`
+      : prompt;
+    if (compositionPrompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({
+        error: "A combinação de prompt e gênero excede o limite permitido.",
+      });
+    }
+    const elevenLabsResponse = await fetch(
+      "https://api.elevenlabs.io/v1/music?output_format=mp3_48000_192",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "xi-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          prompt: compositionPrompt,
+          music_length_ms: MUSIC_LENGTH_MS,
+          model_id: "music_v2",
+        }),
+      }
+    );
+
+    if (!elevenLabsResponse.ok) {
+      const responseText = await elevenLabsResponse.text();
+      console.error("[HELO MUSIC] ElevenLabs recusou a composição.", {
+        status: elevenLabsResponse.status,
+        response: responseText.slice(0, 500),
+      });
+      return res.status(502).json({ error: "A ElevenLabs não conseguiu gerar a música." });
+    }
+
+    const audioBuffer = Buffer.from(await elevenLabsResponse.arrayBuffer());
+    if (!audioBuffer.length) {
+      console.error("[HELO MUSIC] A ElevenLabs retornou um arquivo de áudio vazio.");
+      return res.status(502).json({ error: "A música gerada não contém áudio." });
+    }
+
     const bucket = admin.storage().bucket();
-    const fileName = `musicas/${Date.now()}_musica.mp3`;
+    const safeGenre = genre
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 32);
+    const fileName = `musics/${Date.now()}${safeGenre ? `-${safeGenre}` : ""}.mp3`;
     const file = bucket.file(fileName);
 
     await file.save(audioBuffer, {
-      metadata: { contentType: "audio/mpeg" },
-      public: true,
+      resumable: false,
+      metadata: {
+        contentType: "audio/mpeg",
+        cacheControl: "public, max-age=31536000, immutable",
+        metadata: {
+          generatedBy: "helo",
+          genre: genre || "unspecified",
+        },
+      },
     });
 
-    const audioUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-
-    // Retorna a URL limpa no JSON
+    const audioUrl = await getDownloadURL(file);
     return res.status(200).json({
-      status: "success",
-      message: "Música gerada com sucesso!",
-      audio_url: audioUrl,
+      audioUrl,
+      title: musicTitle(prompt, genre) || "Música especial da Helo",
     });
   } catch (error) {
-    console.error("Erro na geração da música:", error);
-    return res.status(500).json({ error: "Falha interna ao gerar música." });
+    console.error("[HELO MUSIC] Falha inesperada na geração da música.", error);
+    return res.status(500).json({ error: "Falha interna ao gerar a música." });
   }
-});
+}
 
-exports.api = onRequest({ secrets: ["ELEVENLABS_API_KEY"] }, app);
+// Endpoint principal, acessível em /generateMusic pelo rewrite do Hosting.
+exports.generateMusic = onRequest(
+  {
+    secrets: ["ELEVENLABS_API_KEY"],
+    timeoutSeconds: 540,
+    memory: "1GiB",
+    cors: true,
+  },
+  generateMusicHandler
+);
+
+// Compatibilidade com a integração anterior em /webhook/generate_music.
+app.post(
+  ["/generate_music", "/generateMusic", "/webhook/generate_music"],
+  generateMusicHandler
+);
+exports.api = onRequest(
+  {
+    secrets: ["ELEVENLABS_API_KEY"],
+    timeoutSeconds: 540,
+    memory: "1GiB",
+  },
+  app
+);
