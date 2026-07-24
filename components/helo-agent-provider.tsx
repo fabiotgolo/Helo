@@ -19,7 +19,7 @@ import {
   setAgentSpeaking,
 } from "@/lib/audio-coordinator";
 import { usePatient } from "@/lib/patient";
-import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
+import { isHeloPersistentAssistantEnabled } from "@/lib/defaults";
 import {
   HELO_AREA_ROUTES,
   resolveHeloNavigationArea,
@@ -86,6 +86,13 @@ const MIC_ACTIVITY_THRESHOLD = 0.02;
 const MIC_METER_UPDATE_MS = 160;
 const MIC_DEBUG_LOG_MS = 1500;
 const MIC_DEVICE_STORAGE_KEY = "heloAgentInputDeviceId";
+const MAX_SILENCE_REMINDERS = 3;
+const SILENCE_REMINDER_WAIT_MS = [0, 60_000, 120_000] as const;
+const SILENCE_REMINDER_MESSAGES = [
+  "Você ainda está por aqui?",
+  "Ainda precisa de alguma ajuda?",
+  "Tudo bem. Vou permanecer disponível quando você quiser continuar.",
+] as const;
 
 type HeloConversationTokenResponse = {
   conversationToken?: string;
@@ -230,7 +237,7 @@ function HeloAgentSession({
   const router = useRouter();
   const { stop, setAgentAmplitude } = useHelo();
   const { patientId, settings } = usePatient();
-  const persistentEnabled = settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] === "true";
+  const persistentEnabled = isHeloPersistentAssistantEnabled(settings);
   const [starting, setStarting] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [activeSessionPatientId, setActiveSessionPatientId] = useState<number | null>(null);
@@ -260,8 +267,16 @@ function HeloAgentSession({
   const lastMicDebugLogRef = useRef(0);
   const selectedInputDeviceIdRef = useRef("");
   const generatedMusicRef = useRef<HTMLAudioElement | null>(null);
+  const silenceReminderCountRef = useRef(0);
+  const nextSilenceReminderAtRef = useRef(0);
+
+  const resetSilenceReminderState = useCallback(() => {
+    silenceReminderCountRef.current = 0;
+    nextSilenceReminderAtRef.current = 0;
+  }, []);
 
   const clearLocalSessionState = useCallback(() => {
+    resetSilenceReminderState();
     activeUntilRef.current = 0;
     lastActivitySentAtRef.current = 0;
     gestureLockRef.current = false;
@@ -275,7 +290,7 @@ function HeloAgentSession({
     startedRef.current = false;
     setMicLevel(0);
     setAgentAmplitude(null);
-  }, [setAgentAmplitude]);
+  }, [resetSilenceReminderState, setAgentAmplitude]);
 
   const refreshInputDevices = useCallback(async (requestPermission = false) => {
     if (!navigator.mediaDevices?.enumerateDevices) {
@@ -526,6 +541,51 @@ function HeloAgentSession({
         });
       }
     };
+    const checkUserSilence = async () => {
+      const now = Date.now();
+      const reminderCount = silenceReminderCountRef.current;
+      const nextReminderAt = nextSilenceReminderAtRef.current;
+
+      if (reminderCount >= MAX_SILENCE_REMINDERS) {
+        console.log("[HELO SILENCE] reminder blocked: maximum reached", { reminderCount });
+        return toolResult({
+          ok: true,
+          shouldSpeak: false,
+          reminderCount,
+          maximumReminders: MAX_SILENCE_REMINDERS,
+          instruction: "Não fale. Use a ferramenta de sistema skip_turn e aguarde uma nova fala do paciente.",
+        });
+      }
+
+      if (now < nextReminderAt) {
+        const waitSeconds = Math.ceil((nextReminderAt - now) / 1000);
+        console.log("[HELO SILENCE] reminder blocked: waiting", { reminderCount, waitSeconds });
+        return toolResult({
+          ok: true,
+          shouldSpeak: false,
+          reminderCount,
+          maximumReminders: MAX_SILENCE_REMINDERS,
+          retryAfterSeconds: waitSeconds,
+          instruction: "Ainda não é hora de falar. Use a ferramenta de sistema skip_turn e permaneça em silêncio.",
+        });
+      }
+
+      const nextReminderCount = reminderCount + 1;
+      silenceReminderCountRef.current = nextReminderCount;
+      nextSilenceReminderAtRef.current = nextReminderCount === MAX_SILENCE_REMINDERS
+        ? Number.POSITIVE_INFINITY
+        : now + SILENCE_REMINDER_WAIT_MS[nextReminderCount];
+      const message = SILENCE_REMINDER_MESSAGES[reminderCount];
+      console.log("[HELO SILENCE] reminder allowed", { reminderCount: nextReminderCount });
+      return toolResult({
+        ok: true,
+        shouldSpeak: true,
+        reminderCount: nextReminderCount,
+        maximumReminders: MAX_SILENCE_REMINDERS,
+        message,
+        instruction: `Fale somente esta mensagem, sem acrescentar outra pergunta: \"${message}\"`,
+      });
+    };
     return {
     navigateHeloArea: async (parameters: Record<string, unknown>) => {
       // O nome do parâmetro varia conforme a declaração da tool no painel —
@@ -571,6 +631,7 @@ function HeloAgentSession({
         prompt: typeof parameters.prompt === "string" ? parameters.prompt : undefined,
       }));
     },
+    checkUserSilence,
     // O painel declara as tools como getVisibleHeloActions /
     // interactWithVisibleHeloUI; registramos ESSES nomes E os da spec para o
     // MESMO handler — o nome do painel não precisa mudar e a tool funciona
@@ -603,6 +664,7 @@ function HeloAgentSession({
     clientTools,
     onConnect: ({ conversationId }) => {
       console.log("[HELO AUDIO] agent connected", { conversationId });
+      resetSilenceReminderState();
       onError(null);
     },
     onDisconnect: (details) => {
@@ -619,6 +681,11 @@ function HeloAgentSession({
     },
     onModeChange: ({ mode }) => {
       console.log("[HELO AUDIO] agent mode", mode);
+    },
+    onMessage: ({ message, role }) => {
+      if (role !== "user" || !message.trim()) return;
+      resetSilenceReminderState();
+      console.log("[HELO SILENCE] reminder state reset by patient speech");
     },
     onVadScore: ({ vadScore }) => {
       const now = Date.now();
@@ -651,14 +718,22 @@ function HeloAgentSession({
   }, [patientId]);
 
   useEffect(() => {
+    let selectedDeviceFrame = 0;
+    let refreshDevicesFrame = 0;
     try {
       const stored = localStorage.getItem(MIC_DEVICE_STORAGE_KEY) || "";
       selectedInputDeviceIdRef.current = stored;
-      setSelectedInputDeviceId(stored);
+      selectedDeviceFrame = window.requestAnimationFrame(() => setSelectedInputDeviceId(stored));
     } catch {
       // Sem localStorage: usa o microfone padrão do navegador.
     }
-    void refreshInputDevices(false);
+    refreshDevicesFrame = window.requestAnimationFrame(() => {
+      void refreshInputDevices(false);
+    });
+    return () => {
+      if (selectedDeviceFrame) window.cancelAnimationFrame(selectedDeviceFrame);
+      if (refreshDevicesFrame) window.cancelAnimationFrame(refreshDevicesFrame);
+    };
   }, [refreshInputDevices]);
 
   useEffect(() => {
@@ -846,11 +921,9 @@ function HeloAgentSession({
   }, [sendActivity, status]);
 
   useEffect(() => {
-    if (pathname !== "/helo") {
-      setMount(null);
-      return;
-    }
-    const frame = window.requestAnimationFrame(() => setMount(document.getElementById("helo-agent-stage")));
+    const frame = window.requestAnimationFrame(() => {
+      setMount(pathname === "/helo" ? document.getElementById("helo-agent-stage") : null);
+    });
     return () => window.cancelAnimationFrame(frame);
   }, [pathname]);
 
@@ -996,7 +1069,7 @@ function HeloAgentSession({
   const agentScreenActions = useMemo<HeloUIAction[]>(() => {
     if (pathname !== "/helo") return [];
     const connected = status === "connected";
-    const actions: HeloUIAction[] = [
+    return [
       {
         actionId: "helo.conectar",
         label: "Conectar com Helo",
@@ -1027,33 +1100,32 @@ function HeloAgentSession({
         enabled: connected,
         run: () => end(),
       },
+      ...(connected
+        ? [
+            {
+              actionId: "gesto.confirmar",
+              label: "Registrar gesto do paciente: sim",
+              type: "gesture",
+              enabled: !gesturePending,
+              run: () => markGesture("sim"),
+            },
+            {
+              actionId: "gesto.reformular",
+              label: "Registrar gesto do paciente: não é bem isso",
+              type: "gesture",
+              enabled: !gesturePending,
+              run: () => markGesture("talvez"),
+            },
+            {
+              actionId: "gesto.recusar",
+              label: "Registrar gesto do paciente: não",
+              type: "gesture",
+              enabled: !gesturePending,
+              run: () => markGesture("nao"),
+            },
+          ] satisfies HeloUIAction[]
+        : []),
     ];
-    if (connected) {
-      actions.push(
-        {
-          actionId: "gesto.confirmar",
-          label: "Registrar gesto do paciente: sim",
-          type: "gesture",
-          enabled: !gesturePending,
-          run: () => markGesture("sim"),
-        },
-        {
-          actionId: "gesto.reformular",
-          label: "Registrar gesto do paciente: não é bem isso",
-          type: "gesture",
-          enabled: !gesturePending,
-          run: () => markGesture("talvez"),
-        },
-        {
-          actionId: "gesto.recusar",
-          label: "Registrar gesto do paciente: não",
-          type: "gesture",
-          enabled: !gesturePending,
-          run: () => markGesture("nao"),
-        }
-      );
-    }
-    return actions;
   }, [connect, end, gesturePending, markGesture, pathname, restarting, starting, status]);
   useRegisterHeloUIActions(agentScreenActions);
 

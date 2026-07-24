@@ -9,6 +9,7 @@ import type {
 } from "@/lib/types";
 import {
   DEFAULT_ITEMS,
+  DEFAULT_PATIENT_SETTINGS,
   modeSpeakerRole,
   modeRequiresConfirmation,
   PATIENT_SETTING_KEYS,
@@ -103,7 +104,10 @@ export async function createPatient(name: string): Promise<Patient> {
     seedDefaults(id, "rotina"),
     seedDefaults(id, "emergencia"),
     seedDefaults(id, "conversa"),
-    setPatientSettings(id, { [PATIENT_SETTING_KEYS.name]: patient.name }),
+    setPatientSettings(id, {
+      ...DEFAULT_PATIENT_SETTINGS,
+      [PATIENT_SETTING_KEYS.name]: patient.name,
+    }),
   ]);
   return patient;
 }
@@ -152,6 +156,9 @@ async function ensureMigrated(): Promise<void> {
   }
   if (!settingsCopy[PATIENT_SETTING_KEYS.name]) {
     settingsCopy[PATIENT_SETTING_KEYS.name] = legacy.patient_name || "Paciente";
+  }
+  for (const [key, value] of Object.entries(DEFAULT_PATIENT_SETTINGS)) {
+    if (settingsCopy[key] == null) settingsCopy[key] = value;
   }
   const legacyPeopleSnap = await col.legacyPeople().where("active", "==", 1).get();
   const batch = firestore.batch();

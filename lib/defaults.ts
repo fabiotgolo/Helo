@@ -99,6 +99,15 @@ export const PATIENT_SETTING_KEYS = {
   gestureNao: "gesture_nao_emoji",
 } as const;
 
+export const DEFAULT_PATIENT_SETTINGS: Readonly<Record<string, string>> = {
+  [PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled]: "true",
+};
+
+export function isHeloPersistentAssistantEnabled(settings: Record<string, string>): boolean {
+  const saved = settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled];
+  return saved == null ? true : saved === "true";
+}
+
 /** Chaves de voz — fora do fluxo genérico de settings (rotas dedicadas). */
 export const VOICE_SETTING_KEYS: readonly string[] = [
   PATIENT_SETTING_KEYS.voiceId,

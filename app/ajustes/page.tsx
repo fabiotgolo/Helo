@@ -13,7 +13,7 @@ import { HeloVoiceSettings } from "@/components/helo-voice-settings";
 import { GESTURES, type Gesture, type HeloItemMode, type ModeItem } from "@/lib/types";
 import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
-import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
+import { isHeloPersistentAssistantEnabled, PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { readSearchParams, safeReturnTo } from "@/lib/edit-link";
 
 // Vozes visíveis ao usuário: SOMENTE o catálogo interno aprovado pelo Admin
@@ -84,7 +84,7 @@ export default function AjustesPage() {
   const [speechStyle, setSpeechStyle] = useState("");
   const [avoidedTopics, setAvoidedTopics] = useState("");
   const [heloGreeting, setHeloGreeting] = useState("");
-  const [persistentAssistantEnabled, setPersistentAssistantEnabled] = useState(false);
+  const [persistentAssistantEnabled, setPersistentAssistantEnabled] = useState(true);
   const [gestureEmojis, setGestureEmojis] = useState<Record<Gesture, string>>({
     sim: "",
     talvez: "",
@@ -117,13 +117,16 @@ export default function AjustesPage() {
     returnTo: string | null;
   }>({ mode: null, itemId: null, returnTo: null });
   useEffect(() => {
-    const q = readSearchParams();
-    const mode = q.get("editMode") as HeloItemMode | null;
-    setEditContext({
-      mode: mode === "rotina" || mode === "emergencia" || mode === "conversa" ? mode : null,
-      itemId: q.get("itemId"),
-      returnTo: safeReturnTo(q.get("returnTo")),
+    const frame = window.requestAnimationFrame(() => {
+      const q = readSearchParams();
+      const mode = q.get("editMode") as HeloItemMode | null;
+      setEditContext({
+        mode: mode === "rotina" || mode === "emergencia" || mode === "conversa" ? mode : null,
+        itemId: q.get("itemId"),
+        returnTo: safeReturnTo(q.get("returnTo")),
+      });
     });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   // Client Tools só podem escolher seções conhecidas. A query não concede
@@ -141,18 +144,19 @@ export default function AjustesPage() {
   // O formulário espelha as configurações do paciente ativo; trocar de
   // paciente recarrega tudo — nada de um vaza para o outro.
   useEffect(() => {
-    setPatientName(settings[PATIENT_SETTING_KEYS.name] ?? "");
-    setSpeechStyle(settings[PATIENT_SETTING_KEYS.speechStyle] ?? "");
-    setAvoidedTopics(settings[PATIENT_SETTING_KEYS.avoidedTopics] ?? "");
-    setHeloGreeting(settings[PATIENT_SETTING_KEYS.heloGreeting] ?? "");
-    setPersistentAssistantEnabled(
-      settings[PATIENT_SETTING_KEYS.heloPersistentAssistantEnabled] === "true"
-    );
-    setGestureEmojis({
-      sim: settings[GESTURE_EMOJI_KEYS.sim] ?? "",
-      talvez: settings[GESTURE_EMOJI_KEYS.talvez] ?? "",
-      nao: settings[GESTURE_EMOJI_KEYS.nao] ?? "",
+    const frame = window.requestAnimationFrame(() => {
+      setPatientName(settings[PATIENT_SETTING_KEYS.name] ?? "");
+      setSpeechStyle(settings[PATIENT_SETTING_KEYS.speechStyle] ?? "");
+      setAvoidedTopics(settings[PATIENT_SETTING_KEYS.avoidedTopics] ?? "");
+      setHeloGreeting(settings[PATIENT_SETTING_KEYS.heloGreeting] ?? "");
+      setPersistentAssistantEnabled(isHeloPersistentAssistantEnabled(settings));
+      setGestureEmojis({
+        sim: settings[GESTURE_EMOJI_KEYS.sim] ?? "",
+        talvez: settings[GESTURE_EMOJI_KEYS.talvez] ?? "",
+        nao: settings[GESTURE_EMOJI_KEYS.nao] ?? "",
+      });
     });
+    return () => window.cancelAnimationFrame(frame);
   }, [settings]);
 
   // Estado de voz sempre no escopo do paciente ativo: trocar de paciente
@@ -174,8 +178,11 @@ export default function AjustesPage() {
   }, [patientId]);
 
   useEffect(() => {
-    setVoicesData(null);
-    void loadVoices();
+    const frame = window.requestAnimationFrame(() => {
+      setVoicesData(null);
+      void loadVoices();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [loadVoices]);
 
   const loadPeople = useCallback(async () => {
@@ -190,8 +197,11 @@ export default function AjustesPage() {
   }, [patientId]);
 
   useEffect(() => {
-    setPeople([]);
-    void loadPeople();
+    const frame = window.requestAnimationFrame(() => {
+      setPeople([]);
+      void loadPeople();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [loadPeople]);
 
   useEffect(() => {
@@ -931,10 +941,13 @@ function ModeItemsEditor({
     const item = items.find((i) => i.id === focusItemId);
     if (!item) return;
     focusApplied.current = true;
-    setEditing(item.id);
-    setEditLabel(item.label);
-    setEditSpoken(item.spokenText);
-    sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const frame = window.requestAnimationFrame(() => {
+      setEditing(item.id);
+      setEditLabel(item.label);
+      setEditSpoken(item.spokenText);
+      sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [focusItemId, items]);
 
   const api = useCallback(
