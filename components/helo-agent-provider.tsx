@@ -45,7 +45,7 @@ type HeloApiOverrides = { tts?: { voice_id?: string } };
 type HeloSessionOverrides = NonNullable<SessionConfig["overrides"]>;
 type ActivitySource = "gesture" | "typing" | "field-focus" | "heartbeat";
 type ConnectionStatus = "good" | "fair" | "poor" | "offline";
-type MusicPlayerStatus = "idle" | "generating" | "playing" | "error";
+type MusicPlayerStatus = "idle" | "generating" | "playing" | "paused" | "ended" | "error";
 type MusicTrackSource = "generated" | "history" | null;
 type MusicPlayerState = {
   status: MusicPlayerStatus;
@@ -145,10 +145,48 @@ function connectionStatusFromLatency(latencyMs: number): ConnectionStatus {
 }
 
 function formatPlaybackTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
   const wholeSeconds = Math.floor(seconds);
   const minutes = Math.floor(wholeSeconds / 60);
-  return `${minutes}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+  return `${String(minutes).padStart(2, "0")}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-4">
+      <path d="M8 5.75v12.5L18 12 8 5.75Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-4">
+      <path d="M7 5.75h3.5v12.5H7V5.75Zm6.5 0H17v12.5h-3.5V5.75Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ReplayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-4">
+      <path
+        d="M7.9 7H14a5 5 0 1 1-4.2 7.72 1 1 0 1 0-1.68 1.08A7 7 0 1 0 14 5H7.9l1.35-1.35a1 1 0 0 0-1.42-1.42L4.78 5.3a1 1 0 0 0 0 1.4l3.05 3.07a1 1 0 0 0 1.42-1.42L7.9 7Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-4">
+      <path
+        d="m6.7 5.3 5.3 5.3 5.3-5.3a1 1 0 1 1 1.4 1.4L13.4 12l5.3 5.3a1 1 0 0 1-1.4 1.4L12 13.4l-5.3 5.3a1 1 0 0 1-1.4-1.4l5.3-5.3-5.3-5.3a1 1 0 0 1 1.4-1.4Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
 }
 
 type HeloAgentContextValue = {
@@ -397,14 +435,18 @@ function HeloAgentSession({
 
   const finishMusicPlayback = useCallback((
     outcome: MusicToolOutcome,
-    options?: { error?: string; restoreConversation?: boolean; updateState?: boolean }
+    options?: { error?: string; restoreConversation?: boolean; updateState?: boolean; persistent?: boolean }
   ) => {
     const audio = generatedMusicRef.current;
-    generatedMusicRef.current = null;
-    if (audio) {
+    const persistent = options?.persistent === true && audio != null;
+    if (audio && !persistent) {
+      generatedMusicRef.current = null;
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
+    } else if (audio) {
+      audio.pause();
+      if (outcome === "ended") audio.currentTime = 0;
     }
 
     const restoreConversation = options?.restoreConversation !== false;
@@ -426,6 +468,14 @@ function HeloAgentSession({
     completeTool?.(outcome);
 
     if (options?.updateState === false) return;
+    if (persistent) {
+      setMusicPlayer((current) => ({
+        ...current,
+        status: outcome === "ended" ? "ended" : "paused",
+        currentTime: outcome === "ended" ? 0 : audio.currentTime,
+      }));
+      return;
+    }
     setMusicPlayer(
       outcome === "failed"
         ? {
@@ -442,6 +492,47 @@ function HeloAgentSession({
     musicGenerationAbortRef.current = null;
     finishMusicPlayback("cancelled");
   }, [finishMusicPlayback]);
+
+  const pauseMusicPlayback = useCallback(() => {
+    finishMusicPlayback("cancelled", { persistent: true });
+  }, [finishMusicPlayback]);
+
+  const resumeMusicPlayback = useCallback(async () => {
+    const audio = generatedMusicRef.current;
+    if (!audio) return;
+    try {
+      if (musicPlayer.status === "ended") audio.currentTime = 0;
+      musicPreviousMutedRef.current = currentMutedRef.current;
+      musicMicSuspendedRef.current = true;
+      conversationAudioControlsRef.current?.setMuted(true);
+      conversationAudioControlsRef.current?.setVolume({ volume: 0 });
+      setMusicPlayer((current) => ({
+        ...current,
+        status: "playing",
+        currentTime: audio.currentTime,
+        error: "",
+      }));
+      await audio.play();
+    } catch (caught) {
+      const error = caught instanceof Error ? caught.message : "Não foi possível retomar a música.";
+      finishMusicPlayback("failed", { error });
+    }
+  }, [finishMusicPlayback, musicPlayer.status]);
+
+  const replayMusicPlayback = useCallback(async () => {
+    const audio = generatedMusicRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    setMusicPlayer((current) => ({ ...current, currentTime: 0 }));
+    await resumeMusicPlayback();
+  }, [resumeMusicPlayback]);
+
+  const seekMusicPlayback = useCallback((time: number) => {
+    const audio = generatedMusicRef.current;
+    if (!audio || !Number.isFinite(time)) return;
+    audio.currentTime = Math.max(0, Math.min(time, Number.isFinite(audio.duration) ? audio.duration : time));
+    setMusicPlayer((current) => ({ ...current, currentTime: audio.currentTime }));
+  }, []);
 
   const playMusicTrack = useCallback(async (track: {
     audioUrl: string;
@@ -473,8 +564,8 @@ function HeloAgentSession({
       }));
     });
     audio.addEventListener("ended", () => {
-      if (generatedMusicRef.current === audio) finishMusicPlayback("ended");
-    }, { once: true });
+      if (generatedMusicRef.current === audio) finishMusicPlayback("ended", { persistent: true });
+    });
     audio.addEventListener("error", () => {
       if (generatedMusicRef.current === audio) {
         finishMusicPlayback("failed", { error: "O arquivo da música não pôde ser reproduzido." });
@@ -1603,12 +1694,21 @@ function HeloAgentSession({
             <section className="flex w-full flex-col items-center gap-4 pt-2" aria-label="Atividade do paciente">
               {musicPlayer.status !== "idle" && (
                 <div
-                  className="flex w-full max-w-md flex-col gap-3 rounded-2xl border border-line bg-card/80 p-4 text-left shadow-soft"
+                  className="relative flex w-full max-w-md flex-col gap-4 rounded-2xl border border-line bg-card/90 p-4 text-left shadow-soft"
                   aria-live="polite"
                   aria-label="Reprodutor de música da Helo"
                 >
+                  <button
+                    type="button"
+                    onClick={stopGeneratedMusic}
+                    className="absolute right-3 top-3 grid size-10 place-items-center rounded-full text-ink-mute transition-colors hover:bg-line/60 hover:text-ink"
+                    aria-label="Fechar reprodutor de música"
+                    title="Fechar"
+                  >
+                    <CloseIcon />
+                  </button>
                   {musicPlayer.status === "generating" ? (
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 pr-12">
                       <span
                         className="size-5 shrink-0 animate-spin rounded-full border-2 border-line border-t-accent"
                         aria-hidden="true"
@@ -1620,9 +1720,9 @@ function HeloAgentSession({
                         <p className="mt-1 line-clamp-2 text-xs text-ink-soft">{musicPlayer.prompt}</p>
                       </div>
                     </div>
-                  ) : musicPlayer.status === "playing" ? (
+                  ) : musicPlayer.status === "playing" || musicPlayer.status === "paused" || musicPlayer.status === "ended" ? (
                     <>
-                      <div className="min-w-0">
+                      <div className="min-w-0 pr-12">
                         <p className="truncate text-sm font-medium text-ink">{musicPlayer.title}</p>
                         <p className="mt-1 line-clamp-2 text-xs text-ink-soft">
                           {musicPlayer.source === "history" && musicPlayer.period
@@ -1633,14 +1733,19 @@ function HeloAgentSession({
                         </p>
                       </div>
                       <div>
-                        <div
-                          role="progressbar"
-                          aria-label="Progresso da música"
-                          aria-valuemin={0}
-                          aria-valuemax={Math.max(1, musicPlayer.duration)}
-                          aria-valuenow={Math.min(musicPlayer.currentTime, Math.max(1, musicPlayer.duration))}
-                          className="h-2 overflow-hidden rounded-full bg-line"
-                        >
+                        <div className="mb-2 flex items-center justify-between text-xs tabular-nums text-ink-mute">
+                          <span>
+                            {formatPlaybackTime(musicPlayer.currentTime)} / {formatPlaybackTime(musicPlayer.duration)}
+                          </span>
+                          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                            {musicPlayer.status === "playing"
+                              ? "Tocando"
+                              : musicPlayer.status === "ended"
+                                ? "Finalizada"
+                                : "Pausada"}
+                          </span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-line" aria-hidden="true">
                           <div
                             className="h-full rounded-full bg-accent transition-[width] duration-200"
                             style={{
@@ -1652,7 +1757,18 @@ function HeloAgentSession({
                             }}
                           />
                         </div>
-                        <div className="mt-1 flex justify-between text-xs tabular-nums text-ink-mute">
+                        <input
+                          type="range"
+                          min={0}
+                          max={Math.max(1, musicPlayer.duration)}
+                          step={0.1}
+                          value={Math.min(musicPlayer.currentTime, Math.max(1, musicPlayer.duration))}
+                          onChange={(event) => seekMusicPlayback(Number(event.target.value))}
+                          aria-label="Posição da música"
+                          aria-valuetext={`${formatPlaybackTime(musicPlayer.currentTime)} de ${formatPlaybackTime(musicPlayer.duration)}`}
+                          className="mt-2 h-10 w-full cursor-pointer accent-[var(--color-accent)]"
+                        />
+                        <div className="flex justify-between text-xs tabular-nums text-ink-mute">
                           <span>{formatPlaybackTime(musicPlayer.currentTime)}</span>
                           <span>{formatPlaybackTime(musicPlayer.duration)}</span>
                         </div>
@@ -1661,28 +1777,64 @@ function HeloAgentSession({
                   ) : (
                     <p role="alert" className="text-sm text-danger">{musicPlayer.error}</p>
                   )}
-                  <button
-                    type="button"
-                    onClick={stopGeneratedMusic}
-                    className={
-                      musicPlayer.status === "error"
-                        ? "min-h-11 w-full rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium text-ink transition-colors hover:border-ink-mute"
-                        : "min-h-11 w-full rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong"
-                    }
-                    aria-label={
-                      musicPlayer.status === "generating"
-                        ? "Cancelar geração da música"
-                        : musicPlayer.status === "playing"
-                          ? "Parar música e reativar a conversa com a Helo"
-                          : "Fechar mensagem de erro da música"
-                    }
-                  >
-                    {musicPlayer.status === "generating"
-                      ? "Cancelar"
-                      : musicPlayer.status === "playing"
-                        ? "Parar Música"
-                        : "Fechar"}
-                  </button>
+                  {musicPlayer.status === "generating" ? (
+                    <button
+                      type="button"
+                      onClick={stopGeneratedMusic}
+                      className="min-h-11 rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong"
+                      aria-label="Cancelar geração da música"
+                    >
+                      Cancelar
+                    </button>
+                  ) : musicPlayer.status !== "error" ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={
+                          musicPlayer.status === "playing"
+                            ? pauseMusicPlayback
+                            : () => void resumeMusicPlayback()
+                        }
+                        className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-strong"
+                        aria-label={
+                          musicPlayer.status === "playing"
+                            ? "Pausar música e reativar a conversa com a Helo"
+                            : musicPlayer.status === "ended"
+                              ? "Tocar música novamente desde o começo"
+                              : "Retomar música"
+                        }
+                        title={
+                          musicPlayer.status === "playing"
+                            ? "Pausar"
+                            : musicPlayer.status === "ended"
+                              ? "Tocar novamente"
+                              : "Retomar"
+                        }
+                      >
+                        {musicPlayer.status === "playing"
+                          ? <PauseIcon />
+                          : musicPlayer.status === "ended"
+                            ? <ReplayIcon />
+                            : <PlayIcon />}
+                        <span>
+                          {musicPlayer.status === "playing"
+                            ? "Pausar"
+                            : musicPlayer.status === "ended"
+                              ? "Tocar novamente"
+                              : "Retomar"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void replayMusicPlayback()}
+                        className="grid size-11 shrink-0 place-items-center rounded-full border border-line bg-card text-ink transition-colors hover:border-ink-mute hover:bg-line/30"
+                        aria-label="Tocar novamente desde o início"
+                        title="Tocar novamente"
+                      >
+                        <ReplayIcon />
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               )}
               <GestureTriplet onGesture={markGesture} size="compacto" disabled={gesturePending} highlighted={gesturesHighlighted} />

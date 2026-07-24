@@ -20,9 +20,12 @@ function formattedDate(value: string): string {
   }).format(date).replace(",", " às");
 }
 
-export function PatientPlaylistWidget({ patientId }: { patientId: number }) {
+export function PatientPlaylistWidget({ patientId, patientName }: { patientId: number; patientName?: string | null }) {
   const [tracks, setTracks] = useState<PatientPlaylistTrack[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const playlistTitle = patientName?.trim()
+    ? `Playlist de ${patientName.trim()}`
+    : "Playlist do Paciente";
 
   useEffect(() => {
     let stale = false;
@@ -45,7 +48,7 @@ export function PatientPlaylistWidget({ patientId }: { patientId: number }) {
   }, [patientId]);
 
   return (
-    <Card title="Playlist da Helo" subtitle={tracks ? `${tracks.length} música${tracks.length === 1 ? "" : "s"}` : "carregando"}>
+    <Card title={playlistTitle} subtitle={tracks ? `${tracks.length} música${tracks.length === 1 ? "" : "s"}` : "carregando"}>
       {failed ? (
         <p role="alert" className="text-sm text-danger">Não foi possível carregar a playlist.</p>
       ) : tracks == null ? (

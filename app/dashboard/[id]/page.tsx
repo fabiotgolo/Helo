@@ -350,7 +350,7 @@ export default function DashboardIndividualPage() {
             <button
               type="button"
               onClick={() => {
-                let stale = false;
+                const stale = false;
                 void load(() => stale);
               }}
               className="mt-4 rounded-full bg-accent px-6 py-3 font-medium text-on-accent hover:bg-accent-strong"
@@ -419,7 +419,7 @@ export default function DashboardIndividualPage() {
                 )}
               </Card>
 
-              <PatientPlaylistWidget patientId={patientId} />
+              <PatientPlaylistWidget patientId={patientId} patientName={patient?.name} />
 
               {/* ——— Resumo de Rotina ——— */}
               <Card
