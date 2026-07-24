@@ -44,6 +44,7 @@ import type { Gesture } from "@/lib/types";
 type HeloApiOverrides = { tts?: { voice_id?: string } };
 type HeloSessionOverrides = NonNullable<SessionConfig["overrides"]>;
 type ActivitySource = "gesture" | "typing" | "field-focus" | "heartbeat";
+type ConnectionStatus = "good" | "fair" | "poor" | "offline";
 type ElevenLabsErrorEvent = { error_event?: Record<string, unknown> };
 type MicInputDevice = { deviceId: string; label: string };
 type PatchableConversation = ElevenLabsConversation & {
@@ -93,6 +94,19 @@ const SILENCE_REMINDER_MESSAGES = [
   "Ainda precisa de alguma ajuda?",
   "Tudo bem. Vou permanecer disponível quando você quiser continuar.",
 ] as const;
+
+const CONNECTION_STATUS_DETAILS: Record<ConnectionStatus, { label: string; dotClassName: string }> = {
+  good: { label: "Conexão excelente", dotClassName: "bg-green-500" },
+  fair: { label: "Conexão instável", dotClassName: "bg-yellow-500" },
+  poor: { label: "Conexão fraca", dotClassName: "bg-red-500" },
+  offline: { label: "Sem conexão", dotClassName: "bg-red-500" },
+};
+
+function connectionStatusFromLatency(latencyMs: number): ConnectionStatus {
+  if (latencyMs < 150) return "good";
+  if (latencyMs <= 400) return "fair";
+  return "poor";
+}
 
 type HeloAgentContextValue = {
   activeSessionPatientId: number | null;
@@ -229,6 +243,7 @@ function HeloAgentSession({
   const [inputDevices, setInputDevices] = useState<MicInputDevice[]>([]);
   const [selectedInputDeviceId, setSelectedInputDeviceId] = useState("");
   const [inputDeviceError, setInputDeviceError] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("offline");
   const startedRef = useRef(false);
   const startingRef = useRef(false);
   const connectedRef = useRef(false);
@@ -643,10 +658,14 @@ function HeloAgentSession({
     onConnect: ({ conversationId }) => {
       console.log("[HELO AUDIO] agent connected", { conversationId });
       resetSilenceReminderState();
+      // Uma sessão conectada e com o navegador online começa saudável. O RTT
+      // real do stream, recebido em onPing, pode rebaixá-la para amarelo ou vermelho.
+      setConnectionStatus(navigator.onLine ? "good" : "offline");
       onError(null);
     },
     onDisconnect: (details) => {
       console.log("[HELO AUDIO] agent disconnected", details);
+      setConnectionStatus("offline");
       clearLocalSessionState();
       if (details.reason !== "user") {
         onError("A conexão da Helo caiu. Se acontecer novamente, selecione o microfone físico e conecte de novo.");
@@ -654,6 +673,7 @@ function HeloAgentSession({
     },
     onError: (message, context) => {
       console.error("[HELO AUDIO] agent error", message, context);
+      setConnectionStatus("offline");
       clearLocalSessionState();
       onError(message || "A conversa foi interrompida. Verifique sua conexão e tente novamente.");
     },
@@ -670,6 +690,16 @@ function HeloAgentSession({
       if (vadScore > MIC_ACTIVITY_THRESHOLD && now - lastMicDebugLogRef.current > MIC_DEBUG_LOG_MS) {
         lastMicDebugLogRef.current = now;
         console.log("[HELO AUDIO] voice activity detected", { vadScore: Number(vadScore.toFixed(3)) });
+      }
+    },
+    onPing: ({ ping_ms }) => {
+      if (statusRef.current !== "connected") return;
+      if (!navigator.onLine) {
+        setConnectionStatus("offline");
+        return;
+      }
+      if (typeof ping_ms === "number" && Number.isFinite(ping_ms)) {
+        setConnectionStatus(connectionStatusFromLatency(ping_ms));
       }
     },
     onDebug: (event: unknown) => {
@@ -730,8 +760,29 @@ function HeloAgentSession({
     if (status === "disconnected") {
       activeUntilRef.current = 0;
       lastActivitySentAtRef.current = 0;
+      setConnectionStatus("offline");
+    } else if (!navigator.onLine) {
+      setConnectionStatus("offline");
+    } else if (status === "connecting") {
+      // Enquanto o primeiro ping do SDK não chega, a conexão ainda está em avaliação.
+      setConnectionStatus("fair");
     }
   }, [status]);
+
+  useEffect(() => {
+    const markOnline = () => {
+      setConnectionStatus(statusRef.current === "connected" ? "good" : "offline");
+    };
+    const markOffline = () => setConnectionStatus("offline");
+
+    window.addEventListener("online", markOnline);
+    window.addEventListener("offline", markOffline);
+    if (!navigator.onLine) markOffline();
+    return () => {
+      window.removeEventListener("online", markOnline);
+      window.removeEventListener("offline", markOffline);
+    };
+  }, []);
 
   useEffect(() => {
     if (status !== "connected" || !isMuted) return;
@@ -1110,6 +1161,7 @@ function HeloAgentSession({
       : status === "connected"
         ? "Aguardando fala no microfone selecionado"
         : "Aguardando sinal do microfone";
+  const connectionStatusDetails = CONNECTION_STATUS_DETAILS[connectionStatus];
 
   const stage = (
     <main className="relative flex flex-1 items-center px-4 pb-8 sm:px-6">
@@ -1190,7 +1242,12 @@ function HeloAgentSession({
       {mount && createPortal(stage, mount)}
       {sessionVisible && (
         <aside aria-live="polite" className="fixed bottom-24 right-4 z-[70] flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-line bg-card/95 px-4 py-3 shadow-soft backdrop-blur-sm sm:bottom-4">
-          <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden="true" />
+          <span
+            role="img"
+            aria-label={connectionStatusDetails.label}
+            title={connectionStatusDetails.label}
+            className={`size-2 shrink-0 rounded-full transition-colors duration-300 ${connectionStatusDetails.dotClassName}`}
+          />
           <div className="min-w-0"><p className="text-sm font-medium text-ink">{label}</p><p className="text-xs text-ink-soft">Helo ativa</p></div>
           <button type="button" onClick={end} className="shrink-0 rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink hover:border-ink-mute">Encerrar Helo</button>
         </aside>
