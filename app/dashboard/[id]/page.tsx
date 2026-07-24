@@ -286,7 +286,7 @@ export default function DashboardIndividualPage() {
             Helo — Relatório observacional · {patient?.name ?? `Paciente ${patientId}`}
           </h1>
           <p className="text-sm text-ink-soft">
-            Período: {periodLabel} · Gerado em {new Date().toLocaleString("pt-BR")}
+            Período: {periodLabel} · Gerado em {stats?.geradoEm ? new Date(stats.geradoEm).toLocaleString("pt-BR") : "—"}
           </p>
           <p className="mt-1 text-xs text-ink-mute">
             Este relatório é observacional e não constitui diagnóstico médico.

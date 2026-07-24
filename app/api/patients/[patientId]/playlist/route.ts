@@ -13,20 +13,28 @@ function canManagePlaylist(auth: {
 }
 
 /** Obtém apenas caminhos da pasta de músicas do bucket desta aplicação. */
-function storagePathFromUrl(value: string): string | null {
+type StorageTarget = { bucket?: string; path: string };
+
+function storageTargetFromUrl(value: string): StorageTarget | null {
   try {
     const url = new URL(value);
-    const marker = "/o/";
-    const markerIndex = url.pathname.indexOf(marker);
-    if (markerIndex >= 0) {
-      const path = decodeURIComponent(url.pathname.slice(markerIndex + marker.length));
-      return path.startsWith("musics/") ? path : null;
+    if (url.hostname === "firebasestorage.googleapis.com") {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const bucketIndex = segments.indexOf("b");
+      const objectIndex = segments.indexOf("o");
+      const bucket = bucketIndex >= 0 ? segments[bucketIndex + 1] : "";
+      const path = objectIndex >= 0
+        ? decodeURIComponent(segments.slice(objectIndex + 1).join("/"))
+        : "";
+      return bucket && path.startsWith("musics/") ? { bucket, path } : null;
     }
     if (url.hostname === "storage.googleapis.com") {
       const segments = url.pathname.split("/").filter(Boolean);
       // URLs deste bucket têm o bucket como primeiro segmento.
       const path = decodeURIComponent(segments.slice(1).join("/"));
-      return path.startsWith("musics/") ? path : null;
+      return segments[0] && path.startsWith("musics/")
+        ? { bucket: segments[0], path }
+        : null;
     }
   } catch {
     return null;
@@ -92,13 +100,22 @@ export async function DELETE(
 
   const data = track.data() ?? {};
   const storedPath = typeof data.storagePath === "string" ? data.storagePath.trim() : "";
-  const storagePath = storedPath.startsWith("musics/")
-    ? storedPath
-    : storagePathFromUrl(typeof data.audioUrl === "string" ? data.audioUrl : "");
+  const targetFromUrl = storageTargetFromUrl(typeof data.audioUrl === "string" ? data.audioUrl : "");
+  const storageTarget = storedPath.startsWith("musics/")
+    ? { path: storedPath, bucket: targetFromUrl?.bucket }
+    : targetFromUrl;
 
   try {
-    if (storagePath) {
-      await getStorage().bucket().file(storagePath).delete({ ignoreNotFound: true });
+    if (storageTarget) {
+      // App Hosting não configura sempre um bucket padrão no Admin SDK. O
+      // bucket é extraído da URL pública gerada pela Function, garantindo que
+      // a exclusão atinja o mesmo arquivo — inclusive no bucket moderno
+      // *.firebasestorage.app.
+      const fallbackBucket = process.env.FIREBASE_STORAGE_BUCKET ?? "helo-app-7fbf8.firebasestorage.app";
+      await getStorage()
+        .bucket(storageTarget.bucket ?? fallbackBucket)
+        .file(storageTarget.path)
+        .delete({ ignoreNotFound: true });
     }
     await trackRef.delete();
   } catch (error) {
