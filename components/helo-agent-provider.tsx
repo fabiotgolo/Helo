@@ -107,7 +107,7 @@ const SILENCE_REMINDER_MESSAGES = [
 ] as const;
 const GENERATE_MUSIC_ENDPOINT =
   process.env.NEXT_PUBLIC_GENERATE_MUSIC_URL ||
-  "https://helo-app-7fbf8.web.app/generateMusic";
+  "https://heloapp.web.app/generateMusic";
 const INITIAL_MUSIC_PLAYER_STATE: MusicPlayerState = {
   status: "idle",
   prompt: "",
