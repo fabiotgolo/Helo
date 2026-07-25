@@ -242,9 +242,8 @@ export default function AtividadesPage() {
 
   if (view.kind === "sessao") {
     return (
-      <div className="relative flex flex-1 flex-col">
-        <OverlayVeil />
-        <main className="relative flex w-full flex-1 flex-col items-center px-0 pb-6">
+      <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm">
+        <main className="relative mx-auto flex min-h-full w-full max-w-4xl flex-col items-center justify-center">
           <SessionPlayer
             run={view.run}
             patientId={patientId}

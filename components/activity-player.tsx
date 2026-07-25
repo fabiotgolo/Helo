@@ -432,6 +432,16 @@ export function SessionPlayer({
     [patientId, run.id]
   );
 
+  // Fechar é diferente de concluir: volta ao menu sem diálogo e marca a
+  // execução como abandonada. As respostas já gravadas permanecem no histórico,
+  // mas uma atividade visual (carrossel) nunca cria uma conclusão artificial.
+  const closeSession = useCallback(() => {
+    if (finishedRef.current) return;
+    endRun("abandonada");
+    stop();
+    onExit({ status: "abandonada", respondidos, total: questionItems.length });
+  }, [endRun, onExit, questionItems.length, respondidos, stop]);
+
   // Sessão interrompida (troca de página, fechamento) → abandonada, com
   // keepalive — nunca fica "em andamento" para sempre em silêncio.
   // O abandono na desmontagem é ADIADO e cancelado se o efeito remontar:
@@ -451,6 +461,16 @@ export function SessionPlayer({
       stop();
     };
   }, [endRun, stop]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeSession();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [closeSession]);
 
   // Marca o gesto do paciente para UMA alternativa e persiste o mapa
   // completo do item. Re-tocar corrige livremente — a correção é explícita
@@ -645,6 +665,7 @@ export function SessionPlayer({
   const registryActions = useMemo<HeloUIAction[]>(() => {
     if (!item) return [];
     const lastItem = idx === items.length - 1;
+    const visualOnly = questionItems.length === 0;
     const question = isQuestionItem(item);
     const gesturesOn = question || item.gesturesEnabled;
     const fromAgent = (payload?: Record<string, unknown>) => payload?.__source === "agent";
@@ -728,28 +749,21 @@ export function SessionPlayer({
       },
       {
         actionId: "atividades.concluir",
-        label: "Concluir sessão",
+        label: visualOnly ? "Fechar atividade" : "Concluir sessão",
         type: "activity",
         enabled: lastItem,
-        run: () => void finish(),
+        run: () => (visualOnly ? closeSession() : void finish()),
       },
       {
         // Encerrar sessão: também passa pela regra de saída (modal só se houver
         // resposta; sem resposta, sai direto). Vai para o Menu de atividades.
         actionId: "atividades.encerrar",
-        label: "Encerrar sessão",
+        label: "Fechar atividade",
         type: "activity",
         enabled: true,
-        run: (payload) => {
-          if (fromAgent(payload)) {
-            void confirmCompleteThen(goToActivityMenu);
-          } else {
-            return confirmCompleteThen(goToActivityMenu);
-          }
-        },
+        run: () => closeSession(),
         toolSuccess: {
           result: "handled",
-          mayRequireDialogChoice: respondidos > 0,
           suppressAssistantNarration: true,
         },
       },
@@ -823,7 +837,7 @@ export function SessionPlayer({
       });
     }
     return list;
-  }, [confirmCompleteThen, finish, goToActivityMenu, goToManage, idx, item, items.length, pick, respondidos]);
+  }, [closeSession, confirmCompleteThen, finish, goToActivityMenu, goToManage, idx, item, items.length, pick, questionItems.length, respondidos]);
   useRegisterHeloUIActions(registryActions);
 
   // Exercício com respostas faladas: publica o sub-estado para o Agent, com a
@@ -860,12 +874,15 @@ export function SessionPlayer({
 
   if (!item) return null;
   const last = idx === items.length - 1;
+  const visualOnly = questionItems.length === 0;
   const showGestures = isQuestion || item.gesturesEnabled;
   const hasOptions = item.options.length > 0;
   const itemAnswered = itemAnswers && Object.keys(itemAnswers).length > 0;
 
   return (
     <section
+      role="dialog"
+      aria-modal="true"
       aria-label={`Sessão: ${run.templateTitle}`}
       className="fade-rise pointer-events-auto mx-auto flex w-full max-w-3xl flex-col items-center gap-6 px-4 py-6"
     >
@@ -930,10 +947,10 @@ export function SessionPlayer({
           )}
           <button
             type="button"
-            onClick={() => void confirmCompleteThen(goToActivityMenu)}
-            className="rounded-full border border-line bg-card px-4 py-2 text-sm font-medium hover:border-ink-mute"
+            onClick={closeSession}
+            className="rounded-xl border border-line bg-card px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-cream"
           >
-            Encerrar sessão
+            Fechar
           </button>
         </div>
       </header>
@@ -1003,10 +1020,10 @@ export function SessionPlayer({
         {last ? (
           <button
             type="button"
-            onClick={() => void finish()}
+            onClick={visualOnly ? closeSession : () => void finish()}
             className="min-h-12 rounded-full bg-accent px-8 py-2.5 font-medium text-on-accent hover:bg-accent-strong"
           >
-            Concluir sessão
+            {visualOnly ? "Fechar" : "Concluir sessão"}
           </button>
         ) : (
           <button
