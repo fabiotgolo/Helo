@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ContextualEdit } from "@/components/contextual-edit";
+import { ModalShell } from "@/components/modal-shell";
 import { useHeloDialog } from "@/components/helo-dialog";
 import { useHeloAgent } from "@/components/helo-agent-provider";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
@@ -161,27 +162,26 @@ export function ActivityMediaView({
         })}
       </div>
       {zoom && (
-        <div
-          role="dialog"
-          aria-label="Imagem ampliada"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
-          onClick={() => setZoom(null)}
+        <ModalShell
+          onClose={() => setZoom(null)}
+          label="Imagem ampliada"
+          className="flex max-w-4xl items-center justify-center bg-card/90 p-3 sm:p-4"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={zoom}
             alt="Imagem ampliada"
-            className="max-h-full max-w-full rounded-xl object-contain"
+            className="max-h-[75vh] max-w-full rounded-2xl object-contain"
           />
           <button
             type="button"
             onClick={() => setZoom(null)}
             aria-label="Fechar imagem ampliada"
-            className="absolute right-4 top-4 rounded-full bg-white/90 px-4 py-2 text-sm font-medium"
+            className="absolute right-5 top-5 rounded-xl border border-line bg-card px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-cream"
           >
             ✕ Fechar
           </button>
-        </div>
+        </ModalShell>
       )}
     </>
   );

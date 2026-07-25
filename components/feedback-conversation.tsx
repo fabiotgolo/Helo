@@ -8,6 +8,7 @@ import type {
   FeedbackResolutionSource,
   FeedbackType,
 } from "@/lib/feedback-types";
+import { ModalShell } from "@/components/modal-shell";
 
 const input =
   "min-h-11 w-full rounded-2xl border border-line bg-card px-4 py-2.5 outline-none focus:border-ink-mute";
@@ -236,15 +237,15 @@ export function FeedbackConversation({
         </form>
       )}
       {showResolveConfirmation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby={`resolve-title-${requestId}`}
-            aria-describedby={`resolve-description-${requestId}`}
-            className="w-full max-w-md rounded-2xl border border-line bg-card p-5 shadow-xl"
-          >
-            <h4 id={`resolve-title-${requestId}`} className="text-lg font-semibold">Encerrar esta conversa?</h4>
+        <ModalShell
+          role="alertdialog"
+          onClose={closeResolveConfirmation}
+          labelledBy={`resolve-title-${requestId}`}
+          describedBy={`resolve-description-${requestId}`}
+          disableDismiss={resolving}
+          className="max-w-md"
+        >
+            <h2 id={`resolve-title-${requestId}`} className="text-xl font-semibold tracking-tight">Encerrar esta conversa?</h2>
             <p id={`resolve-description-${requestId}`} className="mt-2 text-sm leading-6 text-ink-soft">
               Você está indicando que considera esta questão resolvida. Após o encerramento, não será possível enviar novas mensagens nesta conversa.
             </p>
@@ -256,8 +257,7 @@ export function FeedbackConversation({
                 {resolving ? "Encerrando…" : "Resolver e encerrar"}
               </button>
             </div>
-          </div>
-        </div>
+        </ModalShell>
       )}
     </section>
   );

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Card, Empty } from "@/components/dashboard-ui";
+import { ModalShell } from "@/components/modal-shell";
 import type { PatientPlaylistTrack } from "@/lib/playlist";
 
 const PERIOD_LABEL: Record<PatientPlaylistTrack["period"], string> = {
@@ -164,13 +165,13 @@ export function PatientPlaylistWidget({ patientId, patientName }: { patientId: n
       )}
 
       {confirmTrack && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="playlist-delete-title"
-            className="w-full max-w-md rounded-3xl border border-line bg-card p-6 shadow-2xl"
-          >
+        <ModalShell
+          role="alertdialog"
+          onClose={() => setConfirmTrack(null)}
+          labelledBy="playlist-delete-title"
+          disableDismiss={deleting}
+          className="max-w-md"
+        >
             <h2 id="playlist-delete-title" className="text-lg font-semibold text-ink">Excluir música?</h2>
             <p className="mt-2 text-sm leading-6 text-ink-soft">
               Tem certeza de que deseja deletar a música &quot;{confirmTrack.title}&quot; para sempre? Esta ação não poderá ser desfeita.
@@ -180,7 +181,7 @@ export function PatientPlaylistWidget({ patientId, patientName }: { patientId: n
                 type="button"
                 onClick={() => setConfirmTrack(null)}
                 disabled={deleting}
-                className="min-h-10 rounded-xl border border-line px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-cream disabled:cursor-not-allowed disabled:opacity-60"
+                className="min-h-10 rounded-xl border border-line bg-card px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-cream disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancelar
               </button>
@@ -188,14 +189,13 @@ export function PatientPlaylistWidget({ patientId, patientName }: { patientId: n
                 type="button"
                 onClick={() => void deleteTrack()}
                 disabled={deleting}
-                className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-nao px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {deleting && <span aria-hidden="true" className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
                 Sim, excluir
               </button>
             </div>
-          </div>
-        </div>
+        </ModalShell>
       )}
     </Card>
   );

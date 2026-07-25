@@ -40,9 +40,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "auditoria", label: "Auditoria" },
 ];
 
-const PLAYLIST_DELETE_PERMISSION_DESCRIPTION =
-  "Permite ao usuário apagar faixas musicais da playlist do paciente.";
-
 // ——— Vozes (catálogo controlado) ———
 // Só o Admin vê e gerencia estes dados: o catálogo interno de vozes da
 // plataforma (cadastradas por ElevenLabs voiceId) e a voz clonada de cada
@@ -749,10 +746,6 @@ function AccessTab({
                 {PERMISSION_LABELS[p]}
               </label>
             ))}
-            <p className="w-full text-xs text-ink-soft">
-              <span className="font-medium text-ink">Excluir Músicas da Playlist:</span>{" "}
-              {PLAYLIST_DELETE_PERMISSION_DESCRIPTION}
-            </p>
           </fieldset>
         )}
         <button type="submit" disabled={busy || !userId || !patientId} className={`${btnDark} self-start`}>
@@ -921,10 +914,6 @@ function LinkRow({
               {PERMISSION_LABELS[p]}
             </label>
           ))}
-          <p className="w-full text-xs text-ink-soft">
-            <span className="font-medium text-ink">Excluir Músicas da Playlist:</span>{" "}
-            {PLAYLIST_DELETE_PERMISSION_DESCRIPTION}
-          </p>
           <button
             type="button"
             className={btnDark}

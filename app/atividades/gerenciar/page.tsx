@@ -33,6 +33,8 @@ import {
   type PatientMediaMeta,
 } from "@/lib/activity-types";
 import type { Gesture } from "@/lib/types";
+import type { FavoritePhrase } from "@/lib/favorite-phrases";
+import { setPhraseAudioPlaying } from "@/lib/phrase-audio";
 
 // Ordem canônica das respostas faladas no editor — SIM, TALVEZ, NÃO.
 const RESPONSE_GESTURES: { g: Gesture; label: string }[] = [
@@ -99,6 +101,21 @@ export default function GerenciarAtividadesPage() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [phraseText, setPhraseText] = useState("");
+  const [savingPhrase, setSavingPhrase] = useState(false);
+  const [phrases, setPhrases] = useState<FavoritePhrase[]>([]);
+  const [editingPhraseId, setEditingPhraseId] = useState<string | null>(null);
+  const [editingPhraseText, setEditingPhraseText] = useState("");
+  const [previewingPhrase, setPreviewingPhrase] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const loadPhrases = useCallback(async () => {
+    if (patientId == null) return;
+    const response = await fetch(`/api/favorite-phrases?patientId=${patientId}`);
+    if (!response.ok) throw new Error("não foi possível carregar as frases");
+    const data = (await response.json()) as { phrases?: FavoritePhrase[] };
+    setPhrases(data.phrases ?? []);
+  }, [patientId]);
 
   // ——— Edição contextual (deep link) ———
   // ?activityId=…&itemId=…&returnTo=… abre a atividade exata com o editor já
@@ -171,6 +188,15 @@ export default function GerenciarAtividadesPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    void loadPhrases().catch(() => setPhrases([]));
+  }, [loadPhrases]);
+
+  useEffect(() => () => {
+    previewAudioRef.current?.pause();
+    setPhraseAudioPlaying(false);
+  }, []);
+
   const save = useCallback(async () => {
     if (!draft || patientId == null || saving) return;
     setSaving(true);
@@ -239,6 +265,104 @@ export default function GerenciarAtividadesPage() {
     [patientId, load]
   );
 
+  const savePhrase = useCallback(async () => {
+    if (patientId == null || !phraseText.trim() || savingPhrase) return;
+    setSavingPhrase(true);
+    setErrorMsg(null);
+    try {
+      const response = await fetch("/api/favorite-phrases", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, text: phraseText }),
+      });
+      const data = (await response.json().catch(() => null)) as { phrase?: { id: string; text: string }; error?: string } | null;
+      if (!response.ok || !data?.phrase) throw new Error(data?.error ?? "não foi possível salvar a frase");
+      setPhraseText("");
+      // A frase já é um registro válido mesmo se a síntese demorar ou falhar;
+      // mantemos a lista atualizada para que o cuidador possa continuar
+      // adicionando ou editando as próximas sem perder o contexto.
+      await loadPhrases();
+      setNotice("Frase salva. Preparando o áudio para a atividade…");
+      const synthesis = await fetch("/synthesizePhraseAudio", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, phraseId: data.phrase.id, text: data.phrase.text }),
+      });
+      if (!synthesis.ok) throw new Error("A frase foi salva, mas o áudio será preparado novamente ao abrir a atividade.");
+      setNotice("Frase salva e áudio preparado.");
+      await loadPhrases();
+    } catch (error) {
+      setErrorMsg((error as Error).message);
+    } finally { setSavingPhrase(false); }
+  }, [patientId, phraseText, savingPhrase, loadPhrases]);
+
+  const previewPhrase = useCallback(async (text: string) => {
+    if (patientId == null || !text.trim() || previewingPhrase) return;
+    setPreviewingPhrase(true);
+    setErrorMsg(null);
+    previewAudioRef.current?.pause();
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, text: text.trim(), speakerRole: "patient", confirmationStatus: "confirmed" }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "não foi possível preparar a prévia da voz");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); setPhraseAudioPlaying(false); setPreviewingPhrase(false); };
+      audio.onerror = () => { URL.revokeObjectURL(url); setPhraseAudioPlaying(false); setPreviewingPhrase(false); setErrorMsg("Não foi possível reproduzir a prévia."); };
+      setPhraseAudioPlaying(true);
+      await audio.play();
+    } catch (error) {
+      setPhraseAudioPlaying(false);
+      setPreviewingPhrase(false);
+      setErrorMsg((error as Error).message);
+    }
+  }, [patientId, previewingPhrase]);
+
+  const saveEditedPhrase = useCallback(async () => {
+    if (patientId == null || !editingPhraseId || !editingPhraseText.trim()) return;
+    setSavingPhrase(true);
+    try {
+      const response = await fetch("/api/favorite-phrases", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, phraseId: editingPhraseId, text: editingPhraseText }) });
+      const data = (await response.json().catch(() => null)) as { phrase?: { id: string; text: string }; error?: string } | null;
+      if (!response.ok || !data?.phrase) throw new Error(data?.error ?? "não foi possível atualizar a frase");
+      const synthesis = await fetch("/synthesizePhraseAudio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, phraseId: data.phrase.id, text: data.phrase.text }) });
+      if (!synthesis.ok) throw new Error("Frase atualizada, mas não foi possível preparar o novo áudio.");
+      setEditingPhraseId(null); setEditingPhraseText(""); setNotice("Frase atualizada e áudio preparado.");
+      await loadPhrases();
+    } catch (error) { setErrorMsg((error as Error).message); }
+    finally { setSavingPhrase(false); }
+  }, [editingPhraseId, editingPhraseText, loadPhrases, patientId]);
+
+  const deletePhrase = useCallback(async (phrase: FavoritePhrase) => {
+    if (patientId == null || savingPhrase) return;
+    const confirmed = await dialog.confirm({
+      title: "Excluir frase?",
+      message: `Excluir a frase “${phrase.text}”? Esta ação não pode ser desfeita.`,
+      confirmLabel: "Sim, excluir",
+      cancelLabel: "Cancelar",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    setSavingPhrase(true);
+    setErrorMsg(null);
+    try {
+      const response = await fetch("/api/favorite-phrases", {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, phraseId: phrase.id }),
+      });
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) throw new Error(data?.error ?? "não foi possível excluir a frase");
+      if (editingPhraseId === phrase.id) { setEditingPhraseId(null); setEditingPhraseText(""); }
+      setNotice("Frase excluída.");
+      await loadPhrases();
+    } catch (error) { setErrorMsg((error as Error).message); }
+    finally { setSavingPhrase(false); }
+  }, [dialog, editingPhraseId, loadPhrases, patientId, savingPhrase]);
+
   return (
     <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
       <TopBar
@@ -296,6 +420,39 @@ export default function GerenciarAtividadesPage() {
               Tentar de novo
             </button>
           </div>
+        )}
+
+        {state === "ok" && caps?.create && (
+          <section className="rounded-3xl border border-line bg-card p-5 sm:p-6">
+            <h2 className="text-xl font-medium">Adicionar Frase Favorita do Paciente</h2>
+            <p className="mt-1 text-sm text-ink-soft">Ela ficará disponível em “Frases para se ouvir”, com áudio preparado antecipadamente.</p>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <input value={phraseText} onChange={(event) => setPhraseText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void savePhrase(); }} maxLength={500} placeholder="Ex: A Vida me Interessa" className="min-w-0 flex-1 rounded-2xl border border-line bg-page px-4 py-3 outline-none focus:border-accent" />
+              <button type="button" onClick={() => void previewPhrase(phraseText)} disabled={!phraseText.trim() || previewingPhrase} className="rounded-full border border-line px-5 py-3 font-medium hover:border-accent disabled:opacity-60">{previewingPhrase ? "Ouvindo…" : "🔊 Ouvir"}</button>
+              <button type="button" onClick={() => void savePhrase()} disabled={!phraseText.trim() || savingPhrase} className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent disabled:opacity-60">{savingPhrase ? "Preparando…" : "Salvar Frase"}</button>
+            </div>
+            {phrases.length > 0 && (
+              <div className="mt-5 border-t border-line pt-4">
+                <p className="text-sm font-medium text-ink-soft">Frases salvas ({phrases.length})</p>
+                <ul className="mt-3 space-y-2">
+                  {phrases.map((phrase) => (
+                    <li key={phrase.id} className="rounded-2xl border border-line/70 bg-page/40 p-3">
+                      {editingPhraseId === phrase.id ? (
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <input value={editingPhraseText} onChange={(event) => setEditingPhraseText(event.target.value)} maxLength={500} className="min-w-0 flex-1 rounded-xl border border-line bg-card px-3 py-2 outline-none focus:border-accent" />
+                          <button type="button" onClick={() => void previewPhrase(editingPhraseText)} disabled={!editingPhraseText.trim() || previewingPhrase} className="rounded-full border border-line px-4 py-2 text-sm disabled:opacity-60">Ouvir</button>
+                          <button type="button" onClick={() => void saveEditedPhrase()} disabled={!editingPhraseText.trim() || savingPhrase} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-on-accent disabled:opacity-60">Salvar</button>
+                          <button type="button" onClick={() => { setEditingPhraseId(null); setEditingPhraseText(""); }} className="px-3 py-2 text-sm text-ink-soft">Cancelar</button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3"><p className="min-w-0 flex-1 text-sm font-medium">{phrase.text}</p><div className="flex shrink-0 items-center gap-2">{caps?.delete && <button type="button" onClick={() => void deletePhrase(phrase)} disabled={savingPhrase} aria-label={`Excluir frase: ${phrase.text}`} title="Excluir frase" className="grid size-9 place-items-center rounded-full border border-line text-lg text-ink-soft hover:border-nao hover:text-nao disabled:opacity-60">🗑</button>}<button type="button" onClick={() => { setEditingPhraseId(phrase.id); setEditingPhraseText(phrase.text); }} className="rounded-full border border-line px-4 py-1.5 text-sm hover:border-accent">Editar</button></div></div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
         )}
 
         {state === "ok" && !draft && templates && (

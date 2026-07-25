@@ -16,6 +16,8 @@ import { redirectToLogin } from "@/lib/use-auth";
 import { OverlayVeil } from "@/components/overlay-panel";
 import { SessionPlayer } from "@/components/activity-player";
 import { ContextualEdit } from "@/components/contextual-edit";
+import { PhrasesToListenModal } from "@/components/phrases-to-listen-modal";
+import type { FavoritePhrase } from "@/lib/favorite-phrases";
 import { buildEditLink, readSearchParams } from "@/lib/edit-link";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import {
@@ -42,6 +44,8 @@ export default function AtividadesPage() {
   const [view, setView] = useState<View>({ kind: "lista" });
   const [starting, setStarting] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [phrases, setPhrases] = useState<FavoritePhrase[]>([]);
+  const [phrasesOpen, setPhrasesOpen] = useState(false);
   // Retomada pós-edição contextual: ?start=<templateId>&item=<itemId> inicia
   // uma NOVA sessão da atividade (o snapshot é imutável — só uma sessão nova
   // exibe o conteúdo recém-salvo) já posicionada no item que estava em uso.
@@ -91,6 +95,16 @@ export default function AtividadesPage() {
     return () => {
       stale = true;
     };
+  }, [patientId]);
+
+  useEffect(() => {
+    if (patientId == null) return;
+    let stale = false;
+    void fetch(`/api/favorite-phrases?patientId=${patientId}`)
+      .then((response) => response.ok ? response.json() : { phrases: [] })
+      .then((data: { phrases?: FavoritePhrase[] }) => { if (!stale) setPhrases(data.phrases ?? []); })
+      .catch(() => { if (!stale) setPhrases([]); });
+    return () => { stale = true; };
   }, [patientId]);
 
   const start = useCallback(
@@ -287,6 +301,19 @@ export default function AtividadesPage() {
     );
   }
 
+  // O leitor de frases é uma atividade em foco. Enquanto está aberto, a
+  // lista, o título e os controles do menu não são renderizados por baixo;
+  // fechar restaura a lista sem reiniciar a página ou perder o paciente.
+  if (phrasesOpen) {
+    return (
+      <PhrasesToListenModal
+        patientId={patientId}
+        phrases={phrases}
+        onClose={() => setPhrasesOpen(false)}
+      />
+    );
+  }
+
   // ——— Lista ———
   return (
     <Shell>
@@ -307,6 +334,14 @@ export default function AtividadesPage() {
             ⚙ Gerenciar atividades
           </Link>
         </div>
+      )}
+
+      {phrases.length > 0 && (
+        <button type="button" onClick={() => setPhrasesOpen(true)} className="mx-auto flex w-full max-w-sm flex-col items-center gap-2 rounded-3xl border border-accent/30 bg-card/80 px-6 py-6 shadow-soft transition-transform hover:scale-[1.02] active:scale-[0.98]">
+          <span className="grid size-12 place-items-center rounded-full bg-accent text-2xl text-on-accent">♬</span>
+          <span className="text-xl font-medium tracking-tight">Frases para se ouvir</span>
+          <span className="text-sm text-ink-soft">{phrases.length} {phrases.length === 1 ? "frase especial" : "frases especiais"}</span>
+        </button>
       )}
 
       {state === "carregando" && (

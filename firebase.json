@@ -26,6 +26,10 @@
         "function": "generateMusic"
       },
       {
+        "source": "/synthesizePhraseAudio",
+        "function": "synthesizePhraseAudio"
+      },
+      {
         "source": "/webhook/**",
         "function": "api"
       },

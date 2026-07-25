@@ -242,14 +242,14 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
         <div
           // Overlay escuro translúcido com blur — o produto continua perceptível
           // ao fundo, sem a cara nativa do navegador.
-          className={`fixed inset-0 z-[100] flex items-center justify-center p-4 transition-opacity duration-150 ease-out motion-reduce:transition-none ${
+          className={`fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-opacity duration-200 ease-out motion-reduce:transition-none ${
             shown ? "opacity-100" : "opacity-0"
           }`}
         >
           <div
             aria-hidden="true"
             onClick={() => settle(false)}
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            className="absolute inset-0"
           />
           <div
             ref={cardRef}
@@ -257,7 +257,7 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
             aria-modal="true"
             aria-labelledby="helo-dialog-title"
             aria-describedby={request.options.message ? "helo-dialog-desc" : undefined}
-            className={`relative w-full max-w-md rounded-3xl border border-line bg-surface-elevated/95 p-6 shadow-lift backdrop-blur-xl transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none sm:p-7 ${
+            className={`relative w-[90vw] max-w-md rounded-3xl border border-line bg-surface-elevated/95 p-6 font-sans text-ink shadow-2xl shadow-black/50 backdrop-blur-xl transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none sm:p-8 ${
               shown ? "translate-y-0 opacity-100 scale-100" : "translate-y-2 opacity-0 scale-[0.98]"
             }`}
           >
@@ -291,7 +291,7 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
                 <button
                   type="button"
                   onClick={() => settle(false)}
-                  className="min-h-11 rounded-full border border-line bg-transparent px-6 py-2.5 text-base font-medium text-ink transition-colors hover:border-ink-mute"
+                  className="min-h-11 rounded-xl border border-line bg-card px-4 py-2.5 text-base font-medium text-ink transition-colors hover:bg-cream"
                 >
                   {cancelLabel}
                 </button>
@@ -300,7 +300,7 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
                 ref={confirmBtnRef}
                 type="button"
                 onClick={() => settle(true)}
-                className={`min-h-11 rounded-full px-6 py-2.5 text-base font-semibold shadow-soft transition-colors ${
+                className={`min-h-11 rounded-xl px-4 py-2.5 text-base font-semibold shadow-soft transition-colors ${
                   danger
                     ? "bg-nao text-white hover:opacity-90"
                     : "bg-accent text-on-accent hover:bg-accent-strong"

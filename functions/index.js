@@ -17,6 +17,84 @@ const MUSIC_LENGTH_MS = 30000;
 const MAX_PROMPT_LENGTH = 4100;
 const MAX_GENRE_LENGTH = 100;
 const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || "helo-db";
+const MAX_PHRASE_LENGTH = 500;
+
+function sessionToken(req) {
+  const cookie = String(req.headers.cookie || "");
+  const match = cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith("__session="));
+  return match ? decodeURIComponent(match.slice("__session=".length)) : "";
+}
+
+async function canSynthesizePhrase(req, patientId) {
+  const token = sessionToken(req);
+  if (!/^[a-f0-9]{64}$/.test(token)) return false;
+  const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
+  const session = await db.collection("authSessions").doc(token).get();
+  if (!session.exists || String(session.data().expiresAt) < new Date().toISOString()) return false;
+  const userId = String(session.data().userId || "");
+  const user = await db.collection("users").doc(userId).get();
+  if (!user.exists || user.data().status !== "active") return false;
+  if (user.data().role === "admin") return true;
+  const link = await db.collection("userPatientAccess").doc(`${userId}_${patientId}`).get();
+  return Boolean(link.exists && link.data().status === "active" && Array.isArray(link.data().permissions) && link.data().permissions.includes("createActivities"));
+}
+
+async function synthesizePhraseAudioHandler(req, res) {
+  if (req.method !== "POST") {
+    res.set("Allow", "POST");
+    return res.status(405).json({ error: "Método não permitido." });
+  }
+  try {
+    const patientId = Number(req.body?.patientId);
+    const phraseId = textParameter(req.body?.phraseId);
+    const requestedText = textParameter(req.body?.text);
+    if (!Number.isSafeInteger(patientId) || patientId <= 0 || !phraseId || !requestedText || requestedText.length > MAX_PHRASE_LENGTH) {
+      return res.status(400).json({ error: "patientId, phraseId e text válidos são obrigatórios." });
+    }
+    if (!await canSynthesizePhrase(req, patientId)) return res.status(403).json({ error: "acesso negado" });
+    const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
+    const phraseRef = db.collection("patients").doc(String(patientId)).collection("favoritePhrases").doc(phraseId);
+    const phrase = await phraseRef.get();
+    if (!phrase.exists || String(phrase.data().text || "") !== requestedText) return res.status(404).json({ error: "frase não encontrada" });
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: "O serviço de voz não está configurado." });
+
+    const patient = await db.collection("patients").doc(String(patientId)).get();
+    if (!patient.exists) return res.status(404).json({ error: "paciente não encontrado" });
+    // A fonte oficial do clone é o setting isolado do paciente. O campo no
+    // perfil é aceito apenas para compatibilidade com dados já migrados.
+    const cloneSetting = await patient.ref.collection("settings").doc("voice_id").get();
+    const clonedVoiceId = textParameter(cloneSetting.data()?.value) || textParameter(patient.data().clonedVoiceId) || textParameter(patient.data().voiceId);
+    let voiceId = clonedVoiceId;
+    if (!voiceId) {
+      const voices = await db.collection("platformVoices").get();
+      const activeVoices = voices.docs.filter((doc) => doc.data().enabled !== false);
+      const defaultVoice = activeVoices.find((doc) => doc.data().isDefault === true) || activeVoices[0];
+      voiceId = textParameter(defaultVoice?.data().elevenLabsVoiceId) || process.env.ELEVENLABS_HELO_VOICE_ID || "";
+    }
+    if (!voiceId) return res.status(503).json({ error: "Nenhuma voz padrão está configurada." });
+
+    const eleven = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+      method: "POST", headers: { "Content-Type": "application/json", "xi-api-key": apiKey },
+      body: JSON.stringify({ text: requestedText, model_id: "eleven_multilingual_v2" }),
+    });
+    if (!eleven.ok) {
+      console.error("[HELO PHRASES] ElevenLabs recusou síntese", eleven.status, (await eleven.text()).slice(0, 500));
+      return res.status(502).json({ error: "A ElevenLabs não conseguiu gerar o áudio." });
+    }
+    const buffer = Buffer.from(await eleven.arrayBuffer());
+    if (!buffer.length) return res.status(502).json({ error: "O áudio gerado está vazio." });
+    const storagePath = `patients/${patientId}/phrases_audio/${phraseId}.mp3`;
+    const file = admin.storage().bucket().file(storagePath);
+    await file.save(buffer, { resumable: false, metadata: { contentType: "audio/mpeg", cacheControl: "public, max-age=31536000, immutable" } });
+    const audioUrl = await getDownloadURL(file);
+    await phraseRef.set({ audioUrl, storagePath, usesClonedVoice: Boolean(clonedVoiceId), synthesizedAt: new Date().toISOString() }, { merge: true });
+    return res.status(200).json({ audioUrl });
+  } catch (error) {
+    console.error("[HELO PHRASES] Falha na síntese", error);
+    return res.status(500).json({ error: "Falha interna ao preparar o áudio." });
+  }
+}
 
 function textParameter(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -185,6 +263,11 @@ exports.generateMusic = onRequest(
     cors: true,
   },
   generateMusicHandler
+);
+
+exports.synthesizePhraseAudio = onRequest(
+  { secrets: ["ELEVENLABS_API_KEY"], timeoutSeconds: 120, memory: "1GiB", cors: true },
+  synthesizePhraseAudioHandler
 );
 
 // Compatibilidade com a integração anterior em /webhook/generate_music.

@@ -40,6 +40,7 @@ import {
   startSession as startLoggedSession,
 } from "@/lib/log";
 import type { Gesture } from "@/lib/types";
+import { PHRASE_AUDIO_EVENT } from "@/lib/phrase-audio";
 
 type HeloApiOverrides = { tts?: { voice_id?: string } };
 type HeloSessionOverrides = NonNullable<SessionConfig["overrides"]>;
@@ -361,6 +362,7 @@ function HeloAgentSession({
   const musicGenerationAbortRef = useRef<AbortController | null>(null);
   const musicToolCompletionRef = useRef<((outcome: MusicToolOutcome) => void) | null>(null);
   const musicMicSuspendedRef = useRef(false);
+  const phraseMicSuspendedRef = useRef(false);
   const musicPreviousMutedRef = useRef(false);
   const currentMutedRef = useRef(false);
   const conversationAudioControlsRef = useRef<{
@@ -1145,6 +1147,27 @@ function HeloAgentSession({
     currentMutedRef.current = isMuted;
   }, [isMuted, setMuted, setVolume]);
 
+  // Áudio gravado de uma frase não pode retornar ao microfone de uma sessão
+  // ElevenLabs ativa. A própria atividade emite este evento no início/fim,
+  // inclusive em erro e desmontagem.
+  useEffect(() => {
+    let mutedByPhrase = false;
+    const onPhraseAudio = (event: Event) => {
+      const playing = (event as CustomEvent<{ playing?: boolean }>).detail?.playing === true;
+      if (playing && statusRef.current === "connected" && !currentMutedRef.current) {
+        mutedByPhrase = true;
+        phraseMicSuspendedRef.current = true;
+        setMuted(true);
+      } else if (!playing && mutedByPhrase && statusRef.current === "connected") {
+        mutedByPhrase = false;
+        phraseMicSuspendedRef.current = false;
+        setMuted(false);
+      }
+    };
+    window.addEventListener(PHRASE_AUDIO_EVENT, onPhraseAudio);
+    return () => window.removeEventListener(PHRASE_AUDIO_EVENT, onPhraseAudio);
+  }, [setMuted]);
+
   useEffect(() => {
     conversationTextControlsRef.current = { sendContextualUpdate };
   }, [sendContextualUpdate]);
@@ -1231,7 +1254,7 @@ function HeloAgentSession({
   }, []);
 
   useEffect(() => {
-    if (status !== "connected" || !isMuted || musicMicSuspendedRef.current) return;
+    if (status !== "connected" || !isMuted || musicMicSuspendedRef.current || phraseMicSuspendedRef.current) return;
     try {
       setMuted(false);
     } catch {
