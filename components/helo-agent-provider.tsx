@@ -190,6 +190,32 @@ function CloseIcon() {
   );
 }
 
+function Volume2Icon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-4">
+      <path d="M4 10v4h4l5 4V6l-5 4H4Z" fill="currentColor" />
+      <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function VolumeXIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-4">
+      <path d="M4 10v4h4l5 4V6l-5 4H4Z" fill="currentColor" />
+      <path d="m16 10 5 5m0-5-5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MicOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-3.5">
+      <path d="M12 3a3 3 0 0 1 3 3v4.2m-2.1 2.72A3 3 0 0 1 9 10V8m-3 2a6 6 0 0 0 10.15 4.32M18 10a6 6 0 0 1-.45 2.28M12 19v2m-8-18 16 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 type HeloAgentContextValue = {
   activeSessionPatientId: number | null;
   sessionStatus: string;
@@ -342,6 +368,7 @@ function HeloAgentSession({
   const [selectedInputDeviceId, setSelectedInputDeviceId] = useState("");
   const [inputDeviceError, setInputDeviceError] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("offline");
+  const [isAgentMuted, setIsAgentMuted] = useState(false);
   const [musicPlayer, setMusicPlayer] = useState<MusicPlayerState>(INITIAL_MUSIC_PLAYER_STATE);
   const startedRef = useRef(false);
   const startingRef = useRef(false);
@@ -365,6 +392,9 @@ function HeloAgentSession({
   const phraseMicSuspendedRef = useRef(false);
   const musicPreviousMutedRef = useRef(false);
   const currentMutedRef = useRef(false);
+  const agentOutputMutedRef = useRef(false);
+  const agentInputMutedRef = useRef(false);
+  const agentSuppressedRef = useRef(false);
   const conversationAudioControlsRef = useRef<{
     setMuted: (muted: boolean) => void;
     setVolume: (options: { volume: number }) => void;
@@ -392,6 +422,10 @@ function HeloAgentSession({
     loggedSessionIdRef.current = null;
     sessionPatientIdRef.current = null;
     setActiveSessionPatientId(null);
+    agentOutputMutedRef.current = false;
+    agentInputMutedRef.current = false;
+    agentSuppressedRef.current = false;
+    setIsAgentMuted(false);
     startedRef.current = false;
     setMicLevel(0);
     setAgentAmplitude(null);
@@ -457,8 +491,8 @@ function HeloAgentSession({
       if (restoreConversation) {
         const controls = conversationAudioControlsRef.current;
         try {
-          controls?.setVolume({ volume: 1 });
-          controls?.setMuted(musicPreviousMutedRef.current);
+          controls?.setVolume({ volume: agentOutputMutedRef.current ? 0 : 1 });
+          controls?.setMuted(agentInputMutedRef.current || musicPreviousMutedRef.current);
         } catch (caught) {
           console.warn("[HELO MUSIC] não foi possível restaurar o áudio da conversa", caught);
         }
@@ -1147,6 +1181,38 @@ function HeloAgentSession({
     currentMutedRef.current = isMuted;
   }, [isMuted, setMuted, setVolume]);
 
+  // Mute exclusivo da SAÍDA do Agente: não altera o microfone, WebSocket ou
+  // status da conversa. Supressões temporárias (música/voz do paciente) ainda
+  // vencem o volume, e ao terminar respeitam a escolha manual do operador.
+  const toggleAgentMute = useCallback(() => {
+    const nextMuted = !agentOutputMutedRef.current;
+    agentOutputMutedRef.current = nextMuted;
+    agentInputMutedRef.current = nextMuted;
+    setIsAgentMuted(nextMuted);
+    try {
+      setVolume({ volume: nextMuted || agentSuppressedRef.current ? 0 : 1 });
+      // `setMuted` controla o stream de entrada do SDK sem encerrar a sessão:
+      // enquanto ativo, nenhuma fala/ruído é encaminhado à Helo.
+      if (nextMuted) {
+        setMuted(true);
+      } else if (!musicMicSuspendedRef.current && !phraseMicSuspendedRef.current) {
+        setMuted(false);
+      }
+    } catch {
+      // A sessão pode ser encerrada no instante do toque; o estado visual
+      // continua pronto para a próxima conexão.
+    }
+  }, [setMuted, setVolume]);
+
+  useEffect(() => {
+    if (status !== "connected") return;
+    try {
+      setVolume({ volume: agentOutputMutedRef.current || agentSuppressedRef.current ? 0 : 1 });
+    } catch {
+      // A conexão pode mudar de estado antes do SDK aceitar o volume.
+    }
+  }, [setVolume, status]);
+
   // Áudio gravado de uma frase não pode retornar ao microfone de uma sessão
   // ElevenLabs ativa. A própria atividade emite este evento no início/fim,
   // inclusive em erro e desmontagem.
@@ -1158,10 +1224,10 @@ function HeloAgentSession({
         mutedByPhrase = true;
         phraseMicSuspendedRef.current = true;
         setMuted(true);
-      } else if (!playing && mutedByPhrase && statusRef.current === "connected") {
-        mutedByPhrase = false;
+      } else if (!playing && statusRef.current === "connected") {
         phraseMicSuspendedRef.current = false;
-        setMuted(false);
+        if (mutedByPhrase) mutedByPhrase = false;
+        if (!agentInputMutedRef.current && !musicMicSuspendedRef.current) setMuted(false);
       }
     };
     window.addEventListener(PHRASE_AUDIO_EVENT, onPhraseAudio);
@@ -1254,7 +1320,13 @@ function HeloAgentSession({
   }, []);
 
   useEffect(() => {
-    if (status !== "connected" || !isMuted || musicMicSuspendedRef.current || phraseMicSuspendedRef.current) return;
+    if (
+      status !== "connected" ||
+      !isMuted ||
+      agentInputMutedRef.current ||
+      musicMicSuspendedRef.current ||
+      phraseMicSuspendedRef.current
+    ) return;
     try {
       setMuted(false);
     } catch {
@@ -1286,7 +1358,8 @@ function HeloAgentSession({
   useEffect(() => {
     return registerAgentSuppressor((suppress) => {
       try {
-        setVolume({ volume: suppress ? 0 : 1 });
+        agentSuppressedRef.current = suppress;
+        setVolume({ volume: suppress || agentOutputMutedRef.current ? 0 : 1 });
         console.log(
           suppress
             ? "[HELO AUDIO] suppressing agent speech"
@@ -2002,6 +2075,26 @@ function HeloAgentSession({
             className={`size-2 shrink-0 rounded-full transition-colors duration-300 ${connectionStatusDetails.dotClassName}`}
           />
           <div className="min-w-0"><p className="text-sm font-medium text-ink">{label}</p><p className="text-xs text-ink-soft">Helo ativa</p></div>
+          <button
+            type="button"
+            onClick={toggleAgentMute}
+            title={isAgentMuted ? "Agente silenciado e microfone desativado (Clique para desmutar)" : "Silenciar agente e desativar microfone"}
+            aria-label={isAgentMuted ? "Agente silenciado e microfone desativado (Clique para desmutar)" : "Silenciar agente e desativar microfone"}
+            aria-pressed={isAgentMuted}
+            className={`grid size-9 shrink-0 place-items-center rounded-lg p-1.5 transition-colors ${
+              isAgentMuted
+                ? "border border-red-500/20 bg-red-500/10 text-red-400"
+                : "text-neutral-400 hover:bg-white/5 hover:text-emerald-400"
+            }`}
+          >
+            {isAgentMuted ? <VolumeXIcon /> : <Volume2Icon />}
+          </button>
+          {isAgentMuted && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-400">
+              <MicOffIcon />
+              Microfone desligado
+            </span>
+          )}
           <button type="button" onClick={end} className="shrink-0 rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink hover:border-ink-mute">Encerrar Helo</button>
         </aside>
       )}
