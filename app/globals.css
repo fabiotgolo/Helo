@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/* Viewport global: nenhum painel ou cartão cria rolagem horizontal. */
+html,
+body {
+  min-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100dvh;
+}
+
 /*
  * ——— Sistema de design da Helo ———
  * Todas as cores da interface são TOKENS (custom properties). As utilidades do

@@ -276,7 +276,7 @@ export default function AtividadesPage() {
   if (view.kind === "sessao") {
     return (
       <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm">
-        <main className="relative mx-auto flex min-h-full w-full max-w-4xl flex-col items-center justify-center">
+        <main className="relative mx-auto flex max-h-[85vh] min-h-full w-full max-w-4xl flex-col items-center justify-center overflow-y-auto">
           <SessionPlayer
             run={view.run}
             patientId={patientId}
@@ -472,7 +472,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative flex flex-1 flex-col">
       <OverlayVeil />
-      <main className="relative flex w-full flex-1 flex-col justify-center px-4 pb-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
+      <main className="relative flex w-full flex-1 flex-col justify-center px-4 pb-6 sm:px-6">
         <div className="fade-rise pointer-events-auto mx-auto flex w-full max-w-4xl flex-col gap-6 py-8">
           {children}
         </div>

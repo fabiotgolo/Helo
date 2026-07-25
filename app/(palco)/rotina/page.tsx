@@ -334,7 +334,7 @@ export default function RotinaPage() {
   return (
     <div className="relative flex flex-1 flex-col">
       <OverlayVeil />
-      <main className="relative flex w-full flex-1 flex-col items-center justify-center px-4 pb-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
+      <main className="relative flex w-full flex-1 flex-col items-center justify-center px-4 pb-6 sm:px-6">
         {openQuestion ? (
           <section
             key="pergunta"

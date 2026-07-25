@@ -77,7 +77,7 @@ function LoginForm() {
           termina. O Orb principal (Conversa) fica grande e central, protagonista,
           e nunca desmonta. */}
       <WelcomeIntro
-        orbClassName="h-[88vmin] w-[88vmin] max-h-[44rem] max-w-[44rem]"
+        orbClassName="h-[58vw] w-[58vw] max-h-[22rem] max-w-[22rem] sm:h-[72vmin] sm:w-[72vmin] lg:h-[88vmin] lg:w-[88vmin] lg:max-h-[44rem] lg:max-w-[44rem]"
         className="w-full"
       >
         {(revealed) => (
@@ -199,7 +199,7 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-[100dvh] w-full max-w-full min-w-0 flex-col overflow-x-hidden">
       {/* mobile="locked": cabeçalho e menu da Home visíveis porém inertes —
           não há sessão; qualquer toque só revela o formulário. */}
       <TopBar showLogout={false} mobile="locked" />

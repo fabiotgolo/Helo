@@ -95,14 +95,18 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
     // Orbe ativo GRANDE — do mesmo tamanho da Orb da tela deslogada (login:
     // 88vmin, teto 44rem/704px). Presença viva que transborda acima e abaixo
     // do painel, com o modal centralizado sobre ela.
-    const D = Math.min(Math.min(w, h) * 0.88, 704);
+    // Em mobile, preserve espaço para o conteúdo e os controles abaixo do
+    // orbe; no desktop ele mantém a escala protagonista original.
+    const D = mobile
+      ? Math.min(w * 0.58, h * 0.34, 300)
+      : Math.min(Math.min(w, h) * 0.88, 704);
     const d = mobile ? 52 : 68;
     const y = mobile ? 44 : 54;
     const gap = mobile ? 32 : 44;
     // Centro deslocado levemente abaixo do meio: o painel de conteúdo é
     // centrado verticalmente numa área com respiro de topo (pt-20/24), então
     // ~0.52h alinha o centro da Orb ao centro do modal.
-    lay[active] = { x: w * 0.5, y: h * 0.52, d: D };
+    lay[active] = { x: w * 0.5, y: mobile ? h * 0.36 : h * 0.52, d: D };
     // Recolhidos: fila única, centralizada e com espaçamento igual — não
     // cercam o ativo (que fica grande e central, atrás do conteúdo).
     rowLayout(lay, inactive, w * 0.5, y, d, gap, w);

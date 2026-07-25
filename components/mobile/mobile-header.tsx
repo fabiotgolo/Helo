@@ -11,7 +11,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Orb } from "@/components/ui";
-import { ThemeDots } from "@/components/theme-dots";
 import { PlatformMuteToggle } from "@/components/platform-mute-toggle";
 import { useAuthUser } from "@/lib/use-auth";
 import { usePatient } from "@/lib/patient";
@@ -174,7 +173,6 @@ export function MobileHeader({ className = "" }: { className?: string }) {
         {/* Coluna de temas sob a marca e, logo abaixo, o mute da voz da
             plataforma — mesmo alvo de toque das bolinhas. */}
         <div className="absolute left-0 top-full mt-1 flex flex-col items-center gap-1">
-          <ThemeDots size="compact" orientation="vertical" />
           <PlatformMuteToggle size="compact" />
         </div>
       </div>

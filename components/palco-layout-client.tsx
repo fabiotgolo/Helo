@@ -34,7 +34,7 @@ export default function PalcoLayoutClient({ children }: { children: ReactNode })
   }, [routeMode, setActiveMode]);
 
   return (
-  <div className="safe-area-pb flex min-h-dvh flex-col">
+  <div className="safe-area-pb flex min-h-[100dvh] w-full max-w-full min-w-0 flex-col overflow-x-hidden">
       {/* A TopBar entrega o padrão global: header original no desktop e
           cabeçalho + menu inferior mobile em toda tela < sm. */}
       <TopBar
@@ -46,7 +46,7 @@ export default function PalcoLayoutClient({ children }: { children: ReactNode })
         }
       />
 
-      <div className="relative flex flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
         <OrbStage
           variant={variant}
           className={`absolute inset-x-0 top-0 z-0 transition-[height] duration-700 ease-out motion-reduce:transition-none ${
@@ -63,7 +63,7 @@ export default function PalcoLayoutClient({ children }: { children: ReactNode })
             religa seus próprios pointer-events, para o palco continuar
             clicável. */}
         <div
-          className={`pointer-events-none relative z-10 flex flex-1 flex-col ${
+          className={`pointer-events-none relative z-10 flex min-w-0 flex-1 flex-col ${
             variant === "aberto"
               ? "*:pointer-events-auto pt-[min(46vh,400px)]"
               : // pb no mobile: o conteúdo rola por inteiro acima do menu

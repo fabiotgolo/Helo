@@ -226,9 +226,9 @@ export default function AdminPage() {
   // ——— Guarda de papel (o servidor já nega; aqui é só a mensagem) ———
   if (!meLoading && me && me.role !== "admin") {
     return (
-      <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
+      <div className="flex min-h-[100dvh] w-full max-w-full min-w-0 flex-col overflow-x-hidden pb-24 sm:pb-0">
         <TopBar right={<PillLink href="/dashboard">← Pacientes</PillLink>} />
-        <main role="alert" className="mx-auto flex max-w-xl flex-1 flex-col items-center justify-center gap-3 px-6 pl-14 text-center sm:pl-20 xl:pl-6">
+        <main role="alert" className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-3 px-4 text-center sm:px-6">
           <p className="text-2xl font-medium">Acesso negado.</p>
           <p className="text-ink-soft">O Dashboard Administrativo é exclusivo do administrador.</p>
         </main>
@@ -237,7 +237,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
+    <div className="flex min-h-[100dvh] w-full max-w-full min-w-0 flex-col overflow-x-hidden pb-24 sm:pb-0">
       <TopBar
         right={
           <>
@@ -246,9 +246,7 @@ export default function AdminPage() {
           </>
         }
       />
-      {/* pl-14 no mobile: deixa livre o vão da coluna de temas (bolinhas
-          ocupam x≈20–48px sob a marca). Desktop volta ao px original. */}
-      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6">
         <div>
           <h1 className="text-3xl font-medium tracking-tight">Administração</h1>
           <p className="mt-1 text-ink-soft">
@@ -256,7 +254,7 @@ export default function AdminPage() {
           </p>
         </div>
 
-        <div role="tablist" aria-label="Seções" className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-full border border-line bg-card p-1">
+        <div role="tablist" aria-label="Seções" className="grid w-full grid-cols-3 gap-1 rounded-3xl border border-line bg-card p-1 sm:grid-cols-6 sm:rounded-full">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -264,7 +262,7 @@ export default function AdminPage() {
               aria-selected={tab === t.id}
               type="button"
               onClick={() => setTab(t.id)}
-              className={`min-h-10 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+              className={`min-h-10 min-w-0 rounded-full px-2 py-2 text-xs font-medium transition-colors sm:px-3 sm:text-sm ${
                 tab === t.id ? "bg-accent text-on-accent" : "text-ink-soft hover:text-ink"
               }`}
             >

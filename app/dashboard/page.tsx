@@ -150,7 +150,7 @@ export default function DashboardGeralPage() {
   }, [newName, addPatient, router]);
 
   return (
-    <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
+    <div className="flex min-h-[100dvh] w-full max-w-full min-w-0 flex-col overflow-x-hidden pb-24 sm:pb-0">
       <TopBar
         right={
           <>
@@ -167,7 +167,7 @@ export default function DashboardGeralPage() {
         className="relative z-0 h-[280px] w-full shrink-0 sm:h-[340px]"
       />
 
-      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 pl-14 sm:px-6 sm:pl-20 xl:pl-6">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-3xl font-medium tracking-tight">Pacientes</h1>
