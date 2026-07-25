@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FavoritePhrase } from "@/lib/favorite-phrases";
 import { setPhraseAudioPlaying } from "@/lib/phrase-audio";
 import { ModalShell } from "@/components/modal-shell";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 
 export function PhrasesToListenModal({
   patientId,
@@ -101,6 +102,67 @@ export function PhrasesToListenModal({
     cleanupAudio();
     onClose();
   }
+
+  const dialogActions = useMemo<HeloUIAction[]>(
+    () => {
+      const actions: HeloUIAction[] = [{
+        actionId: "atividades.frases.ouvir",
+        label: "Ouvir frase",
+        aliases: [
+          "ouvir a frase",
+          "reproduzir frase",
+          "tocar frase",
+          "clique em ouvir frase",
+          `ouvir ${phrase.text}`,
+        ],
+        type: "activity",
+        enabled: !isPlaying && !startingRef.current,
+        run: () => void playPhrase(),
+        toolSuccess: {
+          result: "handled",
+          audio: "phrase_playback_started",
+          speechOwner: "patient",
+          suppressAssistantNarration: true,
+        },
+      }];
+      if (hasNavigation) {
+        actions.push(
+          {
+            actionId: "atividades.frases.anterior",
+            label: "Seta da esquerda — frase anterior",
+            aliases: [
+              "clique na seta da esquerda",
+              "seta da esquerda",
+              "frase anterior",
+              "voltar frase",
+            ],
+            type: "navigation",
+            enabled: index > 0,
+            run: () => changePhrase(index - 1),
+            toolSuccess: { result: "handled", phraseIndex: index, suppressAssistantNarration: true },
+          },
+          {
+            actionId: "atividades.frases.proxima",
+            label: "Seta da direita — próxima frase",
+            aliases: [
+              "clique na seta da direita",
+              "seta da direita",
+              "próxima frase",
+              "proxima frase",
+              "avançar frase",
+            ],
+            type: "navigation",
+            enabled: index < phrases.length - 1,
+            run: () => changePhrase(index + 1),
+            toolSuccess: { result: "handled", phraseIndex: index + 2, suppressAssistantNarration: true },
+          }
+        );
+      }
+      return actions;
+    },
+    [hasNavigation, index, isPlaying, phrase, phrases.length]
+  );
+  useRegisterHeloUIActions(dialogActions);
 
   return (
     <ModalShell onClose={close} label="Frases para se ouvir" className="max-w-xl">

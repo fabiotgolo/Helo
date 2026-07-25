@@ -162,6 +162,17 @@ export default function AtividadesPage() {
         run: () => setView({ kind: "lista" }),
       }];
     }
+    if (phrasesOpen) {
+      return [{
+        actionId: "atividades.frases.fechar",
+        label: "Fechar frases para se ouvir",
+        aliases: ["fechar frases", "voltar para atividades", "fechar atividade de frases"],
+        type: "navigation",
+        enabled: true,
+        run: () => setPhrasesOpen(false),
+        toolSuccess: { result: "handled", screen: "activities_menu", suppressAssistantNarration: true },
+      }];
+    }
     if (view.kind !== "lista" || state !== "ok" || !templates) return [];
     const list: HeloUIAction[] = [];
     // Navegação sempre visível na lista (inclusive no estado vazio, quando
@@ -183,6 +194,28 @@ export default function AtividadesPage() {
         enabled: true,
         requiredPermission: "createActivities",
         run: () => router.push("/atividades/gerenciar"),
+      });
+    }
+    if (phrases.length > 0) {
+      list.push({
+        actionId: "atividades.frases.abrir",
+        label: "Frases para se ouvir",
+        aliases: [
+          "abrir frases para se ouvir",
+          "abrir frases",
+          "ouvir frases",
+          "frases especiais",
+          "atividade frases para se ouvir",
+          "clique em frases para se ouvir",
+        ],
+        type: "activity",
+        enabled: true,
+        run: () => setPhrasesOpen(true),
+        toolSuccess: {
+          result: "opened",
+          screen: "phrases_to_listen",
+          suppressAssistantNarration: true,
+        },
       });
     }
     for (const t of templates) {
@@ -229,7 +262,7 @@ export default function AtividadesPage() {
     }
     console.log("[HELO ACTIVITY] menu actions registered", list.length);
     return list;
-  }, [caps, router, start, starting, state, templates, view]);
+  }, [caps, phrases.length, phrasesOpen, router, start, starting, state, templates, view]);
   useRegisterHeloUIActions(registryActions);
 
   if (patientId == null) {
