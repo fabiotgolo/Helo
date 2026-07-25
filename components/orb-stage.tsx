@@ -137,8 +137,11 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
     const n = inactive.length;
     const d = Math.min(D * 0.28, w / (n + 1) - 14);
     lay[active] = { x: w * 0.5, y: h * 0.38, d: D };
+    // A fila inferior fica abaixo do CTA "Toque para falar", mas ainda
+    // dentro da área útil acima do menu fixo. O respiro extra evita que os
+    // orbs ou seus rótulos encostem na frase em aparelhos mais altos.
     inactive.forEach((m, i) => {
-      lay[m] = { x: (w * (i + 1)) / (n + 1), y: h * 0.84, d };
+      lay[m] = { x: (w * (i + 1)) / (n + 1), y: h * 0.9, d };
     });
     return lay;
   }
