@@ -13,7 +13,6 @@ const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "16kb" }));
 
-const MUSIC_LENGTH_MS = 30000;
 const MAX_PROMPT_LENGTH = 4100;
 const MAX_GENRE_LENGTH = 100;
 const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || "helo-db";
@@ -134,8 +133,13 @@ async function generateMusicHandler(req, res) {
   try {
     const prompt = textParameter(req.body?.prompt);
     const genre = textParameter(req.body?.genre);
+    const durationSeconds = req.body?.duration_seconds
+      ? parseInt(req.body.duration_seconds, 10)
+      : 240;
     const patientId = Number(req.body?.patientId);
     const apiKey = process.env.ELEVENLABS_API_KEY;
+
+    console.log("Received music payload:", { prompt: req.body?.prompt, genre: req.body?.genre, durationSeconds });
 
     if (!prompt) {
       return res.status(400).json({ error: "O parâmetro 'prompt' é obrigatório." });
@@ -174,7 +178,8 @@ async function generateMusicHandler(req, res) {
         },
         body: JSON.stringify({
           prompt: compositionPrompt,
-          music_length_ms: MUSIC_LENGTH_MS,
+          genre,
+          duration_seconds: durationSeconds,
           model_id: "music_v2",
         }),
       }
@@ -258,7 +263,7 @@ async function generateMusicHandler(req, res) {
 exports.generateMusic = onRequest(
   {
     secrets: ["ELEVENLABS_API_KEY"],
-    timeoutSeconds: 540,
+    timeoutSeconds: 300,
     memory: "1GiB",
     cors: true,
   },

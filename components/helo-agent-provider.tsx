@@ -4,7 +4,18 @@
 // entre rotas quando a opção do paciente está ligada; fora disso, sair de
 // /helo reproduz o comportamento anterior de encerrar a conversa.
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type TouchEvent as ReactTouchEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import type { Conversation as ElevenLabsConversation, SessionConfig } from "@elevenlabs/client";
@@ -386,6 +397,8 @@ function HeloAgentSession({
   const lastMicDebugLogRef = useRef(0);
   const selectedInputDeviceIdRef = useRef("");
   const generatedMusicRef = useRef<HTMLAudioElement | null>(null);
+  const musicSeekBarRef = useRef<HTMLDivElement | null>(null);
+  const musicSeekingRef = useRef(false);
   const musicGenerationAbortRef = useRef<AbortController | null>(null);
   const musicToolCompletionRef = useRef<((outcome: MusicToolOutcome) => void) | null>(null);
   const musicMicSuspendedRef = useRef(false);
@@ -570,6 +583,52 @@ function HeloAgentSession({
     setMusicPlayer((current) => ({ ...current, currentTime: audio.currentTime }));
   }, []);
 
+  const seekMusicFromClientX = useCallback((clientX: number) => {
+    const bar = musicSeekBarRef.current;
+    const audio = generatedMusicRef.current;
+    const duration = audio && Number.isFinite(audio.duration) ? audio.duration : musicPlayer.duration;
+    if (!bar || !Number.isFinite(clientX) || !Number.isFinite(duration) || duration <= 0) return;
+
+    const bounds = bar.getBoundingClientRect();
+    if (bounds.width <= 0) return;
+    const progress = Math.min(1, Math.max(0, (clientX - bounds.left) / bounds.width));
+    seekMusicPlayback(progress * duration);
+  }, [musicPlayer.duration, seekMusicPlayback]);
+
+  const beginMusicSeek = useCallback((clientX: number) => {
+    musicSeekingRef.current = true;
+    seekMusicFromClientX(clientX);
+  }, [seekMusicFromClientX]);
+
+  const endMusicSeek = useCallback(() => {
+    musicSeekingRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      if (musicSeekingRef.current) seekMusicFromClientX(event.clientX);
+    };
+    const onMouseUp = () => endMusicSeek();
+    const onTouchMove = (event: TouchEvent) => {
+      if (!musicSeekingRef.current || !event.touches[0]) return;
+      event.preventDefault();
+      seekMusicFromClientX(event.touches[0].clientX);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("touchend", onMouseUp);
+    window.addEventListener("touchcancel", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onMouseUp);
+      window.removeEventListener("touchcancel", onMouseUp);
+    };
+  }, [endMusicSeek, seekMusicFromClientX]);
+
   const playMusicTrack = useCallback(async (track: {
     audioUrl: string;
     title: string;
@@ -641,9 +700,10 @@ function HeloAgentSession({
     return await playbackFinished;
   }, [finishMusicPlayback]);
 
-  const generateMusicClientTool = useCallback(async (parameters: { prompt?: string; genre?: string }) => {
+  const generateMusicClientTool = useCallback(async (parameters: { prompt?: string; genre?: string; duration_seconds?: unknown }) => {
     const prompt = parameters.prompt?.trim() || "";
     const genre = parameters.genre?.trim() || "";
+    const durationSeconds = Number(parameters.duration_seconds) || 240;
     if (!prompt) {
       return { ok: false, reason: "O prompt da música é obrigatório." };
     }
@@ -673,6 +733,7 @@ function HeloAgentSession({
           patientId: patientIdRef.current,
           prompt,
           genre: genre || undefined,
+          duration_seconds: durationSeconds,
         }),
         signal: abortController.signal,
       });
@@ -1070,6 +1131,7 @@ function HeloAgentSession({
       return toolResult(await generateMusicClientTool({
         prompt: typeof parameters.prompt === "string" ? parameters.prompt : undefined,
         genre: typeof parameters.genre === "string" ? parameters.genre : undefined,
+        duration_seconds: parameters.duration_seconds,
       }));
     },
     // Alias temporário para sessões que ainda usam o nome anterior no painel.
@@ -1077,6 +1139,7 @@ function HeloAgentSession({
       return toolResult(await generateMusicClientTool({
         prompt: typeof parameters.prompt === "string" ? parameters.prompt : undefined,
         genre: typeof parameters.genre === "string" ? parameters.genre : undefined,
+        duration_seconds: parameters.duration_seconds,
       }));
     },
     play_existing_music: async (parameters: Record<string, unknown>) => {
@@ -1772,6 +1835,9 @@ function HeloAgentSession({
                 : "Helo encerrada";
   const sessionVisible = restarting || starting || status !== "disconnected";
   const musicIsPlaying = musicPlayer.status === "playing";
+  const musicProgressPercent = musicPlayer.duration > 0
+    ? Math.min(100, Math.max(0, (musicPlayer.currentTime / musicPlayer.duration) * 100))
+    : 0;
   const micActive =
     status === "connected" && !isMuted && !musicIsPlaying && micLevel > MIC_ACTIVITY_THRESHOLD;
   const micStatusLabel = musicIsPlaying
@@ -1861,29 +1927,61 @@ function HeloAgentSession({
                                 : "Pausada"}
                           </span>
                         </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-line" aria-hidden="true">
-                          <div
-                            className="h-full rounded-full bg-accent transition-[width] duration-200"
-                            style={{
-                              width: `${
-                                musicPlayer.duration > 0
-                                  ? Math.min(100, (musicPlayer.currentTime / musicPlayer.duration) * 100)
-                                  : 0
-                              }%`,
-                            }}
+                        <div
+                          ref={musicSeekBarRef}
+                          role="slider"
+                          tabIndex={0}
+                          aria-label="Posição da música"
+                          aria-valuemin={0}
+                          aria-valuemax={Math.round(musicPlayer.duration)}
+                          aria-valuenow={Math.round(musicPlayer.currentTime)}
+                          aria-valuetext={`${formatPlaybackTime(musicPlayer.currentTime)} de ${formatPlaybackTime(musicPlayer.duration)}`}
+                          onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+                            event.preventDefault();
+                            beginMusicSeek(event.clientX);
+                          }}
+                          onTouchStart={(event: ReactTouchEvent<HTMLDivElement>) => {
+                            if (!event.touches[0]) return;
+                            event.preventDefault();
+                            beginMusicSeek(event.touches[0].clientX);
+                          }}
+                          onTouchMove={(event: ReactTouchEvent<HTMLDivElement>) => {
+                            if (!musicSeekingRef.current || !event.touches[0]) return;
+                            event.preventDefault();
+                            seekMusicFromClientX(event.touches[0].clientX);
+                          }}
+                          onTouchEnd={endMusicSeek}
+                          onKeyDown={(event) => {
+                            if (musicPlayer.duration <= 0) return;
+                            const step = Math.max(1, musicPlayer.duration / 100);
+                            if (event.key === "ArrowLeft") {
+                              event.preventDefault();
+                              seekMusicPlayback(musicPlayer.currentTime - step);
+                            } else if (event.key === "ArrowRight") {
+                              event.preventDefault();
+                              seekMusicPlayback(musicPlayer.currentTime + step);
+                            } else if (event.key === "Home") {
+                              event.preventDefault();
+                              seekMusicPlayback(0);
+                            } else if (event.key === "End") {
+                              event.preventDefault();
+                              seekMusicPlayback(musicPlayer.duration);
+                            }
+                          }}
+                          className="group relative mt-1 flex h-10 w-full cursor-pointer touch-none select-none items-center"
+                        >
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800/80 shadow-inner">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-[width] duration-100"
+                              style={{ width: `${musicProgressPercent}%` }}
+                            />
+                          </div>
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-emerald-500 bg-white shadow-md transition-transform duration-150 group-hover:scale-125 group-active:scale-125"
+                            style={{ left: `${musicProgressPercent}%` }}
                           />
                         </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={Math.max(1, musicPlayer.duration)}
-                          step={0.1}
-                          value={Math.min(musicPlayer.currentTime, Math.max(1, musicPlayer.duration))}
-                          onChange={(event) => seekMusicPlayback(Number(event.target.value))}
-                          aria-label="Posição da música"
-                          aria-valuetext={`${formatPlaybackTime(musicPlayer.currentTime)} de ${formatPlaybackTime(musicPlayer.duration)}`}
-                          className="mt-2 h-10 w-full cursor-pointer accent-[var(--color-accent)]"
-                        />
                         <div className="flex justify-between text-xs tabular-nums text-ink-mute">
                           <span>{formatPlaybackTime(musicPlayer.currentTime)}</span>
                           <span>{formatPlaybackTime(musicPlayer.duration)}</span>
