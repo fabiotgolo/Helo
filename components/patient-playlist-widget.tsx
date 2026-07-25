@@ -61,23 +61,38 @@ export function PatientPlaylistWidget({ patientId, patientName }: { patientId: n
   const loading = loadedPatientId !== patientId;
   const currentTracks = loadedPatientId === patientId ? tracks : null;
   const failed = failedPatientId === patientId;
+  // O servidor decide a autorização a partir da sessão e do vínculo do
+  // paciente; o cliente apenas usa esse sinal para não renderizar a lixeira.
+  const canDeleteTrack = canManage === true;
 
   async function deleteTrack(): Promise<void> {
     if (!confirmTrack || deleting) return;
+    const songId = confirmTrack.id.trim();
+    if (!Number.isSafeInteger(patientId) || patientId <= 0 || !songId) {
+      console.error("[PLAYLIST] IDs inválidos para exclusão de música", {
+        patientId,
+        songId: confirmTrack.id,
+      });
+      setToast({ kind: "error", text: "Não foi possível identificar a música para exclusão." });
+      return;
+    }
     setDeleting(true);
     setToast(null);
     try {
       const response = await fetch(`/api/patients/${patientId}/playlist`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: confirmTrack.id }),
+        body: JSON.stringify({ id: songId }),
       });
-      if (!response.ok) throw new Error("delete playlist track");
-      setTracks((current) => current?.filter((track) => track.id !== confirmTrack.id) ?? current);
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+        throw new Error(typeof payload?.error === "string" ? payload.error : "delete playlist track");
+      }
+      setTracks((current) => current?.filter((track) => track.id !== songId) ?? current);
       setConfirmTrack(null);
       setToast({ kind: "success", text: "Música excluída com sucesso." });
     } catch (error) {
-      console.error("[PLAYLIST] erro ao excluir música", error);
+      console.error("Firestore track deletion failed:", error);
       setToast({ kind: "error", text: "Erro ao excluir a música. Tente novamente." });
     } finally {
       setDeleting(false);
@@ -117,7 +132,7 @@ export function PatientPlaylistWidget({ patientId, patientName }: { patientId: n
                   <span className="rounded-full bg-talvez-soft px-2.5 py-1 text-xs font-medium text-talvez">
                     {PERIOD_LABEL[track.period]}
                   </span>
-                  {canManage && (
+                  {canDeleteTrack && (
                     <button
                       type="button"
                       onClick={() => {

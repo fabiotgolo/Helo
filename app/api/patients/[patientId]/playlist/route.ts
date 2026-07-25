@@ -9,7 +9,7 @@ function canManagePlaylist(auth: {
   user: { role: string };
   link: Parameters<typeof hasPermission>[0];
 }): boolean {
-  return auth.user.role === "admin" || hasPermission(auth.link, "deleteActivities");
+  return auth.user.role === "admin" || hasPermission(auth.link, "canDeletePlaylistSongs");
 }
 
 /** Obtém apenas caminhos da pasta de músicas do bucket desta aplicação. */
@@ -68,6 +68,10 @@ export async function DELETE(
   { params }: { params: Promise<{ patientId: string }> }
 ) {
   const { patientId: rawPatientId } = await params;
+  if (!rawPatientId?.trim()) {
+    console.error("[PLAYLIST] patientId ausente na exclusão de música");
+    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+  }
   const patientId = Number(rawPatientId);
   if (!patientId || Number.isNaN(patientId)) {
     return Response.json({ error: "patientId inválido" }, { status: 400 });
@@ -76,7 +80,7 @@ export async function DELETE(
   const auth = await requirePatientAccess(request, patientId);
   if (auth instanceof Response) return auth;
   if (!canManagePlaylist(auth)) {
-    return Response.json({ error: "permissão necessária: deleteActivities" }, { status: 403 });
+    return Response.json({ error: "permissão necessária: canDeletePlaylistSongs" }, { status: 403 });
   }
 
   let body: { id?: string };
@@ -105,8 +109,8 @@ export async function DELETE(
     ? { path: storedPath, bucket: targetFromUrl?.bucket }
     : targetFromUrl;
 
-  try {
-    if (storageTarget) {
+  if (storageTarget) {
+    try {
       // App Hosting não configura sempre um bucket padrão no Admin SDK. O
       // bucket é extraído da URL pública gerada pela Function, garantindo que
       // a exclusão atinja o mesmo arquivo — inclusive no bucket moderno
@@ -116,10 +120,26 @@ export async function DELETE(
         .bucket(storageTarget.bucket ?? fallbackBucket)
         .file(storageTarget.path)
         .delete({ ignoreNotFound: true });
+    } catch (error) {
+      // O documento do Firestore é a fonte de verdade da playlist. Um MP3
+      // ausente, regra de CORS ou falha transitória do Storage não pode
+      // impedir que o cuidador remova uma faixa do histórico.
+      console.warn(
+        "Storage audio file not found or already removed, proceeding with Firestore document deletion.",
+        { error, patientId, songId: id, storagePath: storageTarget.path }
+      );
     }
+  } else {
+    console.warn(
+      "Storage audio file not found or already removed, proceeding with Firestore document deletion.",
+      { patientId, songId: id, reason: "caminho do áudio indisponível" }
+    );
+  }
+
+  try {
     await trackRef.delete();
   } catch (error) {
-    console.error("[PLAYLIST] falha ao excluir música", error);
+    console.error("Firestore track deletion failed:", error, { patientId, songId: id });
     return Response.json({ error: "não foi possível excluir a música" }, { status: 500 });
   }
 

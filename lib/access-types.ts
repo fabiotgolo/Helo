@@ -79,6 +79,9 @@ export const PERMISSIONS = [
   "editActivities",
   "deleteActivities",
   "viewActivityResults",
+  // Playlist da Helo — concedida explicitamente por paciente, nunca pelo
+  // papel profissional em si.
+  "canDeletePlaylistSongs",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -100,6 +103,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   editActivities: "Editar Atividades",
   deleteActivities: "Excluir Atividades",
   viewActivityResults: "Ver resultados das Atividades",
+  canDeletePlaylistSongs: "Excluir Músicas da Playlist",
 };
 
 /** Papéis que podem criar pacientes (regra do produto — seção 11). */
@@ -138,6 +142,7 @@ export function defaultPermissionsFor(role: UserRole): Permission[] {
         "createActivities",
         "editActivities",
         "deleteActivities",
+        "canDeletePlaylistSongs",
       ];
       return PERMISSIONS.filter((p) => !explicitOnly.includes(p));
   }
