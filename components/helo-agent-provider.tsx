@@ -1854,9 +1854,13 @@ function HeloAgentSession({
     caregiverMessage.trim().length > 0 && !messageSending && status === "connected";
 
   const stage = (
-    <main className="relative flex flex-1 items-center px-4 pb-8 sm:px-6">
+    <main className="relative flex min-w-0 flex-1 items-start px-3 py-4 pb-28 sm:items-center sm:px-6 sm:py-8">
       <OverlayVeil />
-      <OverlayPanel label="Conversa com a Helo" variant="imersivo" className="relative z-10 max-w-xl">
+      <OverlayPanel
+        label="Conversa com a Helo"
+        variant="imersivo"
+        className="relative z-10 min-w-0 max-w-xl max-sm:max-h-[calc(100dvh-8rem)] max-sm:overflow-y-auto max-sm:px-4 max-sm:py-5 max-sm:overscroll-contain"
+      >
         <div className="flex flex-col items-center gap-5 text-center">
           <div aria-live="polite" className="text-lg font-medium text-ink">{label}</div>
           <p className="max-w-md text-sm text-ink-soft">A conversa usa a voz oficial da Helo. O microfone só será solicitado ao conectar.</p>
@@ -2165,14 +2169,14 @@ function HeloAgentSession({
     <HeloAgentContext.Provider value={agentContext}>
       {mount && createPortal(stage, mount)}
       {sessionVisible && (
-        <aside aria-live="polite" className="fixed bottom-24 right-4 z-[70] flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-line bg-card/95 px-4 py-3 shadow-soft backdrop-blur-sm sm:bottom-4">
+        <aside aria-live="polite" className="fixed inset-x-4 bottom-24 z-[70] flex min-w-0 items-center gap-2 rounded-2xl border border-line bg-card/95 px-4 py-3 shadow-soft backdrop-blur-sm sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-auto sm:max-w-[calc(100vw-2rem)] sm:gap-3">
           <span
             role="img"
             aria-label={connectionStatusDetails.label}
             title={connectionStatusDetails.label}
             className={`size-2 shrink-0 rounded-full transition-colors duration-300 ${connectionStatusDetails.dotClassName}`}
           />
-          <div className="min-w-0"><p className="text-sm font-medium text-ink">{label}</p><p className="text-xs text-ink-soft">Helo ativa</p></div>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-ink">{label}</p><p className="text-xs text-ink-soft">Helo ativa</p></div>
           <button
             type="button"
             onClick={toggleAgentMute}
@@ -2188,7 +2192,7 @@ function HeloAgentSession({
             {isAgentMuted ? <VolumeXIcon /> : <Volume2Icon />}
           </button>
           {isAgentMuted && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-400">
+            <span className="hidden shrink-0 items-center gap-1 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-400 sm:inline-flex">
               <MicOffIcon />
               Microfone desligado
             </span>
