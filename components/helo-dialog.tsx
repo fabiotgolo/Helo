@@ -257,7 +257,7 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
             aria-modal="true"
             aria-labelledby="helo-dialog-title"
             aria-describedby={request.options.message ? "helo-dialog-desc" : undefined}
-            className={`relative w-[90vw] max-w-md rounded-3xl border border-line bg-surface-elevated/95 p-6 font-sans text-ink shadow-2xl shadow-black/50 backdrop-blur-xl transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none sm:p-8 ${
+          className={`relative max-h-[85vh] w-[92vw] max-w-md overflow-y-auto rounded-3xl border border-line bg-surface-elevated/95 p-4 font-sans text-ink shadow-2xl shadow-black/50 backdrop-blur-xl transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none sm:p-8 ${
               shown ? "translate-y-0 opacity-100 scale-100" : "translate-y-2 opacity-0 scale-[0.98]"
             }`}
           >

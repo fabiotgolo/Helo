@@ -385,7 +385,7 @@ export function TopBar({
             lateral sem empurrar o conteúdo da página. Logo abaixo dos temas,
             o mute da voz da plataforma. */}
         {showThemeDots && (
-          <div className="absolute left-0 top-full mt-1 flex flex-col items-center gap-1.5">
+          <div className="absolute left-0 top-full mt-1 hidden flex-col items-center gap-1.5 lg:flex">
             <ThemeDots orientation="vertical" />
             <PlatformMuteToggle />
           </div>

@@ -387,7 +387,7 @@ export default function AjustesPage() {
   }, [newPatientName, addPatient, selectPatient]);
 
   return (
-    <div className="flex min-h-dvh flex-col pb-24 sm:pb-0">
+    <div className="flex min-h-[100dvh] w-full max-w-full min-w-0 flex-col overflow-x-hidden pb-24 sm:pb-0">
       <TopBar
         right={
           <>
@@ -399,7 +399,7 @@ export default function AjustesPage() {
         }
       />
 
-      <main className="safe-area-pb-spaced mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-8 pl-14 sm:pl-20 xl:pl-6">
+      <main className="safe-area-pb-spaced mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6">
         <div>
           <h1 className="text-4xl font-medium tracking-tight">Ajustes</h1>
           <p className="mt-2 text-lg text-ink-soft">

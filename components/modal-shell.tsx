@@ -81,7 +81,7 @@ export function ModalShell({
         aria-label={label}
         aria-labelledby={labelledBy}
         aria-describedby={describedBy}
-        className={`relative z-10 w-[90vw] max-w-lg rounded-3xl border border-line bg-surface-elevated/95 p-6 font-sans text-ink shadow-2xl shadow-black/50 backdrop-blur-xl animate-[modal-scale-in_200ms_ease-out] sm:p-8 ${className}`}
+        className={`relative z-10 max-h-[85vh] w-[92vw] max-w-lg overflow-y-auto rounded-3xl border border-line bg-surface-elevated/95 p-4 font-sans text-ink shadow-2xl shadow-black/50 backdrop-blur-xl animate-[modal-scale-in_200ms_ease-out] sm:p-8 ${className}`}
       >
         {children}
       </div>
