@@ -22,10 +22,11 @@ import {
   endPatientVoiceOverride,
 } from "@/lib/audio-coordinator";
 import type { SpeakResult } from "@/lib/useSpeech";
-import { GestureTriplet } from "@/components/ui";
+import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
 
 const LOTE = 3; // nunca mais de 3 opções na tela
+const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
 type Confirm = {
   phrase: string;
@@ -48,6 +49,10 @@ export default function ConversaPage() {
   const { speak, speaking } = useHelo();
 
   const gestures = useGestures();
+  const gestureOptions = useMemo(
+    () => GESTURE_ORDER.map((gesture) => ({ id: gesture, ...gestures[gesture], sublabel: gestures[gesture].hint })),
+    [gestures],
+  );
   // Perfil do paciente ativo: nome, estilo de fala, temas evitados e
   // expressões preferidas alimentam a conversa e as sugestões da IA.
   const { patient, patientId, settings, loading: patientLoading } = usePatient();
@@ -700,7 +705,11 @@ export default function ConversaPage() {
             <h1 className="text-center text-4xl font-medium tracking-tight sm:text-5xl">
               {node.question}
             </h1>
-            <GestureTriplet onGesture={onQuestionGesture} disabled={paused} />
+            <GestureOptionsBar
+              options={gestureOptions}
+              onSelectOption={(option) => onQuestionGesture(option.id as Gesture)}
+              disabled={paused}
+            />
           </section>
         )}
 
@@ -745,11 +754,11 @@ export default function ConversaPage() {
                         {gestures[marked].emoji} {gestures[marked].label}
                       </span>
                     ) : (
-                      <GestureTriplet
-                        size="compacto"
-                        idPrefix={`opt-${idx}-`}
-                        onGesture={(g) => onOptionGesture(idx, g)}
+                      <GestureOptionsBar
+                        options={gestureOptions}
+                        onSelectOption={(option) => onOptionGesture(idx, option.id as Gesture)}
                         disabled={paused || aiLoading}
+                        ariaLabel={`Gesto do paciente para: ${option.label}`}
                       />
                     )}
                   </div>
@@ -779,7 +788,11 @@ export default function ConversaPage() {
                 ? "É exatamente isso que você quer dizer?"
                 : "Confirma esta mensagem?"}
             </p>
-            <GestureTriplet onGesture={onConfirmGesture} disabled={paused} />
+            <GestureOptionsBar
+              options={gestureOptions}
+              onSelectOption={(option) => onConfirmGesture(option.id as Gesture)}
+              disabled={paused}
+            />
             <p className="text-sm text-ink-mute">
               {gestures.sim.emoji} confirmar · {gestures.talvez.emoji} reformular · {gestures.nao.emoji} descartar
             </p>

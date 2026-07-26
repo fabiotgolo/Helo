@@ -21,8 +21,8 @@ import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import type { Conversation as ElevenLabsConversation, SessionConfig } from "@elevenlabs/client";
 import { usePathname, useRouter } from "next/navigation";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
-import { GestureTriplet } from "@/components/ui";
-import { GESTURE_SEMANTIC_INTENTS, GESTURE_SEMANTIC_MESSAGES } from "@/lib/gestures";
+import { GestureOptionsBar } from "@/components/gesture-options-bar";
+import { GESTURE_SEMANTIC_INTENTS, GESTURE_SEMANTIC_MESSAGES, useGestures } from "@/lib/gestures";
 import { useHelo } from "@/lib/helo-state";
 import {
   registerAgentSuppressor,
@@ -77,6 +77,8 @@ type PatchableConversation = ElevenLabsConversation & {
   handleErrorEvent?: (event: ElevenLabsErrorEvent) => void;
   __heloIncompleteErrorEventPatch?: boolean;
 };
+
+const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
 // Nome de tela reportado ao Agent por getCurrentHeloActions — derivado da
 // rota, nunca declarado pelo Agent.
@@ -361,6 +363,7 @@ function HeloAgentSession({
   const pathname = usePathname();
   const router = useRouter();
   const { stop, setAgentAmplitude } = useHelo();
+  const gestures = useGestures();
   const { patientId, settings } = usePatient();
   const persistentEnabled = isHeloPersistentAssistantEnabled(settings);
   const [starting, setStarting] = useState(false);
@@ -2057,7 +2060,13 @@ function HeloAgentSession({
                   ) : null}
                 </div>
               )}
-              <GestureTriplet onGesture={markGesture} size="compacto" disabled={gesturePending} highlighted={gesturesHighlighted} />
+              <GestureOptionsBar
+                options={GESTURE_ORDER.map((gesture) => ({ id: gesture, ...gestures[gesture], sublabel: gestures[gesture].hint }))}
+                onSelectOption={(option) => markGesture(option.id as Gesture)}
+                disabled={gesturePending}
+                ariaLabel="Gestos: sim, talvez, não"
+                className={gesturesHighlighted ? "rounded-2xl ring-2 ring-accent ring-offset-4 ring-offset-transparent motion-safe:animate-pulse" : ""}
+              />
               <div className="flex w-full max-w-md flex-col gap-2 text-left">
                 <label className="text-sm font-medium text-ink-soft" htmlFor="helo-input-device">Microfone</label>
                 <div className="flex gap-2">

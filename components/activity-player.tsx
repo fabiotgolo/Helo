@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ContextualEdit } from "@/components/contextual-edit";
+import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { ModalShell } from "@/components/modal-shell";
 import { useHeloDialog } from "@/components/helo-dialog";
 import { useHeloAgent } from "@/components/helo-agent-provider";
@@ -38,12 +39,6 @@ import {
 // só comunica pelos três gestos, nunca "seleciona". Por isso cada opção
 // carrega seus próprios 👍✋✊.
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
-
-const GESTURE_ON: Record<Gesture, string> = {
-  sim: "border-sim bg-sim-soft text-sim",
-  talvez: "border-talvez bg-talvez-soft text-talvez",
-  nao: "border-nao bg-nao-soft text-nao",
-};
 
 const GESTURE_COMMAND_LABELS: Record<Gesture, { label: string; emoji: string; aliases: string[] }> = {
   sim: {
@@ -240,34 +235,17 @@ function OptionGestures({
         answered ? "border-ink-mute bg-card" : "border-line/70 bg-card/80 backdrop-blur-md"
       }`}
     >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-center text-xl font-medium tracking-tight sm:text-left">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <span className="text-center text-xl font-medium tracking-tight lg:text-left">
           {option.label}
         </span>
-        <div
-          role="group"
-          aria-label={`Gesto do paciente para: ${option.label}`}
-          className="flex items-center justify-center gap-2"
-        >
-          {GESTURE_ORDER.map((g) => {
-            const on = current === g;
-            return (
-              <button
-                key={g}
-                type="button"
-                disabled={disabled}
-                aria-pressed={on}
-                aria-label={`${gestures[g].label} para ${option.label}`}
-                onClick={() => onPick(g)}
-                className={`flex h-14 w-14 items-center justify-center rounded-2xl border text-2xl transition-transform active:scale-95 disabled:opacity-50 ${
-                  on ? GESTURE_ON[g] : "border-line bg-cream/60 opacity-70 hover:opacity-100"
-                }`}
-              >
-                <span aria-hidden="true">{gestures[g].emoji}</span>
-              </button>
-            );
-          })}
-        </div>
+        <GestureOptionsBar
+          options={GESTURE_ORDER.map((gesture) => ({ id: gesture, ...gestures[gesture], sublabel: gestures[gesture].hint }))}
+          onSelectOption={(gesture) => onPick(gesture.id as Gesture)}
+          disabled={disabled}
+          selectedIndex={current ? GESTURE_ORDER.indexOf(current) : null}
+          ariaLabel={`Gesto do paciente para: ${option.label}`}
+        />
       </div>
       {spokenText && (
         <p className="text-center text-lg font-medium leading-snug text-ink sm:text-left">
@@ -301,17 +279,17 @@ export function ActivityItemView({
               key={o.id}
               className="flex flex-col gap-2 rounded-3xl border border-line/70 bg-card/80 px-4 py-3"
             >
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-center text-xl font-medium tracking-tight sm:text-left">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <span className="text-center text-xl font-medium tracking-tight lg:text-left">
                   {o.label}
                 </span>
-                <div className="flex items-center justify-center gap-2 opacity-50">
-                  {GESTURE_ORDER.map((g) => (
-                    <span key={g} className="text-2xl" aria-hidden="true">
-                      {gestures[g].emoji}
-                    </span>
-                  ))}
-                </div>
+                <GestureOptionsBar
+                  options={GESTURE_ORDER.map((gesture) => ({ id: gesture, ...gestures[gesture], sublabel: gestures[gesture].hint }))}
+                  onSelectOption={() => undefined}
+                  disabled
+                  ariaLabel={`Prévia dos gestos para: ${o.label}`}
+                  className="opacity-50"
+                />
               </div>
               {optionSpeaks(o) && (
                 <p className="text-xs text-ink-mute sm:text-right">
