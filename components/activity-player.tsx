@@ -864,7 +864,7 @@ export function SessionPlayer({
       aria-label={`Sessão: ${run.templateTitle}`}
       className="fade-rise pointer-events-auto mx-auto flex w-full max-w-3xl flex-col items-center gap-6 px-4 py-6"
     >
-      <header className="flex w-full flex-wrap items-center justify-between gap-2">
+      <header className="flex w-full flex-col items-center gap-2">
         <div className="min-w-0">
           <p className="text-sm font-semibold uppercase tracking-widest text-ink-soft">
             {run.templateTitle}
@@ -873,7 +873,7 @@ export function SessionPlayer({
             {idx + 1} de {items.length}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center justify-center gap-2">
           {/* Menu de atividades: volta à tela dos cards (Meu livro, Memória
               pessoal, Nascimento…). Fica à ESQUERDA de "Gerenciar atividades".
               Antes de sair, a Helo pergunta se deseja concluir a atividade. */}
@@ -923,13 +923,6 @@ export function SessionPlayer({
               }}
             />
           )}
-          <button
-            type="button"
-            onClick={closeSession}
-            className="rounded-xl border border-line bg-card px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-cream"
-          >
-            Fechar
-          </button>
         </div>
       </header>
 

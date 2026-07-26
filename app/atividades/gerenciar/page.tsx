@@ -10,6 +10,7 @@
 // capacidades (caps) devolvidas pela API.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { TopBar, PillLink } from "@/components/ui";
 import { usePatient } from "@/lib/patient";
 import { redirectToLogin } from "@/lib/use-auth";
@@ -501,6 +502,14 @@ export default function GerenciarAtividadesPage() {
                       {t.updatedByName ?? "—"}
                     </p>
                     <div className="flex flex-wrap gap-2">
+                      {caps?.run && (
+                        <Link
+                          href={"/atividades?start=" + encodeURIComponent(t.id)}
+                          className="rounded-full border border-line bg-card px-4 py-1.5 text-sm font-medium transition-colors hover:border-ink-mute"
+                        >
+                          Ver atividade
+                        </Link>
+                      )}
                       {caps?.edit && (
                         <SmallBtn onClick={() => setDraft(draftFrom(t))}>Editar</SmallBtn>
                       )}
@@ -644,7 +653,18 @@ function TemplateEditor({
   onSave: () => void;
   onCancel: () => void;
 }) {
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const [titleError, setTitleError] = useState(false);
+
   const patch = (p: Partial<Draft>) => setDraft({ ...draft, ...p });
+  const handleSave = () => {
+    if (!draft.title.trim()) {
+      setTitleError(true);
+      titleInputRef.current?.focus();
+      return;
+    }
+    onSave();
+  };
   const patchItem = (idx: number, p: Partial<ActivityItem>) => {
     const items = draft.items.map((it, i) => (i === idx ? { ...it, ...p } : it));
     patch({ items });
@@ -688,11 +708,25 @@ function TemplateEditor({
       <div className="flex flex-col gap-4 rounded-3xl border border-line bg-card p-5 sm:p-6">
         <Field label="Título">
           <input
+            ref={titleInputRef}
             value={draft.title}
-            onChange={(e) => patch({ title: e.target.value })}
+            onChange={(e) => {
+              const title = e.target.value;
+              patch({ title });
+              if (title.trim()) setTitleError(false);
+            }}
+            aria-invalid={titleError}
+            aria-describedby={titleError ? "activity-title-error" : undefined}
             placeholder="ex.: Meu Livro, Reconhecimento dos Netos…"
-            className="w-full rounded-2xl border border-line bg-white px-4 py-3"
+            className={titleError
+              ? "w-full rounded-2xl border border-nao bg-white px-4 py-3 focus:border-nao"
+              : "w-full rounded-2xl border border-line bg-white px-4 py-3"}
           />
+          {titleError && (
+            <span id="activity-title-error" role="alert" className="text-sm text-nao">
+              Favor preencher o título da atividade antes de criar.
+            </span>
+          )}
         </Field>
         <Field label="Descrição (opcional)">
           <input
@@ -752,8 +786,8 @@ function TemplateEditor({
       <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
         <button
           type="button"
-          onClick={onSave}
-          disabled={saving || !draft.title.trim()}
+          onClick={handleSave}
+          disabled={saving}
           className="rounded-full bg-accent px-8 py-3 font-medium text-on-accent hover:bg-accent-strong disabled:opacity-50"
         >
           {saving ? "Salvando…" : draft.id ? "Salvar alterações" : "Criar atividade"}
