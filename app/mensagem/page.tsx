@@ -9,10 +9,12 @@ import { usePatient, usePatientItems } from "@/lib/patient";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useSpeech } from "@/lib/useSpeech";
-import { Orb, GestureTriplet, TopBar } from "@/components/ui";
+import { Orb, TopBar } from "@/components/ui";
+import { GestureOptionsBar } from "@/components/gesture-options-bar";
 
 const LOTE = 3;
 const MAX_FRASES_PARAGRAFO = 3;
+const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
 
 // Construção progressiva: frase → parágrafo (máx. 3 frases) → mensagem final.
 // Cada frase é confirmada por gesto; a mensagem inteira é relida e
@@ -23,6 +25,10 @@ type Phase = "intro" | "escolha" | "confirma_frase" | "continuar" | "final" | "d
 export default function MensagemPage() {
   const { speak, engine } = useSpeech();
   const gestures = useGestures();
+  const gestureOptions = useMemo(
+    () => GESTURE_ORDER.map((gesture) => ({ id: gesture, ...gestures[gesture], sublabel: gestures[gesture].hint })),
+    [gestures],
+  );
   const { patientId, settings } = usePatient();
   // As expressões preferidas do paciente entram ANTES do banco curado —
   // as primeiras opções apresentadas são as do jeito de falar dele.
@@ -379,11 +385,11 @@ export default function MensagemPage() {
                         {gestures[marked].emoji} {gestures[marked].label}
                       </span>
                     ) : (
-                      <GestureTriplet
-                        size="compacto"
-                        idPrefix={`m-${idx}-`}
-                        onGesture={(g) => onOptionGesture(idx, g)}
+                      <GestureOptionsBar
+                        options={gestureOptions}
+                        onSelectOption={(option) => onOptionGesture(idx, option.id as Gesture)}
                         disabled={aiLoading}
+                        ariaLabel={`Gesto do paciente para: ${option.phrase}`}
                       />
                     )}
                   </div>
@@ -401,7 +407,7 @@ export default function MensagemPage() {
             <blockquote className="text-center text-4xl font-medium leading-snug tracking-tight">
               “{pending.phrase}”
             </blockquote>
-            <GestureTriplet onGesture={onConfirmFrase} />
+            <GestureOptionsBar options={gestureOptions} onSelectOption={(option) => onConfirmFrase(option.id as Gesture)} />
             <p className="text-sm text-ink-mute">
               {gestures.sim.emoji} acrescentar · {gestures.talvez.emoji} outra frase · {gestures.nao.emoji} não
             </p>
@@ -413,7 +419,7 @@ export default function MensagemPage() {
             <h1 className="text-center text-4xl font-medium tracking-tight sm:text-5xl">
               Quer acrescentar mais uma frase?
             </h1>
-            <GestureTriplet onGesture={onContinuar} />
+            <GestureOptionsBar options={gestureOptions} onSelectOption={(option) => onContinuar(option.id as Gesture)} />
             <p className="text-sm text-ink-mute">
               {gestures.sim.emoji} sim · {gestures.talvez.emoji} reler a mensagem · {gestures.nao.emoji} concluir
             </p>
@@ -428,7 +434,7 @@ export default function MensagemPage() {
             <blockquote className="max-w-2xl text-center text-3xl font-medium leading-snug tracking-tight">
               “{fullMessage}”
             </blockquote>
-            <GestureTriplet onGesture={onFinal} />
+            <GestureOptionsBar options={gestureOptions} onSelectOption={(option) => onFinal(option.id as Gesture)} />
             <p className="text-sm text-ink-mute">
               {gestures.sim.emoji} comunicar e registrar · {gestures.talvez.emoji} remover última frase · {gestures.nao.emoji} descartar tudo
             </p>
