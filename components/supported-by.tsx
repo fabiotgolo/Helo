@@ -12,12 +12,20 @@ export function SupportedBy() {
         className="supported-by__link"
       >
         <Image
-          src="/Grants-logo.png"
-          alt="ElevenLabs Grants"
-          width={848}
-          height={80}
+          src="/elevenlabs-logo-black.svg"
+          alt="ElevenLabs"
+          width={946}
+          height={90}
           priority
-          className="supported-by__logo"
+          className="supported-by__logo supported-by__logo--light"
+        />
+        <Image
+          src="/elevenlabs-logo-white.svg"
+          alt="ElevenLabs"
+          width={946}
+          height={90}
+          priority
+          className="supported-by__logo supported-by__logo--dark"
         />
       </a>
     </div>

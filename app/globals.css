@@ -191,6 +191,7 @@ body {
  * exatamente a altura renderizada do próprio logo em todos os tamanhos. */
 .supported-by {
   --supported-logo-height: 1.75rem;
+  --supported-logo-width: 18.55rem;
   position: absolute;
   left: 1.5rem;
   bottom: 1.5rem;
@@ -210,19 +211,33 @@ body {
 
 .supported-by__link {
   display: block;
-  max-width: min(26.5rem, calc(100vw - 3rem));
+  width: var(--supported-logo-width);
 }
 
 .supported-by__logo {
   display: block;
-  width: auto;
+  width: 100%;
   height: var(--supported-logo-height);
-  max-width: 100%;
+  aspect-ratio: 946.3 / 90;
+  object-fit: contain;
+}
+
+.supported-by__logo--dark {
+  display: none;
+}
+
+:root[data-theme="escuro"] .supported-by__logo--light {
+  display: none;
+}
+
+:root[data-theme="escuro"] .supported-by__logo--dark {
+  display: block;
 }
 
 @media (max-width: 639px) {
   .supported-by {
-    --supported-logo-height: clamp(1.25rem, 6vw, 1.5rem);
+    --supported-logo-height: clamp(1.1rem, 5vw, 1.25rem);
+    --supported-logo-width: clamp(11.66rem, 53vw, 13.25rem);
     left: 50%;
     bottom: calc(5rem + env(safe-area-inset-bottom));
     transform: translateX(-50%);
