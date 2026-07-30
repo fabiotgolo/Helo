@@ -169,7 +169,7 @@ function LoginForm() {
         )}
       </WelcomeIntro>
 
-      <SupportedBy />
+      <SupportedBy only="mobile" />
 
       {/* Mobile: a Home aparece por inteiro antes do acesso — a fila de modos
           é VISUAL (aria-hidden, sem ação própria). Qualquer toque, aqui ou em

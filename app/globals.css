@@ -226,6 +226,10 @@ body {
   display: none;
 }
 
+.supported-by--mobile-only {
+  display: none;
+}
+
 :root[data-theme="escuro"] .supported-by__logo--light {
   display: none;
 }
@@ -235,6 +239,14 @@ body {
 }
 
 @media (max-width: 639px) {
+  .supported-by--desktop-only {
+    display: none;
+  }
+
+  .supported-by--mobile-only {
+    display: flex;
+  }
+
   .supported-by {
     --supported-logo-height: clamp(1.1rem, 5vw, 1.25rem);
     --supported-logo-width: clamp(11.66rem, 53vw, 13.25rem);
