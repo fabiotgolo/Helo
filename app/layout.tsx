@@ -6,6 +6,7 @@ import { HeloProvider } from "@/lib/helo-state";
 import { ThemeProvider, THEME_INIT_SCRIPT } from "@/lib/theme";
 import { HeloAgentProvider } from "@/components/helo-agent-provider";
 import { HeloDialogProvider } from "@/components/helo-dialog";
+import { SupportedBy } from "@/components/supported-by";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -16,6 +17,11 @@ export const metadata: Metadata = {
   title: "Helo — o elo entre sentir e dizer",
   description:
     "Comunicação assistiva com respeito, cuidado e consentimento. O paciente escolhe, o Helo dá voz.",
+  icons: {
+    icon: "/faviconHelo.png",
+    shortcut: "/faviconHelo.png",
+    apple: "/faviconHelo.png",
+  },
 };
 
 // viewportFit cover + env(safe-area-inset-*) — telas com notch
@@ -43,6 +49,7 @@ export default function RootLayout({
         {/* Anti-flash: aplica o tema salvo antes da primeira pintura. Precisa
             ser o primeiro nó do body e rodar de forma síncrona. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <SupportedBy only="desktop" />
         <PatientProvider>
           <ThemeProvider>
             <HeloProvider>
