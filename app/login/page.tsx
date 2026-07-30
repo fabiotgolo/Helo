@@ -8,6 +8,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Orb, TopBar } from "@/components/ui";
 import { WelcomeIntro } from "@/components/welcome-orb";
+import { SupportedBy } from "@/components/supported-by";
 import { usePatient } from "@/lib/patient";
 
 // Destino padrão pós-login: no mobile a experiência abre na Home (sessão
@@ -168,6 +169,8 @@ function LoginForm() {
         )}
       </WelcomeIntro>
 
+      <SupportedBy />
+
       {/* Mobile: a Home aparece por inteiro antes do acesso — a fila de modos
           é VISUAL (aria-hidden, sem ação própria). Qualquer toque, aqui ou em
           qualquer ponto da tela, conta como primeira interação e revela o
@@ -175,7 +178,7 @@ function LoginForm() {
           protegida é alcançável sem sessão. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 bottom-28 flex items-start justify-evenly px-4 sm:hidden"
+        className="pointer-events-none absolute inset-x-0 bottom-44 flex items-start justify-evenly px-4 sm:hidden"
       >
         {(
           [

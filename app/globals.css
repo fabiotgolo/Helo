@@ -187,6 +187,56 @@ body {
   border-radius: 12px;
 }
 
+/* Parceiro da plataforma — a margem entre o texto e o logo acompanha
+ * exatamente a altura renderizada do próprio logo em todos os tamanhos. */
+.supported-by {
+  --supported-logo-height: 1.75rem;
+  position: absolute;
+  left: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-family: var(--font-sans);
+}
+
+.supported-by__label {
+  margin: 0 0 var(--supported-logo-height);
+  color: var(--color-ink);
+  font-size: 1.125rem;
+  line-height: 1.35;
+}
+
+.supported-by__link {
+  display: block;
+  max-width: min(26.5rem, calc(100vw - 3rem));
+}
+
+.supported-by__logo {
+  display: block;
+  width: auto;
+  height: var(--supported-logo-height);
+  max-width: 100%;
+}
+
+@media (max-width: 639px) {
+  .supported-by {
+    --supported-logo-height: clamp(1.25rem, 6vw, 1.5rem);
+    left: 50%;
+    bottom: calc(5rem + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+  }
+
+  .supported-by__label {
+    font-size: 0.875rem;
+  }
+
+  .supported-by__link {
+    max-width: calc(100vw - 3rem);
+  }
+}
+
 @keyframes modal-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
