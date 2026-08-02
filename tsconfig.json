@@ -38,6 +38,9 @@
   ],
   "exclude": [
     "node_modules",
-    ".next-*"
+    ".next-*",
+    "**/node_modules",
+    "functions/lib",
+    "**/node_modules.icloud-inacessivel"
   ]
 }

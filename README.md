@@ -306,6 +306,105 @@ Cada interação grava: o que foi apresentado, qual gesto o paciente fez, tempo 
 resposta, gestos incertos, pausas, reformulações, descartes e confirmações.
 Os relatórios são observacionais e **não constituem diagnóstico médico**.
 
+## Perguntas em tempo real
+
+Segundo modo da tela Conversar (`/conversa/perguntas`), ao lado da conversa
+guiada e sem alterá-la: o assistente formula uma pergunta livre, apresenta ao
+paciente e registra a **resposta observada** por um ciclo explícito — seleção
+provisória → conferência do assistente → resposta confirmada (com
+**reconfirmação** obrigatória em assuntos sensíveis).
+
+**Só aqui** o segundo gesto significa TALVEZ (`MAYBE`). Fora deste modo o
+significado atual é preservado (`lib/types.ts` e `lib/gestures.tsx`: `talvez`
+= "não é bem assim"/reformular) — este recurso não toca nenhum dos dois. O
+mapeamento sinal físico → resposta semântica é **por paciente** e já prevê
+olhar, piscar, toque e dispositivo assistivo; nada é detectado
+automaticamente: o assistente continua selecionando o que observou.
+
+Três estados que nunca viram resposta: `UNCERTAIN_GESTURE` (controle interno
+do assistente, não é uma quarta opção para o paciente), `NO_RESPONSE`
+(silêncio **nunca** é interpretado como NÃO, e não há tempo limite) e
+`CANCELED`. Toda mudança de estado passa pela máquina de estados e é gravada
+na mesma transação do evento de auditoria — a trilha é imutável e não tem
+rota de escrita para o cliente.
+
+A interface é uma **casca**: ela mostra o que o servidor devolveu e despacha
+ações para a máquina de estados — nunca escolhe o próximo estado. É por isso
+que uma seleção não aparece confirmada antes da resposta do servidor, que uma
+resposta provisória interrompida por pausa volta como provisória, e que não
+há caminho de cliente que pule a reconfirmação de um assunto sensível.
+
+- `lib/realtime-question-types.ts` — entidades, enums e invariantes.
+- `lib/realtime-question-machine.ts` — máquina de estados (ponto único de
+  transição; nenhum componente altera `status` direto).
+- `lib/realtime-question-store.ts` — persistência transacional no Firestore.
+- `app/api/realtime-questions/*` — sessões, interações, trilha (só leitura) e
+  configuração de sinais. Autorização por `createSession` / `viewSessions`.
+- `lib/realtime-question-client.ts` — **único** ponto do cliente que fala com
+  essas rotas: fila serializada, deduplicação de clique repetido, indicador de
+  gravação e tradução do erro para a linguagem do cuidador.
+- `app/(palco)/conversa/perguntas/` e `components/realtime-questions/` — a
+  tela. Rota irmã da conversa guiada, no mesmo palco e no mesmo orbe; entrar
+  aqui desmonta a conversa guiada por completo, então as duas nunca disputam
+  o Action Registry nem os significados de gesto.
+
+Sair da tela abruptamente **pausa** a sessão (recuperável), nunca abandona:
+encerrar sem conclusão é uma declaração que cabe ao assistente fazer.
+
+Ainda **não** implementados: ElevenLabs, transcrição por voz, reprodução de
+áudio, voz clonada, sugestões por IA, dashboard, relatórios analíticos e
+detecção automática de assunto sensível.
+
+## Conversa por opções
+
+Segundo motor de interação **dentro da mesma sessão** de Perguntas em tempo
+real. O assistente monta níveis com até três opções, o paciente escolhe uma
+delas com um sinal, e o caminho escolhido vira uma frase que só ele confirma.
+
+**A regra que define o modo:** durante um nível, os três sinais do paciente
+significam **opção 1 · opção 2 · opção 3** — e os rótulos SIM/TALVEZ/NÃO ficam
+ocultos, no texto visível e no rótulo acessível. O **emoji e o gesto físico não
+mudam**: são as mesmas três âncoras do paciente, na mesma ordem; muda só o
+TEXTO acima de cada uma. SIM/TALVEZ/NÃO voltam apenas na pergunta fechada e na
+confirmação de uma frase completa. O modo ativo é declarado no modelo
+(`InteractionMode`) e mostrado na tela — nunca muda em silêncio.
+
+**Nada apresentado ao paciente é reescrito.** Antes da apresentação, edita-se o
+mesmo rascunho. Depois dela, só existe versão corrigida: registro novo em
+rascunho, original preservado com tudo o que o paciente respondeu nele, e
+nenhuma resposta migrando entre os dois. Voltar pelo breadcrumb não apaga a
+ramificação anterior — ela fica `INACTIVE`, com a escolha que recebeu —, e uma
+cópia do nível reabre numa ramificação nova. Reiniciar encerra o caminho como
+`RESTARTED` e cria outro na mesma sessão.
+
+**Só SIM confirma uma frase.** TALVEZ e NÃO chegam ao servidor como resposta
+observada e param ali; o tipo de `confirmedResponse` é `"YES" | null`, e a
+máquina de estados recusa qualquer outro caminho. Uma frase rejeitada nunca é
+tratada como comunicação confirmada. Assunto sensível exige reconfirmação
+reforçada antes da confirmação.
+
+O histórico é clicável: item em andamento recupera sua tela com o estado que
+tinha; item encerrado oferece detalhes e reutilização. Reutilizar sempre cria
+registro novo em rascunho, vinculado ao original, sem copiar resposta nem
+confirmação — um caminho concluído nunca volta a ser ativo.
+
+- `lib/option-conversation-types.ts` — caminho, nível, opção, frase e invariantes.
+- `lib/option-conversation-machine.ts` — máquina de estados das três entidades.
+- `lib/option-conversation-store.ts` — persistência transacional, na MESMA
+  sessão e na MESMA trilha de auditoria das Fases 1–4.
+- `app/api/realtime-questions/{paths,nodes,statements}/` — rotas do modo.
+- `components/realtime-questions/option-conversation/` — a interface.
+
+A entrada é **manual e discreta** (na tela de espera e no compositor de
+pergunta), servindo hoje como fallback, validação e teste. A ativação
+automática pela IA entrará por `shouldOpenOptionFlow` em
+`components/realtime-questions/session.tsx` — ponto único, sem que o resto da
+tela precise mudar.
+
+Ainda **não** implementados aqui: ElevenLabs, voz, geração por IA, e as Fases
+4.2 (interpretação digitada), 4.7 (controles do paciente), 4.8 (contexto
+inicial) e 4.9 (offline).
+
 ## Testes
 
 Testes de integração rodam contra o **emulador** + dev server. Nunca contra
@@ -315,4 +414,30 @@ produção — os scripts limpam o banco do emulador.
 npm run test:access      # autorização, vínculos e permissões
 npm run test:activities  # Atividades
 npm run test:feedback    # Feedback & Support (banco isolado, ex.: feedback-test)
+npm run test:realtime-questions  # Perguntas em tempo real (estados e auditoria)
+npm run test:option-conversation # Conversa por opções (as quatro suítes abaixo)
 ```
+
+A conversa por opções é dividida por domínio, e cada parte roda sozinha:
+
+```bash
+npm run test:oc:core        # níveis, opções, seleção, confirmação, isolamento
+npm run test:oc:branches    # breadcrumb, ramificações, reinício, frase final
+npm run test:oc:versioning  # edição, substituição e versionamento imutável
+npm run test:oc:history     # histórico e reutilização
+```
+
+Rode **um de cada vez**: cada script limpa o banco do emulador antes de
+começar.
+
+Os testes de **interface** usam Playwright (`tests/e2e/`) e dirigem a tela real
+— fluxo completo, falhas de rede, duplo clique, restauração após refresh,
+tablet nas duas orientações e a regressão da conversa guiada:
+
+```bash
+npx playwright install chromium   # uma vez
+npm run test:ui
+npm run test:ui:oc                # só a conversa por opções
+```
+
+Aponte para outra porta com `HELO_BASE_URL=http://localhost:3459 npm run test:ui`.

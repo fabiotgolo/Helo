@@ -10,6 +10,8 @@ const OrbStage = dynamic(() => import("@/components/orb-stage"), { ssr: false })
 
 const PATH_TO_MODE: Record<string, HeloMode> = {
   "/conversa": "conversar",
+  // Perguntas em tempo real vive sob Conversar: mesmo orbe, mesmo palco.
+  "/conversa/perguntas": "conversar",
   "/rotina": "rotina",
   "/emergencia": "emergencia",
   "/atividades": "atividades",

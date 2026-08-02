@@ -1,0 +1,714 @@
+// ——— Perguntas em tempo real: camada de dados ———
+// Persistência sobre o Firestore, no mesmo padrão de lib/activity-store.ts:
+// nenhuma escrita confia no cliente, tudo é normalizado no servidor e o
+// isolamento por paciente é estrutural.
+//
+// Estrutura:
+//   conversationQuestionSessions/{sessionId}                 ← sessão
+//   conversationQuestionSessions/{sessionId}/turns/{turnId}  ← interações
+//   conversationQuestionSessions/{sessionId}/events/{id}     ← trilha imutável
+//   patients/{patientId}/realtimeQuestionConfig/responseProfile
+//
+// ATOMICIDADE (seção 12): toda mudança de estado e o evento de auditoria
+// correspondente são gravados na MESMA transação. Nunca uma sem a outra.
+// A transação relê o documento antes de decidir, então duas ações
+// simultâneas não confirmam respostas diferentes: a segunda reexecuta contra
+// o estado novo e é recusada pela máquina de estados.
+//
+// Horário: sempre gerado NO SERVIDOR (new Date().toISOString()), convenção de
+// todo o projeto. O cliente nunca envia timestamps, autoria ou sequence.
+
+import { firestore } from "@/lib/firestore";
+import {
+  applySessionAction,
+  applyTurnAction,
+  assertSessionAcceptsNewTurn,
+  assertSessionAcceptsTurnAction,
+  type SessionAction,
+  type TurnAction,
+} from "@/lib/realtime-question-machine";
+import {
+  assertTurnInvariants,
+  DEFAULT_RESPONSE_MAPPINGS,
+  IMPLEMENTED_QUESTION_SOURCES,
+  isOpenAwaitingTurnStatus,
+  isQuestionSource,
+  isResponseInputMethod,
+  isSemanticResponse,
+  isSensitiveCategory,
+  RtqDomainError,
+  type ConversationQuestionSession,
+  type ConversationQuestionTurn,
+  type InteractionAuditEvent,
+  type InteractionEventType,
+  type InteractionMode,
+  type PatientResponseProfile,
+  type QuestionSource,
+  type ResponseSignalMapping,
+  type RtqSessionStatus,
+  type RtqTurnStatus,
+  type SemanticResponse,
+  type SensitiveCategory,
+} from "@/lib/realtime-question-types";
+
+const sessionsCol = () => firestore.collection("conversationQuestionSessions");
+/** Compartilhado com a conversa por opções: mesma sessão, mesmo isolamento. */
+export const sessionDoc = (sessionId: string) => sessionsCol().doc(sessionId);
+const turnsCol = (sessionId: string) => sessionDoc(sessionId).collection("turns");
+export const eventsCol = (sessionId: string) =>
+  sessionDoc(sessionId).collection("events");
+const responseProfileDoc = (patientId: number) =>
+  firestore
+    .collection("patients")
+    .doc(String(patientId))
+    .collection("realtimeQuestionConfig")
+    .doc("responseProfile");
+
+/** Compartilhado com a conversa por opções — um gerador de id só no projeto. */
+export function newId(prefix: string): string {
+  return `${prefix}${Date.now().toString(36)}${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+/** Apara os excessos e respeita o teto, preservando acentos e pontuação (§6). */
+export function cleanText(v: unknown, max: number): string {
+  return typeof v === "string" ? v.trim().slice(0, max) : "";
+}
+
+const MAX_QUESTION_LEN = 500;
+const MAX_LABEL_LEN = 80;
+const MAX_SIGNAL_KEY_LEN = 40;
+
+/** Identidade do operador — vem SEMPRE da sessão autenticada. */
+export interface Assistant {
+  id: string;
+  name: string;
+}
+
+// ---------- Conversores ----------
+
+function toSession(
+  id: string,
+  v: FirebaseFirestore.DocumentData
+): ConversationQuestionSession {
+  return {
+    id,
+    patientId: Number(v.patientId),
+    assistantId: String(v.assistantId ?? ""),
+    assistantName: (v.assistantName as string) ?? null,
+    status: (v.status as RtqSessionStatus) ?? "ACTIVE",
+    startedAt: String(v.startedAt ?? ""),
+    pausedAt: (v.pausedAt as string) ?? null,
+    resumedAt: (v.resumedAt as string) ?? null,
+    completedAt: (v.completedAt as string) ?? null,
+    abandonedAt: (v.abandonedAt as string) ?? null,
+    turnCount: Number(v.turnCount ?? 0),
+    createdAt: String(v.createdAt ?? ""),
+    updatedAt: String(v.updatedAt ?? ""),
+  };
+}
+
+function toTurn(
+  id: string,
+  v: FirebaseFirestore.DocumentData
+): ConversationQuestionTurn {
+  return {
+    id,
+    sessionId: String(v.sessionId ?? ""),
+    patientId: Number(v.patientId),
+    assistantId: String(v.assistantId ?? ""),
+    sequence: Number(v.sequence ?? 0),
+    // Turnos gravados antes da Fase 4.5 não têm o campo: uma pergunta livre
+    // sempre foi — e continua sendo — uma confirmação fechada.
+    interactionMode:
+      (v.interactionMode as InteractionMode) ?? "CLOSED_CONFIRMATION",
+    questionSource: (v.questionSource as QuestionSource) ?? "MANUAL_TEXT",
+    originalText: (v.originalText as string) ?? null,
+    reviewedText: String(v.reviewedText ?? ""),
+    presentedText: String(v.presentedText ?? ""),
+    status: (v.status as RtqTurnStatus) ?? "DRAFT",
+    provisionalResponse: (v.provisionalResponse as SemanticResponse) ?? null,
+    confirmedResponse: (v.confirmedResponse as SemanticResponse) ?? null,
+    isSensitive: v.isSensitive === true,
+    sensitiveCategory: (v.sensitiveCategory as SensitiveCategory) ?? null,
+    reusedFromTurnId: (v.reusedFromTurnId as string) ?? null,
+    presentedAt: (v.presentedAt as string) ?? null,
+    responseObservedAt: (v.responseObservedAt as string) ?? null,
+    assistantVerifiedAt: (v.assistantVerifiedAt as string) ?? null,
+    reconfirmedAt: (v.reconfirmedAt as string) ?? null,
+    confirmedAt: (v.confirmedAt as string) ?? null,
+    canceledAt: (v.canceledAt as string) ?? null,
+    responseTimeMs: v.responseTimeMs != null ? Number(v.responseTimeMs) : null,
+    correctionCount: Number(v.correctionCount ?? 0),
+    representCount: Number(v.representCount ?? 0),
+    createdAt: String(v.createdAt ?? ""),
+    updatedAt: String(v.updatedAt ?? ""),
+  };
+}
+
+export function toEvent(
+  id: string,
+  v: FirebaseFirestore.DocumentData
+): InteractionAuditEvent {
+  return {
+    id,
+    sessionId: String(v.sessionId ?? ""),
+    turnId: (v.turnId as string) ?? null,
+    // Eventos das Fases 1–4 não têm estes campos: `null` é o padrão seguro.
+    pathId: (v.pathId as string) ?? null,
+    nodeId: (v.nodeId as string) ?? null,
+    statementId: (v.statementId as string) ?? null,
+    patientId: Number(v.patientId),
+    assistantId: String(v.assistantId ?? ""),
+    eventType: v.eventType as InteractionEventType,
+    previousValue: v.previousValue ?? null,
+    newValue: v.newValue ?? null,
+    metadata: (v.metadata as Record<string, unknown>) ?? null,
+    createdAt: String(v.createdAt ?? ""),
+  };
+}
+
+// ---------- Trilha de auditoria (append-only) ----------
+
+export interface AuditInput {
+  sessionId: string;
+  turnId: string | null;
+  /** Vínculos da conversa por opções — ausentes numa pergunta fechada. */
+  pathId?: string | null;
+  nodeId?: string | null;
+  statementId?: string | null;
+  patientId: number;
+  assistantId: string;
+  eventType: InteractionEventType;
+  previousValue?: unknown;
+  newValue?: unknown;
+  metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * Cria o evento DENTRO da transação em curso, sempre num documento novo:
+ * nenhum evento anterior é sobrescrito e nada é apagado. Não existe rota de
+ * escrita para esta coleção — a autoria e o horário nascem aqui.
+ *
+ * Exportado para que a conversa por opções grave na MESMA trilha, com a mesma
+ * garantia. Duas trilhas paralelas dariam duas verdades sobre a mesma sessão.
+ */
+export function writeAudit(
+  transaction: FirebaseFirestore.Transaction,
+  input: AuditInput,
+  now: string
+): void {
+  const ref = eventsCol(input.sessionId).doc(newId("ev"));
+  transaction.set(ref, {
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    pathId: input.pathId ?? null,
+    nodeId: input.nodeId ?? null,
+    statementId: input.statementId ?? null,
+    patientId: input.patientId,
+    assistantId: input.assistantId,
+    eventType: input.eventType,
+    previousValue: input.previousValue ?? null,
+    newValue: input.newValue ?? null,
+    metadata: input.metadata ?? null,
+    createdAt: now,
+  });
+}
+
+// ---------- Sessões ----------
+
+export async function createRtqSession(
+  patientId: number,
+  assistant: Assistant
+): Promise<ConversationQuestionSession> {
+  const now = new Date().toISOString();
+  const id = newId("cqs");
+  const session: ConversationQuestionSession = {
+    id,
+    patientId,
+    assistantId: assistant.id,
+    assistantName: assistant.name,
+    status: "ACTIVE",
+    startedAt: now,
+    pausedAt: null,
+    resumedAt: null,
+    completedAt: null,
+    abandonedAt: null,
+    turnCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const { id: _id, ...data } = session;
+  void _id;
+  await firestore.runTransaction(async (transaction) => {
+    transaction.set(sessionDoc(id), data);
+    writeAudit(
+      transaction,
+      {
+        sessionId: id,
+        turnId: null,
+        patientId,
+        assistantId: assistant.id,
+        eventType: "SESSION_STARTED",
+        newValue: { status: "ACTIVE" },
+      },
+      now
+    );
+  });
+  return session;
+}
+
+/**
+ * Isolamento: a sessão só existe para quem consulta com o MESMO patientId.
+ * Trocar o identificador na URL não alcança dados de outro paciente.
+ */
+export async function getRtqSession(
+  patientId: number,
+  sessionId: string
+): Promise<ConversationQuestionSession | null> {
+  const doc = await sessionDoc(sessionId).get();
+  if (!doc.exists) return null;
+  const session = toSession(doc.id, doc.data()!);
+  return session.patientId === patientId ? session : null;
+}
+
+export async function listRtqSessions(
+  patientId: number,
+  limit = 50
+): Promise<ConversationQuestionSession[]> {
+  const snap = await sessionsCol().where("patientId", "==", patientId).get();
+  return snap.docs
+    .map((d) => toSession(d.id, d.data()))
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    .slice(0, Math.max(1, Math.min(limit, 200)));
+}
+
+/**
+ * Pausa, retomada, conclusão e abandono.
+ *
+ * Ao CONCLUIR, as perguntas ainda abertas (apresentadas e sem resposta
+ * observada) recebem NO_RESPONSE — a única situação em que a ausência de
+ * resposta é registrada sem clique direto, e ainda assim disparada por ato
+ * explícito do assistente (seção 4). Nunca por tempo.
+ *
+ * Ao ABANDONAR, nada é alterado: perguntas e eventos ficam exatamente como
+ * estavam, e nenhuma pergunta sem resposta vira resposta negativa (seção 7).
+ */
+export async function runSessionAction(
+  patientId: number,
+  sessionId: string,
+  action: SessionAction,
+  assistant: Assistant
+): Promise<ConversationQuestionSession> {
+  const now = new Date().toISOString();
+  return firestore.runTransaction(async (transaction) => {
+    const ref = sessionDoc(sessionId);
+    const doc = await transaction.get(ref);
+    if (!doc.exists) throw new RtqDomainError("sessão não encontrada");
+    const session = toSession(doc.id, doc.data()!);
+    if (session.patientId !== patientId) {
+      throw new RtqDomainError("sessão não encontrada");
+    }
+
+    // Todas as leituras acontecem ANTES de qualquer escrita (exigência do
+    // Firestore).
+    const openTurns: ConversationQuestionTurn[] = [];
+    if (action === "COMPLETE") {
+      const turnsSnap = await transaction.get(turnsCol(sessionId));
+      for (const d of turnsSnap.docs) {
+        const turn = toTurn(d.id, d.data());
+        if (isOpenAwaitingTurnStatus(turn.status)) openTurns.push(turn);
+      }
+    }
+
+    const change = applySessionAction(session.status, action, now);
+    transaction.set(ref, change.patch, { merge: true });
+    writeAudit(
+      transaction,
+      {
+        sessionId,
+        turnId: null,
+        patientId,
+        assistantId: assistant.id,
+        eventType: change.event.eventType,
+        previousValue: change.event.previousValue,
+        newValue: change.event.newValue,
+      },
+      now
+    );
+
+    for (const turn of openTurns) {
+      const turnChange = applyTurnAction(
+        turn,
+        { kind: "RECORD_NO_RESPONSE", reason: "session_completed" },
+        now
+      );
+      transaction.set(turnsCol(sessionId).doc(turn.id), turnChange.patch, {
+        merge: true,
+      });
+      writeAudit(
+        transaction,
+        {
+          sessionId,
+          turnId: turn.id,
+          patientId,
+          assistantId: assistant.id,
+          eventType: turnChange.event.eventType,
+          previousValue: turnChange.event.previousValue,
+          newValue: turnChange.event.newValue,
+          metadata: turnChange.event.metadata,
+        },
+        now
+      );
+    }
+
+    return { ...session, ...(change.patch as Partial<ConversationQuestionSession>) };
+  });
+}
+
+// ---------- Interações (turnos) ----------
+
+export interface TurnInput {
+  questionSource?: unknown;
+  text?: unknown;
+  isSensitive?: unknown;
+  sensitiveCategory?: unknown;
+  /** Origem quando a pergunta nasce de "Reutilizar como novo" no histórico. */
+  reusedFromTurnId?: unknown;
+}
+
+function normalizeSource(v: unknown): QuestionSource {
+  if (v === undefined || v === null) return "MANUAL_TEXT";
+  if (!isQuestionSource(v)) throw new RtqDomainError("origem da pergunta inválida");
+  if (!IMPLEMENTED_QUESTION_SOURCES.includes(v)) {
+    // Voz e IA estão preparadas no modelo, mas não existem nesta fase.
+    throw new RtqDomainError(`origem ${v} ainda não disponível nesta fase`);
+  }
+  return v;
+}
+
+/**
+ * Cria a pergunta em DRAFT. O `sequence` é atribuído dentro da transação, a
+ * partir do contador da sessão — a ordem das perguntas é preservada mesmo com
+ * criações concorrentes.
+ */
+export async function createTurn(
+  patientId: number,
+  sessionId: string,
+  input: TurnInput,
+  assistant: Assistant
+): Promise<ConversationQuestionTurn> {
+  const questionSource = normalizeSource(input.questionSource);
+  const text = cleanText(input.text, MAX_QUESTION_LEN);
+  if (!text) throw new RtqDomainError("a pergunta não pode ficar vazia");
+
+  // Nesta fase quem marca o assunto sensível é o assistente — não há
+  // detecção automática em lugar algum.
+  const isSensitive = input.isSensitive === true;
+  let sensitiveCategory: SensitiveCategory | null = null;
+  if (isSensitive) {
+    if (input.sensitiveCategory != null) {
+      if (!isSensitiveCategory(input.sensitiveCategory)) {
+        throw new RtqDomainError("categoria sensível inválida");
+      }
+      sensitiveCategory = input.sensitiveCategory;
+    }
+  } else if (input.sensitiveCategory != null) {
+    throw new RtqDomainError(
+      "categoria sensível exige a pergunta marcada como sensível"
+    );
+  }
+
+  const reusedFromTurnId =
+    typeof input.reusedFromTurnId === "string" && input.reusedFromTurnId
+      ? input.reusedFromTurnId
+      : null;
+
+  const now = new Date().toISOString();
+  const id = newId("cqt");
+
+  return firestore.runTransaction(async (transaction) => {
+    const ref = sessionDoc(sessionId);
+    const doc = await transaction.get(ref);
+    if (!doc.exists) throw new RtqDomainError("sessão não encontrada");
+    const session = toSession(doc.id, doc.data()!);
+    if (session.patientId !== patientId) {
+      throw new RtqDomainError("sessão não encontrada");
+    }
+    assertSessionAcceptsNewTurn(session.status);
+
+    // A origem precisa existir NESTA sessão: reutilizar não atravessa
+    // pacientes nem inventa vínculo.
+    if (reusedFromTurnId) {
+      const origin = await transaction.get(turnsCol(sessionId).doc(reusedFromTurnId));
+      if (!origin.exists) {
+        throw new RtqDomainError("pergunta de origem não encontrada");
+      }
+    }
+
+    const turn: ConversationQuestionTurn = {
+      id,
+      sessionId,
+      // patientId e assistantId nunca vêm do corpo da requisição: o paciente
+      // é o da sessão (imutável) e o assistente é o usuário autenticado.
+      patientId: session.patientId,
+      assistantId: assistant.id,
+      sequence: session.turnCount + 1,
+      interactionMode: "CLOSED_CONFIRMATION",
+      questionSource,
+      originalText: null,
+      reviewedText: text,
+      presentedText: "",
+      status: "DRAFT",
+      provisionalResponse: null,
+      confirmedResponse: null,
+      isSensitive,
+      sensitiveCategory,
+      // Só o TEXTO é copiado da origem. Resposta e confirmação ficam com ela.
+      reusedFromTurnId,
+      presentedAt: null,
+      responseObservedAt: null,
+      assistantVerifiedAt: null,
+      reconfirmedAt: null,
+      confirmedAt: null,
+      canceledAt: null,
+      responseTimeMs: null,
+      correctionCount: 0,
+      representCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    assertTurnInvariants(turn);
+
+    const { id: _id, ...data } = turn;
+    void _id;
+    transaction.set(turnsCol(sessionId).doc(id), data);
+    transaction.set(ref, { turnCount: turn.sequence, updatedAt: now }, { merge: true });
+    writeAudit(
+      transaction,
+      {
+        sessionId,
+        turnId: id,
+        patientId: session.patientId,
+        assistantId: assistant.id,
+        eventType: "QUESTION_CREATED",
+        newValue: { sequence: turn.sequence, questionSource },
+        metadata:
+          isSensitive || reusedFromTurnId
+            ? {
+                ...(isSensitive ? { isSensitive: true, sensitiveCategory } : {}),
+                ...(reusedFromTurnId ? { reusedFromTurnId } : {}),
+              }
+            : null,
+      },
+      now
+    );
+    if (reusedFromTurnId) {
+      writeAudit(
+        transaction,
+        {
+          sessionId,
+          turnId: id,
+          patientId: session.patientId,
+          assistantId: assistant.id,
+          eventType: "CONTENT_REUSED",
+          previousValue: { sourceType: "TURN", sourceId: reusedFromTurnId },
+          newValue: { targetType: "TURN", targetId: id, status: "DRAFT" },
+        },
+        now
+      );
+    }
+    return turn;
+  });
+}
+
+/**
+ * Aplica uma ação do assistente a uma interação: valida a sessão, valida a
+ * transição na máquina de estados, checa as invariantes e grava turno +
+ * evento de auditoria no MESMO commit.
+ */
+export async function runTurnAction(
+  patientId: number,
+  sessionId: string,
+  turnId: string,
+  action: TurnAction,
+  assistant: Assistant
+): Promise<ConversationQuestionTurn> {
+  const now = new Date().toISOString();
+  return firestore.runTransaction(async (transaction) => {
+    const sRef = sessionDoc(sessionId);
+    const tRef = turnsCol(sessionId).doc(turnId);
+    const [sDoc, tDoc] = await Promise.all([
+      transaction.get(sRef),
+      transaction.get(tRef),
+    ]);
+    if (!sDoc.exists) throw new RtqDomainError("sessão não encontrada");
+    const session = toSession(sDoc.id, sDoc.data()!);
+    if (session.patientId !== patientId) {
+      throw new RtqDomainError("sessão não encontrada");
+    }
+    if (!tDoc.exists) throw new RtqDomainError("pergunta não encontrada");
+    const turn = toTurn(tDoc.id, tDoc.data()!);
+
+    assertSessionAcceptsTurnAction(session.status, action.kind);
+    const change = applyTurnAction(turn, action, now);
+
+    transaction.set(tRef, change.patch, { merge: true });
+    transaction.set(sRef, { updatedAt: now }, { merge: true });
+    writeAudit(
+      transaction,
+      {
+        sessionId,
+        turnId,
+        patientId: session.patientId,
+        assistantId: assistant.id,
+        eventType: change.event.eventType,
+        previousValue: change.event.previousValue,
+        newValue: change.event.newValue,
+        metadata: change.event.metadata,
+      },
+      now
+    );
+    return { ...turn, ...change.patch };
+  });
+}
+
+export async function listTurns(
+  patientId: number,
+  sessionId: string
+): Promise<ConversationQuestionTurn[] | null> {
+  const session = await getRtqSession(patientId, sessionId);
+  if (!session) return null;
+  const snap = await turnsCol(sessionId).get();
+  return snap.docs
+    .map((d) => toTurn(d.id, d.data()))
+    .sort((a, b) => a.sequence - b.sequence);
+}
+
+/**
+ * Recortes da trilha. Todos são opcionais e se combinam por AND; sem nenhum,
+ * vem a sessão inteira — perguntas fechadas e conversa por opções na mesma
+ * ordem cronológica.
+ */
+export interface AuditFilter {
+  turnId?: string | null;
+  pathId?: string | null;
+  nodeId?: string | null;
+  statementId?: string | null;
+}
+
+/** Trilha de auditoria — somente leitura, em ordem cronológica. */
+export async function listAuditEvents(
+  patientId: number,
+  sessionId: string,
+  filter: AuditFilter = {}
+): Promise<InteractionAuditEvent[] | null> {
+  const session = await getRtqSession(patientId, sessionId);
+  if (!session) return null;
+  const snap = await eventsCol(sessionId).get();
+  return snap.docs
+    .map((d) => toEvent(d.id, d.data()))
+    .filter(
+      (e) =>
+        (!filter.turnId || e.turnId === filter.turnId) &&
+        (!filter.pathId || e.pathId === filter.pathId) &&
+        (!filter.nodeId || e.nodeId === filter.nodeId) &&
+        (!filter.statementId || e.statementId === filter.statementId)
+    )
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+// ---------- Configuração: sinal → resposta semântica ----------
+
+export async function getResponseProfile(
+  patientId: number
+): Promise<PatientResponseProfile> {
+  const doc = await responseProfileDoc(patientId).get();
+  if (!doc.exists) {
+    return {
+      patientId,
+      mappings: [...DEFAULT_RESPONSE_MAPPINGS],
+      updatedByUserId: null,
+      updatedAt: "",
+    };
+  }
+  const v = doc.data()!;
+  const mappings = Array.isArray(v.mappings)
+    ? (v.mappings as ResponseSignalMapping[])
+    : [...DEFAULT_RESPONSE_MAPPINGS];
+  return {
+    patientId,
+    mappings,
+    updatedByUserId: (v.updatedByUserId as string) ?? null,
+    updatedAt: String(v.updatedAt ?? ""),
+  };
+}
+
+/**
+ * Grava o mapeamento sinal físico → resposta semântica do paciente. Cada uma
+ * das três respostas precisa ter exatamente um sinal: o assistente não pode
+ * ficar sem como registrar SIM, TALVEZ ou NÃO, nem com dois sinais
+ * significando a mesma coisa.
+ *
+ * Isto NÃO altera o significado dos gestos fora deste modo.
+ */
+export async function setResponseProfile(
+  patientId: number,
+  rawMappings: unknown,
+  user: { id: string }
+): Promise<PatientResponseProfile> {
+  if (!Array.isArray(rawMappings)) {
+    throw new RtqDomainError("mapeamento inválido");
+  }
+  const mappings: ResponseSignalMapping[] = [];
+  const seenSignals = new Set<string>();
+  const seenResponses = new Set<SemanticResponse>();
+  for (const raw of rawMappings) {
+    const m = raw as Partial<ResponseSignalMapping>;
+    if (!isResponseInputMethod(m.method)) {
+      throw new RtqDomainError("método de entrada inválido");
+    }
+    if (m.method !== "GESTURE") {
+      // Os demais métodos existem no modelo, mas não são configuráveis nesta
+      // fase — o sistema ainda não detecta nenhum sinal automaticamente.
+      throw new RtqDomainError(
+        `método ${m.method} ainda não disponível nesta fase`
+      );
+    }
+    const signalKey = cleanText(m.signalKey, MAX_SIGNAL_KEY_LEN);
+    if (!signalKey) throw new RtqDomainError("sinal sem identificador");
+    if (!isSemanticResponse(m.response)) {
+      throw new RtqDomainError("resposta semântica inválida");
+    }
+    const key = `${m.method}:${signalKey}`;
+    if (seenSignals.has(key)) {
+      throw new RtqDomainError(`sinal repetido: ${signalKey}`);
+    }
+    if (seenResponses.has(m.response)) {
+      throw new RtqDomainError(`resposta repetida: ${m.response}`);
+    }
+    seenSignals.add(key);
+    seenResponses.add(m.response);
+    mappings.push({
+      method: m.method,
+      signalKey,
+      label: cleanText(m.label, MAX_LABEL_LEN) || signalKey,
+      response: m.response,
+    });
+  }
+  if (seenResponses.size !== 3) {
+    throw new RtqDomainError(
+      "o mapeamento precisa cobrir SIM, TALVEZ e NÃO"
+    );
+  }
+
+  const now = new Date().toISOString();
+  await responseProfileDoc(patientId).set({
+    patientId,
+    mappings,
+    updatedByUserId: user.id,
+    updatedAt: now,
+  });
+  return { patientId, mappings, updatedByUserId: user.id, updatedAt: now };
+}

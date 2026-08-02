@@ -970,14 +970,28 @@ function Intro({
         </p>
       )}
 
-      <button
-        type="button"
-        onClick={onBegin}
-        disabled={!ready || starting}
-        className="rounded-full bg-accent px-10 py-4 text-lg font-medium text-on-accent transition-transform hover:scale-[1.02] hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {starting ? "Iniciando…" : "Começar"}
-      </button>
+      <div className="flex flex-col items-center gap-3">
+        <button
+          type="button"
+          onClick={onBegin}
+          disabled={!ready || starting}
+          className="rounded-full bg-accent px-10 py-4 text-lg font-medium text-on-accent transition-transform hover:scale-[1.02] hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {starting ? "Iniciando…" : "Começar"}
+        </button>
+        {/* Segundo modo da tela Conversar: o assistente formula a pergunta e
+            registra a resposta observada. O fluxo guiado acima segue igual. */}
+        <Link
+          href="/conversa/perguntas"
+          aria-disabled={!ready}
+          tabIndex={ready ? undefined : -1}
+          className={`rounded-full border border-line bg-card px-8 py-3 font-medium text-ink transition-colors hover:border-ink-mute ${
+            ready ? "" : "pointer-events-none opacity-40"
+          }`}
+        >
+          Perguntas em tempo real
+        </Link>
+      </div>
       {user && (
         <button
           type="button"

@@ -200,6 +200,10 @@ body {
   flex-direction: column;
   align-items: flex-start;
   font-family: var(--font-sans);
+  /* O crachá é decorativo e fica por cima do conteúdo (z-index 20). Em telas
+   * altas e estreitas ele cai sobre formulários e engolia o clique de botões
+   * que estavam logo abaixo. Só o LINK precisa ser clicável. */
+  pointer-events: none;
 }
 
 .supported-by__label {
@@ -212,6 +216,8 @@ body {
 .supported-by__link {
   display: block;
   width: var(--supported-logo-width);
+  /* Devolve a clicabilidade só onde ela existe de fato: o logo. */
+  pointer-events: auto;
 }
 
 .supported-by__logo {
