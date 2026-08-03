@@ -45,8 +45,17 @@ import {
   newRequestId,
   pauseOnUnload,
   useRtqPersistence,
+  type SessionContextInput,
   type SessionDetail,
 } from "@/lib/realtime-question-client";
+import {
+  SessionContextBar,
+  SessionContextDialog,
+  SessionContextScreen,
+  ContextVersionsList,
+  type ContextDraft,
+} from "@/components/realtime-questions/session-context";
+import type { SessionContextVersion } from "@/lib/session-context-types";
 import type { TurnAction } from "@/lib/realtime-question-machine";
 import {
   isTerminalPathStatus,
@@ -96,6 +105,11 @@ export function RealtimeQuestionSession({
   // Item do histórico em consulta. Abrir NUNCA altera dados (§22).
   const [historyEntry, setHistoryEntry] = useState<HistoryEntry | null>(null);
   const [historyDetail, setHistoryDetail] = useState<HistoryEntry | null>(null);
+  // Contexto da conversa (Fase 4.8). Edição e consulta durante a sessão.
+  const [contextEditing, setContextEditing] = useState(false);
+  const [contextVersions, setContextVersions] = useState<
+    SessionContextVersion[] | null
+  >(null);
   // A ação que falhou fica guardada para "Tentar novamente" repetir
   // exatamente ela — nada é reconstruído por adivinhação.
   const failed = useRef<
@@ -106,7 +120,7 @@ export function RealtimeQuestionSession({
   >(null);
   const [retryable, setRetryable] = useState(false);
 
-  const { session, turns } = detail;
+  const { session, turns, context } = detail;
   const choices = useAnswerChoices(profile);
 
   // O turno em curso é o último ainda não terminal — derivado, nunca guardado.
@@ -385,6 +399,31 @@ export function RealtimeQuestionSession({
     [persist, patientId, session.id]
   );
 
+  // ——— Contexto da conversa (Fase 4.8) ———
+  // Gravar contexto NÃO é ação voltada ao paciente: não apresenta, não
+  // confirma e não toca em turno nenhum. Só registra a circunstância.
+  const salvarContexto = useCallback(
+    async (input: Omit<SessionContextInput, "clientRequestId">) => {
+      persist.clearError();
+      const salvo = await persist.saveSessionContext(patientId, session.id, {
+        ...input,
+        clientRequestId: newRequestId("ctx"),
+      });
+      setDetail((d) => ({ ...d, context: salvo }));
+      setContextEditing(false);
+      return salvo;
+    },
+    [persist, patientId, session.id]
+  );
+
+  const verContexto = useCallback(async () => {
+    if (!context) return;
+    // A consulta é auditada, mas nunca bloqueia a leitura se o registro falhar.
+    void persist.openSessionContext(patientId, session.id, context.id).catch(() => {});
+    const versions = await persist.sessionContextVersions(patientId, session.id);
+    setContextVersions(versions);
+  }, [persist, patientId, session.id, context]);
+
   // ——— Ações do fluxo ———
 
   const startQuestion = useCallback(() => {
@@ -631,8 +670,38 @@ export function RealtimeQuestionSession({
             />
           )}
 
+          {/* Barra do contexto: só nas telas do CUIDADOR. Nunca aparece sobre
+              o palco do paciente — o contexto não é para ele ver. */}
+          {context && !sessionOver && !showStage && !openPath && (
+            <SessionContextBar
+              context={context}
+              busy={busy}
+              onEdit={() => setContextEditing(true)}
+              onView={() => void verContexto().catch(() => {})}
+            />
+          )}
+
           {sessionOver ? (
             <FinishedScreen status={session.status} turns={turns} onLeave={onLeave} />
+          ) : context == null ? (
+            /* Antes de tudo: preencher ou pular. Enquanto o cuidador não
+               decidir, a sessão não avança — e pular é um clique só. */
+            <SessionContextScreen
+              patientId={patientId}
+              busy={busy}
+              onSave={(draft: ContextDraft) =>
+                void salvarContexto({
+                  interlocutorPersonId: draft.interlocutor.personId,
+                  interlocutorName: draft.interlocutor.name || null,
+                  interlocutorRelation: draft.interlocutor.relation || null,
+                  intention: draft.intention || null,
+                  environment: draft.environment || null,
+                  initialTopic: draft.initialTopic || null,
+                  notes: draft.notes || null,
+                }).catch(() => {})
+              }
+              onSkip={() => void salvarContexto({ skipped: true }).catch(() => {})}
+            />
           ) : paused ? (
             <PausedScreen
               busy={busy}
@@ -903,6 +972,33 @@ export function RealtimeQuestionSession({
             );
           }}
           onClose={() => setHistoryDetail(null)}
+        />
+      )}
+
+      {contextEditing && context && (
+        <SessionContextDialog
+          patientId={patientId}
+          context={context}
+          busy={busy}
+          onSave={(draft: ContextDraft) =>
+            void salvarContexto({
+              interlocutorPersonId: draft.interlocutor.personId,
+              interlocutorName: draft.interlocutor.name || null,
+              interlocutorRelation: draft.interlocutor.relation || null,
+              intention: draft.intention || null,
+              environment: draft.environment || null,
+              initialTopic: draft.initialTopic || null,
+              notes: draft.notes || null,
+            }).catch(() => {})
+          }
+          onClose={() => setContextEditing(false)}
+        />
+      )}
+
+      {contextVersions && (
+        <ContextVersionsList
+          versions={contextVersions}
+          onClose={() => setContextVersions(null)}
         />
       )}
 

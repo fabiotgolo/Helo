@@ -18,6 +18,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { SessionAction, TurnAction } from "@/lib/realtime-question-machine";
+import type { SessionContextVersion } from "@/lib/session-context-types";
 import type {
   NodeAction,
   PathAction,
@@ -61,9 +62,31 @@ export class RtqClientError extends Error {
   }
 }
 
+/**
+ * O que a tela envia ao gravar o contexto. Só conteúdo: versão, status,
+ * autoria e horário nascem no servidor.
+ */
+export interface SessionContextInput {
+  clientRequestId: string;
+  skipped?: boolean;
+  interlocutorPersonId?: number | null;
+  interlocutorName?: string | null;
+  interlocutorRelation?: string | null;
+  intention?: string | null;
+  environment?: string | null;
+  initialTopic?: string | null;
+  notes?: string | null;
+}
+
 export interface SessionDetail {
   session: ConversationQuestionSession;
   turns: ConversationQuestionTurn[];
+  /**
+   * Contexto vigente da conversa (Fase 4.8), na MESMA leitura da sessão: a
+   * tela precisa saber, já na abertura, se o cuidador ainda não decidiu entre
+   * preencher e pular. `null` = nunca decidiu.
+   */
+  context: SessionContextVersion | null;
 }
 
 // ---------- Requisição e tradução de erro ----------
@@ -194,6 +217,38 @@ const api = {
       method: "POST",
       body: { patientId },
     }).then((d) => d.session),
+
+  // ——— Contexto da conversa (Fase 4.8) ———
+
+  sessionContext: (patientId: number, sessionId: string) =>
+    request<{ context: SessionContextVersion | null }>(
+      `/session-context?patientId=${patientId}&sessionId=${encodeURIComponent(sessionId)}`
+    ).then((d) => d.context),
+
+  sessionContextVersions: (patientId: number, sessionId: string) =>
+    request<{ versions: SessionContextVersion[] }>(
+      `/session-context?patientId=${patientId}&sessionId=${encodeURIComponent(sessionId)}&all=1`
+    ).then((d) => d.versions),
+
+  saveSessionContext: (
+    patientId: number,
+    sessionId: string,
+    input: SessionContextInput
+  ) =>
+    request<{ context: SessionContextVersion }>("/session-context", {
+      method: "POST",
+      body: { patientId, sessionId, ...input },
+    }).then((d) => d.context),
+
+  openSessionContext: (
+    patientId: number,
+    sessionId: string,
+    contextId: string
+  ) =>
+    request<{ ok: true }>("/session-context", {
+      method: "PUT",
+      body: { patientId, sessionId, contextId },
+    }),
 
   sessionAction: (
     patientId: number,
@@ -524,6 +579,24 @@ export interface RtqPersistence {
     sessionId: string,
     action: SessionAction
   ) => Promise<ConversationQuestionSession>;
+  sessionContext: (
+    patientId: number,
+    sessionId: string
+  ) => Promise<SessionContextVersion | null>;
+  sessionContextVersions: (
+    patientId: number,
+    sessionId: string
+  ) => Promise<SessionContextVersion[]>;
+  saveSessionContext: (
+    patientId: number,
+    sessionId: string,
+    input: SessionContextInput
+  ) => Promise<SessionContextVersion>;
+  openSessionContext: (
+    patientId: number,
+    sessionId: string,
+    contextId: string
+  ) => Promise<{ ok: true }>;
   createTurn: (
     patientId: number,
     sessionId: string,
@@ -729,12 +802,39 @@ export function useRtqPersistence(): RtqPersistence {
           false
         ),
 
+      sessionContext: (patientId, sessionId) =>
+        run(
+          `ctx:${patientId}:${sessionId}`,
+          () => api.sessionContext(patientId, sessionId),
+          false
+        ),
+      sessionContextVersions: (patientId, sessionId) =>
+        run(
+          `ctxAll:${patientId}:${sessionId}`,
+          () => api.sessionContextVersions(patientId, sessionId),
+          false
+        ),
+      openSessionContext: (patientId, sessionId, contextId) =>
+        run(
+          `ctxOpen:${sessionId}:${contextId}`,
+          () => api.openSessionContext(patientId, sessionId, contextId),
+          false
+        ),
+
       createSession: (patientId) =>
         run(`newSession:${patientId}`, () => api.createSession(patientId), true),
       sessionAction: (patientId, sessionId, action) =>
         run(
           `session:${sessionId}:${action}`,
           () => api.sessionAction(patientId, sessionId, action),
+          true
+        ),
+      saveSessionContext: (patientId, sessionId, input) =>
+        run(
+          // O clientRequestId entra na chave: um segundo clique no MESMO botão
+          // compartilha a requisição em voo, e o servidor dedupica o resto.
+          `ctxSave:${sessionId}:${input.clientRequestId}`,
+          () => api.saveSessionContext(patientId, sessionId, input),
           true
         ),
       createTurn: (patientId, sessionId, input) =>

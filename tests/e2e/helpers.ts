@@ -129,3 +129,21 @@ export async function abrirModo(
     page.getByRole("heading", { name: "Perguntas em tempo real" })
   ).toBeVisible();
 }
+
+/**
+ * Pula o contexto da conversa (Fase 4.8).
+ *
+ * O contexto é uma etapa opcional que antecede a sessão: preencher ou começar
+ * sem. A maior parte dos testes não é sobre ele, e "Começar sem contexto" é o
+ * caminho de um clique que uma conversa urgente usaria — então é o que estes
+ * testes percorrem. Quem testa o contexto em si o preenche explicitamente.
+ */
+export async function pularContexto(page: Page): Promise<void> {
+  await expect(
+    page.getByRole("heading", { name: "Contexto da conversa (opcional)" })
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Começar sem contexto" })
+    .first()
+    .click();
+}

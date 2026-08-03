@@ -318,6 +318,8 @@ export interface InteractionAuditEvent {
   pathId: string | null;
   nodeId: string | null;
   statementId: string | null;
+  /** Vínculo do contexto da sessão (Fase 4.8) — `null` nos eventos anteriores. */
+  contextId: string | null;
   patientId: number;
   assistantId: string;
   eventType: InteractionEventType;

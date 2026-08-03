@@ -159,6 +159,7 @@ export function toEvent(
     pathId: (v.pathId as string) ?? null,
     nodeId: (v.nodeId as string) ?? null,
     statementId: (v.statementId as string) ?? null,
+    contextId: (v.contextId as string) ?? null,
     patientId: Number(v.patientId),
     assistantId: String(v.assistantId ?? ""),
     eventType: v.eventType as InteractionEventType,
@@ -178,6 +179,8 @@ export interface AuditInput {
   pathId?: string | null;
   nodeId?: string | null;
   statementId?: string | null;
+  /** Vínculo do contexto da sessão (Fase 4.8). */
+  contextId?: string | null;
   patientId: number;
   assistantId: string;
   eventType: InteractionEventType;
@@ -206,6 +209,7 @@ export function writeAudit(
     pathId: input.pathId ?? null,
     nodeId: input.nodeId ?? null,
     statementId: input.statementId ?? null,
+    contextId: input.contextId ?? null,
     patientId: input.patientId,
     assistantId: input.assistantId,
     eventType: input.eventType,

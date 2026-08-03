@@ -16,6 +16,10 @@ import {
   OPTION_CONVERSATION_EVENT_TYPES,
   type OptionConversationEventType,
 } from "@/lib/audit-events/option-conversation-events";
+import {
+  SESSION_CONTEXT_EVENT_TYPES,
+  type SessionContextEventType,
+} from "@/lib/audit-events/session-context-events";
 
 export {
   SESSION_EVENT_TYPES,
@@ -25,14 +29,20 @@ export {
   OPTION_CONVERSATION_EVENT_TYPES,
   type OptionConversationEventType,
 } from "@/lib/audit-events/option-conversation-events";
+export {
+  SESSION_CONTEXT_EVENT_TYPES,
+  type SessionContextEventType,
+} from "@/lib/audit-events/session-context-events";
 
 export type InteractionEventType =
   | SessionEventType
-  | OptionConversationEventType;
+  | OptionConversationEventType
+  | SessionContextEventType;
 
 export const INTERACTION_EVENT_TYPES: readonly InteractionEventType[] = [
   ...SESSION_EVENT_TYPES,
   ...OPTION_CONVERSATION_EVENT_TYPES,
+  ...SESSION_CONTEXT_EVENT_TYPES,
 ] as const;
 
 export function isInteractionEventType(v: unknown): v is InteractionEventType {

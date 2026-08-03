@@ -7,6 +7,7 @@ import {
   listTurns,
   runSessionAction,
 } from "@/lib/realtime-question-store";
+import { getActiveSessionContext } from "@/lib/session-context-store";
 import type { SessionAction } from "@/lib/realtime-question-machine";
 
 // Sessões de Perguntas em tempo real. Criar/operar exige createSession;
@@ -33,8 +34,13 @@ export async function GET(request: Request) {
     if (!session) {
       return Response.json({ error: "sessão não encontrada" }, { status: 404 });
     }
-    const turns = (await listTurns(patientId, sessionId)) ?? [];
-    return Response.json({ session, turns });
+    // Sessão + interações + contexto numa leitura só: é o que a restauração
+    // após atualizar a página precisa para voltar exatamente onde estava.
+    const [turns, context] = await Promise.all([
+      listTurns(patientId, sessionId),
+      getActiveSessionContext(patientId, sessionId),
+    ]);
+    return Response.json({ session, turns: turns ?? [], context });
   }
 
   const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);

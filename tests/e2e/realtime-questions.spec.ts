@@ -3,7 +3,13 @@
 // conversa-regressao.spec.ts.
 
 import { expect, test, type Page } from "@playwright/test";
-import { abrirModo, entrarComo, semear, type Semente } from "./helpers";
+import {
+  abrirModo,
+  entrarComo,
+  pularContexto,
+  semear,
+  type Semente,
+} from "./helpers";
 
 let dados: Semente;
 
@@ -17,6 +23,7 @@ test.beforeEach(async ({ page, request }) => {
 async function iniciarSessao(page: Page, patientId: number) {
   await abrirModo(page, patientId);
   await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await pularContexto(page);
   await expect(page.getByRole("heading", { name: "Escreva a pergunta" })).toBeVisible();
 }
 
@@ -118,7 +125,9 @@ test("4. cria a pergunta manualmente, com contador e bloqueio de vazio", async (
 test("5. edita o texto durante a revisão", async ({ page }) => {
   await iniciarSessao(page, dados.pacienteId);
   await escrever(page, "O senhor está com sede?");
-  await page.getByRole("button", { name: "Editar" }).click();
+  // `exact`: a barra do contexto (Fase 4.8) traz o próprio lápis, com rótulo
+  // "Editar o contexto da conversa". Aqui queremos o Editar DA REVISÃO.
+  await page.getByRole("button", { name: "Editar", exact: true }).click();
   await page.getByLabel("Pergunta para o paciente").fill("O senhor quer água?");
   await page.getByRole("button", { name: "Continuar" }).click();
   await expect(page.getByRole("blockquote")).toHaveText("O senhor quer água?");
