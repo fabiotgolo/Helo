@@ -401,9 +401,44 @@ automática pela IA entrará por `shouldOpenOptionFlow` em
 `components/realtime-questions/session.tsx` — ponto único, sem que o resto da
 tela precise mudar.
 
-Ainda **não** implementados aqui: ElevenLabs, voz, geração por IA, e as Fases
-4.2 (interpretação digitada), 4.7 (controles do paciente), 4.8 (contexto
-inicial) e 4.9 (offline).
+### Contexto da conversa (4.8)
+
+Antes de começar, o cuidador pode registrar **com quem**, **para quê**, **onde**
+e **sobre o quê** a conversa acontece. Tudo é opcional, inclusive a etapa
+inteira: "Começar sem contexto" aparece no alto e no fim do formulário, porque
+uma conversa urgente não pode ficar atrás de um formulário. O contexto **não é
+fala do paciente** e nunca aparece no palco dele. Editar durante a sessão cria
+uma versão nova e preserva a anterior.
+
+O interlocutor pode vir da rede do paciente (nome e relação copiados como
+snapshot) ou ser digitado à mão — e **digitar um nome nunca cria contato**.
+
+### Interpretação digitada pelo cuidador (4.2)
+
+Quando o paciente vocaliza algo, o cuidador escreve **o que entendeu**, relê e
+apresenta. Antes do SIM do paciente, a tela nunca chama aquilo de fala dele.
+
+É a mesma entidade da frase final, com `origin: CAREGIVER_INTERPRETATION` — o
+que dá a ela, de graça, o versionamento, o lápis, o histórico, a reutilização e
+a auditoria que já existiam. O SIM confirma o conteúdo **sem apagar a origem**:
+uma interpretação confirmada aparece como *"Confirmada pelo paciente · texto
+formulado pelo cuidador"*.
+
+### Controles diretos do paciente (4.7)
+
+Um painel discreto e permanente devolve cinco pedidos a quem está conversando:
+**pausar**, **repetir**, **não entendi**, **mudar de assunto** e **encerrar**.
+São cinco comandos e três gestos, então eles vêm em dois níveis — e nos níveis
+os sinais significam comando 1, 2 e 3, nunca SIM/TALVEZ/NÃO.
+
+Abrir o painel **não altera nada**: ele sobrepõe a conversa, e "Voltar para a
+conversa" devolve texto digitado, seleção provisória e breadcrumb intactos.
+"Não entendi" não é lido como recusa e não muda o conteúdo — a decisão seguinte
+é do cuidador, inclusive a versão simplificada, que **ele** escreve. Encerrar
+exige uma confirmação final: escolher "encerrar" não encerra sozinho.
+
+Ainda **não** implementados aqui: ElevenLabs, voz, geração por IA, e a Fase 4.9
+(offline).
 
 ## Testes
 
@@ -416,6 +451,20 @@ npm run test:activities  # Atividades
 npm run test:feedback    # Feedback & Support (banco isolado, ex.: feedback-test)
 npm run test:realtime-questions  # Perguntas em tempo real (estados e auditoria)
 npm run test:option-conversation # Conversa por opções (as quatro suítes abaixo)
+npm run test:authorship  # invariável de autoria da fala confirmada (domínio puro)
+```
+
+As Fases 4.2, 4.7 e 4.8 usam um banco **dedicado**, para não apagar o
+`helo-db` que o dev server da porta 3000 utiliza:
+
+```bash
+FIRESTORE_DATABASE_ID=fases4x-test PORT=3002 npm run dev:preview
+```
+
+```bash
+FIRESTORE_DATABASE_ID=fases4x-test npm run test:session-context   -- http://localhost:3002
+FIRESTORE_DATABASE_ID=fases4x-test npm run test:interpretation    -- http://localhost:3002
+FIRESTORE_DATABASE_ID=fases4x-test npm run test:patient-controls  -- http://localhost:3002
 ```
 
 A conversa por opções é dividida por domínio, e cada parte roda sozinha:
