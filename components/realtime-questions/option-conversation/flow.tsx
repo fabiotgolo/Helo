@@ -40,7 +40,7 @@ import {
   Control,
   InteractionModeBadge,
   Primary,
-} from "@/components/realtime-questions/option-conversation/ui";
+} from "@/components/realtime-questions/ui";
 import {
   newRequestId,
   type RtqPersistence,

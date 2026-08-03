@@ -9,7 +9,7 @@
 import {
   Control,
   Primary,
-} from "@/components/realtime-questions/option-conversation/ui";
+} from "@/components/realtime-questions/ui";
 import {
   MAX_OPTIONS_PER_NODE,
   MAX_OPTION_LABEL_LEN,

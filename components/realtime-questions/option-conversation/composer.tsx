@@ -16,7 +16,7 @@ import {
   EditButton,
   Primary,
   Selo,
-} from "@/components/realtime-questions/option-conversation/ui";
+} from "@/components/realtime-questions/ui";
 import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { useAnswerChoices } from "@/components/realtime-questions/question-stage";
 import { MAX_STATEMENT_LEN } from "@/lib/option-conversation-types";

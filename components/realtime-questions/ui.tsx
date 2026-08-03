@@ -1,8 +1,14 @@
 "use client";
 
-// ——— Peças visuais da conversa por opções ———
-// Mesmo vocabulário da tela Conversar: os botões são os de session.tsx, os
-// tokens de tema são os do projeto e nada aqui redesenha a tela.
+// ——— Peças visuais das Perguntas em tempo real ———
+// Mesmo vocabulário da tela Conversar: os tokens de tema são os do projeto e
+// nada aqui redesenha a tela.
+//
+// Estes botões são usados pela pergunta fechada, pela conversa por opções, pelo
+// contexto da sessão, pela interpretação do cuidador e pelos controles do
+// paciente. Existiam duplicados em session.tsx e na pasta da conversa por
+// opções; agora existem uma vez só, para que um ajuste visual não precise ser
+// feito em dois lugares e sair diferente num deles.
 
 import type { ReactNode } from "react";
 import {

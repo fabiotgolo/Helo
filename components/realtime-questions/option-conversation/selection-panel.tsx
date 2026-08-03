@@ -9,7 +9,7 @@
 import {
   Control,
   Primary,
-} from "@/components/realtime-questions/option-conversation/ui";
+} from "@/components/realtime-questions/ui";
 
 export function SelectionPanel({
   optionLabel,

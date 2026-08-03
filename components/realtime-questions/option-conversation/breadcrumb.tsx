@@ -9,7 +9,7 @@
 // Cada degrau anterior é clicável e volta àquele nível; o atual é destacado e
 // NÃO é clicável (voltar para onde já se está não é uma ação).
 
-import { Control } from "@/components/realtime-questions/option-conversation/ui";
+import { Control } from "@/components/realtime-questions/ui";
 import {
   confirmedLabel,
   type OptionConversationNode,

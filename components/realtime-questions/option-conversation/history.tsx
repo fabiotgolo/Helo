@@ -15,7 +15,7 @@ import {
   Control,
   Primary,
   Selo,
-} from "@/components/realtime-questions/option-conversation/ui";
+} from "@/components/realtime-questions/ui";
 import {
   activeTrail,
   confirmedLabel,
