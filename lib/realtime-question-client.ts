@@ -19,6 +19,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { SessionAction, TurnAction } from "@/lib/realtime-question-machine";
 import type { SessionContextVersion } from "@/lib/session-context-types";
+import type { PatientControlRequest } from "@/lib/patient-control-types";
+import type { PatientControlAction } from "@/lib/patient-control-machine";
 import type {
   NodeAction,
   PathAction,
@@ -62,6 +64,25 @@ export class RtqClientError extends Error {
   }
 }
 
+/** O que a tela envia ao abrir os controles do paciente. */
+export interface OpenControlInput {
+  clientRequestId: string;
+  /** O que está no ar agora — alvo de REPETIR e de MUDAR DE ASSUNTO. */
+  targetType?: "TURN" | "NODE" | "STATEMENT" | null;
+  targetId?: string | null;
+  targetPathId?: string | null;
+}
+
+/** O que a execução de um comando tocou — a tela substitui o que recebeu. */
+export interface ControlActionResult {
+  request: PatientControlRequest;
+  turn?: ConversationQuestionTurn | null;
+  node?: OptionConversationNode | null;
+  statement?: OptionConversationFinalStatement | null;
+  path?: OptionConversationPath | null;
+  sessionStatus?: "ACTIVE" | "PAUSED" | "COMPLETED" | "ABANDONED" | null;
+}
+
 /** O que a tela envia ao registrar uma interpretação do cuidador. */
 export interface CaregiverInterpretationInput {
   clientRequestId: string;
@@ -95,6 +116,12 @@ export interface SessionDetail {
    * preencher e pular. `null` = nunca decidiu.
    */
   context: SessionContextVersion | null;
+  /**
+   * Painel de controles ainda aberto (Fase 4.7). A tela do painel é derivada
+   * daqui, então um refresh no meio da seleção provisória do paciente volta
+   * exatamente na seleção provisória.
+   */
+  controlRequest: PatientControlRequest | null;
 }
 
 // ---------- Requisição e tradução de erro ----------
@@ -243,6 +270,34 @@ const api = {
         origin: "CAREGIVER_INTERPRETATION",
         ...input,
       },
+    }),
+
+  // ——— Controles do paciente (Fase 4.7) ———
+
+  patientControl: (patientId: number, sessionId: string) =>
+    request<{ request: PatientControlRequest | null }>(
+      `/patient-controls?patientId=${patientId}&sessionId=${encodeURIComponent(sessionId)}`
+    ).then((d) => d.request),
+
+  openPatientControl: (
+    patientId: number,
+    sessionId: string,
+    input: OpenControlInput
+  ) =>
+    request<{ request: PatientControlRequest }>("/patient-controls", {
+      method: "POST",
+      body: { patientId, sessionId, ...input },
+    }).then((d) => d.request),
+
+  patientControlAction: (
+    patientId: number,
+    sessionId: string,
+    requestId: string,
+    action: PatientControlAction
+  ) =>
+    request<ControlActionResult>("/patient-controls", {
+      method: "PATCH",
+      body: { patientId, sessionId, requestId, action },
     }),
 
   // ——— Contexto da conversa (Fase 4.8) ———
@@ -614,6 +669,21 @@ export interface RtqPersistence {
     path: OptionConversationPath;
     statement: OptionConversationFinalStatement;
   }>;
+  patientControl: (
+    patientId: number,
+    sessionId: string
+  ) => Promise<PatientControlRequest | null>;
+  openPatientControl: (
+    patientId: number,
+    sessionId: string,
+    input: OpenControlInput
+  ) => Promise<PatientControlRequest>;
+  patientControlAction: (
+    patientId: number,
+    sessionId: string,
+    requestId: string,
+    action: PatientControlAction
+  ) => Promise<ControlActionResult>;
   sessionContext: (
     patientId: number,
     sessionId: string
@@ -837,6 +907,24 @@ export function useRtqPersistence(): RtqPersistence {
           false
         ),
 
+      patientControl: (patientId, sessionId) =>
+        run(
+          `ctrl:${patientId}:${sessionId}`,
+          () => api.patientControl(patientId, sessionId),
+          false
+        ),
+      openPatientControl: (patientId, sessionId, input) =>
+        run(
+          `ctrlOpen:${sessionId}:${input.clientRequestId}`,
+          () => api.openPatientControl(patientId, sessionId, input),
+          true
+        ),
+      patientControlAction: (patientId, sessionId, requestId, action) =>
+        run(
+          `ctrlAct:${requestId}:${JSON.stringify(action)}`,
+          () => api.patientControlAction(patientId, sessionId, requestId, action),
+          true
+        ),
       sessionContext: (patientId, sessionId) =>
         run(
           `ctx:${patientId}:${sessionId}`,

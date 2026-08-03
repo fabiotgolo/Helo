@@ -73,7 +73,7 @@ export default function PerguntasEmTempoRealPage() {
       const session = await persist.createSession(patientId);
       // Sessão nova nasce sem contexto: a primeira tela pergunta se o cuidador
       // quer preencher ou começar sem (Fase 4.8).
-      setDetail({ session, turns: [], context: null });
+      setDetail({ session, turns: [], context: null, controlRequest: null });
       setFailure(null);
     } catch (e) {
       setFailure((e as Error).message);
@@ -90,7 +90,12 @@ export default function PerguntasEmTempoRealPage() {
         fresh.session.status === "PAUSED"
           ? await persist.sessionAction(patientId, resumable.id, "RESUME")
           : fresh.session;
-      setDetail({ session, turns: fresh.turns, context: fresh.context });
+      setDetail({
+        session,
+        turns: fresh.turns,
+        context: fresh.context,
+        controlRequest: fresh.controlRequest,
+      });
       setFailure(null);
     } catch (e) {
       setFailure((e as Error).message);

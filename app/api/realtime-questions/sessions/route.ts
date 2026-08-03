@@ -8,6 +8,7 @@ import {
   runSessionAction,
 } from "@/lib/realtime-question-store";
 import { getActiveSessionContext } from "@/lib/session-context-store";
+import { getOpenPatientControl } from "@/lib/patient-control-store";
 import type { SessionAction } from "@/lib/realtime-question-machine";
 
 // Sessões de Perguntas em tempo real. Criar/operar exige createSession;
@@ -36,11 +37,17 @@ export async function GET(request: Request) {
     }
     // Sessão + interações + contexto numa leitura só: é o que a restauração
     // após atualizar a página precisa para voltar exatamente onde estava.
-    const [turns, context] = await Promise.all([
+    const [turns, context, controlRequest] = await Promise.all([
       listTurns(patientId, sessionId),
       getActiveSessionContext(patientId, sessionId),
+      getOpenPatientControl(patientId, sessionId),
     ]);
-    return Response.json({ session, turns: turns ?? [], context });
+    return Response.json({
+      session,
+      turns: turns ?? [],
+      context,
+      controlRequest,
+    });
   }
 
   const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);

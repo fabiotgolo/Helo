@@ -57,6 +57,16 @@ import {
 } from "@/components/realtime-questions/session-context";
 import type { SessionContextVersion } from "@/lib/session-context-types";
 import {
+  NotUnderstoodFollowUp,
+  PatientControlsPanel,
+  PatientControlsTrigger,
+} from "@/components/realtime-questions/patient-controls";
+import {
+  isTerminalControlStatus,
+  type PatientCommand,
+} from "@/lib/patient-control-types";
+import type { PatientControlAction } from "@/lib/patient-control-machine";
+import {
   EMPTY_INTERPRETATION,
   InterpretationEditor,
   type InterpretationDraft,
@@ -115,6 +125,13 @@ export function RealtimeQuestionSession({
   const [interpreting, setInterpreting] = useState(false);
   const [interpretationDraft, setInterpretationDraft] =
     useState<InterpretationDraft>(EMPTY_INTERPRETATION);
+  // Controles do paciente (Fase 4.7). O painel SOBREPÕE a conversa: `openPath`
+  // e o switch continuam montados, e é isso que faz "Voltar para a conversa"
+  // devolver texto digitado, seleção provisória e breadcrumb sem restaurar
+  // nada. `notUnderstood` guarda o desdobramento de NÃO ENTENDI, que é uma
+  // decisão do cuidador — nunca automática.
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [notUnderstood, setNotUnderstood] = useState(false);
   // Contexto da conversa (Fase 4.8). Edição e consulta durante a sessão.
   const [contextEditing, setContextEditing] = useState(false);
   const [contextVersions, setContextVersions] = useState<
@@ -130,7 +147,7 @@ export function RealtimeQuestionSession({
   >(null);
   const [retryable, setRetryable] = useState(false);
 
-  const { session, turns, context } = detail;
+  const { session, turns, context, controlRequest } = detail;
   const choices = useAnswerChoices(profile);
 
   // O turno em curso é o último ainda não terminal — derivado, nunca guardado.
@@ -467,6 +484,109 @@ export function RealtimeQuestionSession({
     setContextVersions(versions);
   }, [persist, patientId, session.id, context]);
 
+  // ——— Controles do paciente (Fase 4.7) ———
+
+  /** O que está no ar agora — alvo de REPETIR e de MUDAR DE ASSUNTO. */
+  const alvoAtual = useMemo(() => {
+    if (openPath) {
+      const frase = openPath.statements
+        .filter((x) => x.status !== "CANCELED" && x.status !== "REPLACED")
+        .at(-1);
+      if (frase && frase.status === "PRESENTED") {
+        return {
+          targetType: "STATEMENT" as const,
+          targetId: frase.id,
+          targetPathId: openPath.path.id,
+        };
+      }
+      const nivel = openPath.nodes.find(
+        (n) => n.id === openPath.path.activeNodeId
+      );
+      return {
+        targetType: nivel ? ("NODE" as const) : null,
+        targetId: nivel?.id ?? null,
+        targetPathId: openPath.path.id,
+      };
+    }
+    return {
+      targetType: currentTurn ? ("TURN" as const) : null,
+      targetId: currentTurn?.id ?? null,
+      targetPathId: null,
+    };
+  }, [openPath, currentTurn]);
+
+  const abrirControles = useCallback(async () => {
+    persist.clearError();
+    setControlsOpen(true);
+    try {
+      const aberto = await persist.openPatientControl(patientId, session.id, {
+        clientRequestId: newRequestId("ctrl"),
+        ...alvoAtual,
+      });
+      setDetail((d) => ({ ...d, controlRequest: aberto }));
+    } catch {
+      setControlsOpen(false);
+    }
+  }, [persist, patientId, session.id, alvoAtual]);
+
+  const controlAct = useCallback(
+    async (action: PatientControlAction) => {
+      if (!controlRequest) return;
+      persist.clearError();
+      try {
+        const r = await persist.patientControlAction(
+          patientId,
+          session.id,
+          controlRequest.id,
+          action
+        );
+        // O que a execução tocou substitui o que a tela tinha — nada é
+        // adivinhado localmente.
+        if (r.turn) applyTurn(r.turn);
+        if (r.path || r.node || r.statement) await loadPaths();
+        if (r.sessionStatus) {
+          setDetail((d) => ({
+            ...d,
+            session: { ...d.session, status: r.sessionStatus! },
+          }));
+        }
+        setDetail((d) => ({ ...d, controlRequest: r.request }));
+
+        // Desdobramentos que são decisão do CUIDADOR, nunca automáticos.
+        if (action.kind === "EXECUTE") {
+          const cmd: PatientCommand | null = controlRequest.confirmedCommand;
+          if (cmd === "NOT_UNDERSTOOD") {
+            setNotUnderstood(true);
+            setControlsOpen(false);
+          } else if (cmd === "PAUSE") {
+            setControlsOpen(false);
+          } else if (cmd === "REPEAT") {
+            setControlsOpen(false);
+          } else if (cmd === "CHANGE_SUBJECT") {
+            setControlsOpen(false);
+            setOpenPathId(null);
+            setComposing(true);
+          } else if (cmd === "END_CONVERSATION") {
+            // Encerrar de verdade continua sendo ato do cuidador, pelo fluxo
+            // de saída que ele já conhece.
+            setControlsOpen(false);
+            setExitOpen(true);
+          }
+        }
+        // Fechar depende do ESTADO resultante, não do nome da ação: um NÃO na
+        // confirmação final cancela o pedido sem que a ação se chame CANCEL, e
+        // o painel precisa sair de cena do mesmo jeito.
+        if (isTerminalControlStatus(r.request.status)) {
+          setControlsOpen(false);
+        }
+        return r;
+      } catch {
+        // A faixa de erro já explica; o painel continua onde estava.
+      }
+    },
+    [persist, patientId, session.id, controlRequest, applyTurn, loadPaths]
+  );
+
   // ——— Ações do fluxo ———
 
   const startQuestion = useCallback(() => {
@@ -659,7 +779,8 @@ export function RealtimeQuestionSession({
   // Enquanto um caminho está aberto, 1/2/3 significam OPÇÃO 1/2/3 e quem
   // escuta é o flow — os dois significados nunca ficam ativos ao mesmo tempo.
   useEffect(() => {
-    if (openPath) return;
+    // Com o painel aberto, 1/2/3 significam COMANDO 1/2/3 e quem escuta é ele.
+    if (openPath || controlsOpen) return;
     if (!currentTurn || currentTurn.status !== "AWAITING_RESPONSE" || paused) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLElement) {
@@ -677,7 +798,7 @@ export function RealtimeQuestionSession({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentTurn, paused, act, openPath]);
+  }, [currentTurn, paused, act, openPath, controlsOpen]);
 
   // ——— Render ———
 
@@ -721,6 +842,47 @@ export function RealtimeQuestionSession({
               busy={busy}
               onEdit={() => setContextEditing(true)}
               onView={() => void verContexto().catch(() => {})}
+            />
+          )}
+
+          {notUnderstood && !sessionOver && (
+            <NotUnderstoodFollowUp
+              busy={busy}
+              canGoBack={false}
+              onRepeat={() => {
+                if (currentTurn) void act(currentTurn.id, { kind: "REPRESENT" });
+                setNotUnderstood(false);
+              }}
+              /* Versão simplificada (§27): a pergunta já apresentada NÃO é
+                 reescrita — o domínio recusa editar o que o paciente viu, e
+                 com razão. A simplificada é um registro NOVO: a original sai
+                 do fluxo preservada, e o cuidador escreve a outra. O Helo não
+                 gera texto. */
+              onSimplify={
+                currentTurn
+                  ? () => {
+                      void (async () => {
+                        await act(currentTurn.id, {
+                          kind: "CANCEL",
+                          reason: "versão simplificada a pedido do paciente",
+                        });
+                        setDraft("");
+                        setComposing(true);
+                        setNotUnderstood(false);
+                      })();
+                    }
+                  : null
+              }
+              onBackLevel={null}
+              onCancelContent={
+                currentTurn
+                  ? () => {
+                      void cancelQuestion(currentTurn);
+                      setNotUnderstood(false);
+                    }
+                  : null
+              }
+              onDismiss={() => setNotUnderstood(false)}
             />
           )}
 
@@ -1064,16 +1226,58 @@ export function RealtimeQuestionSession({
         />
       )}
 
+      {/* O painel SOBREPÕE: o switch acima continua montado, então texto
+          digitado, seleção provisória e breadcrumb sobrevivem intactos e
+          "Voltar para a conversa" não precisa restaurar nada. */}
+      {controlsOpen && controlRequest && !sessionOver && (
+        <PatientControlsPanel
+          request={controlRequest}
+          profile={profile}
+          busy={busy}
+          actions={{
+            onPresent: () => void controlAct({ kind: "PRESENT" }),
+            onAwaitSelection: () => void controlAct({ kind: "AWAIT_SELECTION" }),
+            onSelect: (command) =>
+              void controlAct({ kind: "SELECT_COMMAND", command }),
+            onChange: (command) =>
+              void controlAct({ kind: "CHANGE_COMMAND", command }),
+            onRemoveSelection: () => void controlAct({ kind: "REMOVE_SELECTION" }),
+            onConfirm: () => void controlAct({ kind: "CONFIRM_COMMAND" }),
+            onAskEndConfirmation: () =>
+              void controlAct({ kind: "ASK_END_CONFIRMATION" }),
+            onRespondEnd: (response) =>
+              void controlAct({ kind: "RESPOND_END", response }),
+            onExecute: () => void controlAct({ kind: "EXECUTE" }),
+            onCancel: () => void controlAct({ kind: "CANCEL" }),
+            onClose: () => void controlAct({ kind: "CLOSE" }),
+          }}
+        />
+      )}
+
       {!sessionOver && (
         // `relative`: sem contexto de posicionamento o véu (absolute) pintaria
         // por cima dos controles e eles ficariam lavados.
-        <footer className="no-print pointer-events-auto relative flex flex-wrap items-center justify-center gap-2 px-6 pb-6">
+        // `sm:pl-80`: o crachá decorativo da ElevenLabs ocupa ~297px no canto
+        // inferior esquerdo a partir de 640px, e o LINK dele é clicável. Sem
+        // esta folga, o rodapé quebra linha por baixo dele e o clique nos
+        // controles do paciente é engolido pelo logo.
+        <footer className="no-print pointer-events-auto relative z-30 flex flex-wrap items-center justify-center gap-2 px-6 pb-6 sm:pl-80">
           <span
             aria-live="polite"
             className={`text-sm ${busy ? "text-ink-soft" : "sr-only"}`}
           >
             {busy ? "Registrando…" : "Registro em dia"}
           </span>
+          {/* Permanente: o paciente precisa alcançar os controles em qualquer
+              tela — pergunta fechada, opções, compositor, interpretação,
+              confirmação ou espera. */}
+          {!controlsOpen && (
+            // Sem `disabled`: os controles do paciente não podem sumir por
+            // causa de uma gravação em voo. A fila do cliente já serializa, e
+            // ficar inalcançável por um instante é justamente o que o paciente
+            // não pode enfrentar quando quer pedir uma pausa.
+            <PatientControlsTrigger onOpen={() => void abrirControles()} />
+          )}
           {!paused && (
             <Control onClick={() => void sessionAct("PAUSE").catch(() => {})}>
               ⏸ Pausar sessão
