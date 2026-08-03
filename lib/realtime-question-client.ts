@@ -62,6 +62,14 @@ export class RtqClientError extends Error {
   }
 }
 
+/** O que a tela envia ao registrar uma interpretação do cuidador. */
+export interface CaregiverInterpretationInput {
+  clientRequestId: string;
+  text: string;
+  isSensitive?: boolean;
+  sensitiveCategory?: SensitiveCategory | null;
+}
+
 /**
  * O que a tela envia ao gravar o contexto. Só conteúdo: versão, status,
  * autoria e horário nascem no servidor.
@@ -217,6 +225,25 @@ const api = {
       method: "POST",
       body: { patientId },
     }).then((d) => d.session),
+
+  /** Interpretação do cuidador + seu contêiner, numa chamada (Fase 4.2). */
+  createCaregiverInterpretation: (
+    patientId: number,
+    sessionId: string,
+    input: CaregiverInterpretationInput
+  ) =>
+    request<{
+      path: OptionConversationPath;
+      statement: OptionConversationFinalStatement;
+    }>("/statements", {
+      method: "POST",
+      body: {
+        patientId,
+        sessionId,
+        origin: "CAREGIVER_INTERPRETATION",
+        ...input,
+      },
+    }),
 
   // ——— Contexto da conversa (Fase 4.8) ———
 
@@ -579,6 +606,14 @@ export interface RtqPersistence {
     sessionId: string,
     action: SessionAction
   ) => Promise<ConversationQuestionSession>;
+  createCaregiverInterpretation: (
+    patientId: number,
+    sessionId: string,
+    input: CaregiverInterpretationInput
+  ) => Promise<{
+    path: OptionConversationPath;
+    statement: OptionConversationFinalStatement;
+  }>;
   sessionContext: (
     patientId: number,
     sessionId: string
@@ -827,6 +862,12 @@ export function useRtqPersistence(): RtqPersistence {
         run(
           `session:${sessionId}:${action}`,
           () => api.sessionAction(patientId, sessionId, action),
+          true
+        ),
+      createCaregiverInterpretation: (patientId, sessionId, input) =>
+        run(
+          `interp:${sessionId}:${input.clientRequestId}`,
+          () => api.createCaregiverInterpretation(patientId, sessionId, input),
           true
         ),
       saveSessionContext: (patientId, sessionId, input) =>

@@ -63,6 +63,7 @@ export function ComposeScreen({
   onContinue,
   onCancel,
   onOptionConversation,
+  onCaregiverInterpretation,
 }: {
   draft: string;
   busy: boolean;
@@ -73,6 +74,8 @@ export function ComposeScreen({
   onCancel: () => void;
   /** Entrada manual da conversa por opções. Ausente ao editar uma pergunta. */
   onOptionConversation: (() => void) | null;
+  /** Registrar o que o cuidador entendeu (Fase 4.2). */
+  onCaregiverInterpretation: (() => void) | null;
 }) {
   const text = draft.trim();
   const remaining = MAX_QUESTION - draft.length;
@@ -115,6 +118,11 @@ export function ComposeScreen({
         {onOptionConversation && (
           <Control onClick={onOptionConversation} disabled={busy}>
             Conversa por opções
+          </Control>
+        )}
+        {onCaregiverInterpretation && (
+          <Control onClick={onCaregiverInterpretation} disabled={busy}>
+            Registrar o que entendi
           </Control>
         )}
         {cancelable && <Control onClick={onCancel}>Cancelar</Control>}
@@ -399,6 +407,7 @@ export function IdleScreen({
   busy,
   onNewQuestion,
   onOptionConversation,
+  onCaregiverInterpretation,
   onFinish,
 }: {
   lastTurn: ConversationQuestionTurn | null;
@@ -410,6 +419,8 @@ export function IdleScreen({
    * por este botão.
    */
   onOptionConversation: () => void;
+  /** Registrar o que o cuidador entendeu (Fase 4.2). */
+  onCaregiverInterpretation: () => void;
   onFinish: () => void;
 }) {
   return (
@@ -421,6 +432,9 @@ export function IdleScreen({
         </Primary>
         <Control onClick={onOptionConversation} disabled={busy}>
           Conversa por opções
+        </Control>
+        <Control onClick={onCaregiverInterpretation} disabled={busy}>
+          Registrar o que entendi
         </Control>
         <Control onClick={onFinish} disabled={busy}>
           Encerrar sessão

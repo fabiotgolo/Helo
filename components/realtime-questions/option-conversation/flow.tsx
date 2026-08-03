@@ -36,12 +36,16 @@ import {
   useOptionChoices,
 } from "@/components/realtime-questions/option-conversation/node-stage";
 import { SelectionPanel } from "@/components/realtime-questions/option-conversation/selection-panel";
+import { InterpretationReview } from "@/components/realtime-questions/interpretation";
 import {
   Control,
   InteractionModeBadge,
   Primary,
 } from "@/components/realtime-questions/ui";
-import { tryToConfirmedPatientStatement } from "@/lib/confirmed-patient-statement";
+import {
+  rotuloDeAutoria,
+  tryToConfirmedPatientStatement,
+} from "@/lib/confirmed-patient-statement";
 import {
   newRequestId,
   type RtqPersistence,
@@ -98,6 +102,9 @@ export function OptionConversationFlow({
   // OPTION_CHANGED, preservando a anterior no evento. Guardamos QUAL nível
   // está em correção, para o modo nunca sobrar ligado no nível seguinte.
   const [correctingNodeId, setCorrectingNodeId] = useState<string | null>(null);
+  // Interpretação (Fase 4.2): a tela padrão é a REVISÃO; o editor só reaparece
+  // quando o cuidador pede para editar. Estado de tela, não de dados.
+  const [revisandoInterpretacao, setRevisandoInterpretacao] = useState(false);
 
   const busy = persist.saving;
 
@@ -212,8 +219,13 @@ export function OptionConversationFlow({
   const setDraft = (next: NodeDraft) =>
     setTypedDraft({ key: draftKey, draft: next });
 
-  const mode: InteractionMode =
-    current.kind === "CONFIRM_STATEMENT"
+  // Numa interpretação (Fase 4.2) o contêiner não tem árvore: o selo precisa
+  // dizer que os sinais valem sobre o que o CUIDADOR entendeu, e não fingir
+  // que houve escolha entre opções.
+  const interpretacao = path.kind === "CAREGIVER_INTERPRETATION";
+  const mode: InteractionMode = interpretacao
+    ? "CAREGIVER_INTERPRETATION"
+    : current.kind === "CONFIRM_STATEMENT"
       ? "FINAL_STATEMENT_CONFIRMATION"
       : "OPTION_SELECTION";
 
@@ -604,6 +616,19 @@ export function OptionConversationFlow({
       ? (statements.find((s) => s.id === current.statementId) ?? null)
       : null;
 
+  /**
+   * A interpretação em revisão — a frase viva enquanto ela ainda é rascunho.
+   * `statementOnScreen` só existe na confirmação; aqui, ANTES de apresentar, é
+   * a frase ativa que a tela de revisão precisa mostrar (Fase 4.2).
+   */
+  const interpretacaoEmRevisao =
+    interpretacao &&
+    current.kind === "EDIT_STATEMENT" &&
+    activeStatement &&
+    (activeStatement.status === "DRAFT" || activeStatement.status === "REVIEWED")
+      ? activeStatement
+      : null;
+
   const showComposer =
     current.kind === "EDIT_STATEMENT" ||
     current.kind === "CONFIRM_STATEMENT" ||
@@ -611,15 +636,17 @@ export function OptionConversationFlow({
 
   return (
     <div className="flex w-full flex-col gap-6">
-      <Breadcrumb
-        crumbs={crumbs}
-        busy={busy}
-        canGoBack={crumbs.length > 1 && !isTerminalPathStatus(path.status)}
-        canRestart={!isTerminalPathStatus(path.status)}
-        onNavigate={(nodeId) => void goToLevel(nodeId)}
-        onBack={goBackOneLevel}
-        onRestart={() => void restart()}
-      />
+      {!interpretacao && (
+        <Breadcrumb
+          crumbs={crumbs}
+          busy={busy}
+          canGoBack={crumbs.length > 1 && !isTerminalPathStatus(path.status)}
+          canRestart={!isTerminalPathStatus(path.status)}
+          onNavigate={(nodeId) => void goToLevel(nodeId)}
+          onBack={goBackOneLevel}
+          onRestart={() => void restart()}
+        />
+      )}
 
       <InteractionModeBadge mode={mode} />
 
@@ -740,20 +767,70 @@ export function OptionConversationFlow({
                 ? () => void adjustStatement(statementOnScreen)
                 : null
           }
+          interpretacao={interpretacao}
         >
-          {current.kind === "EDIT_STATEMENT" && (
-            <StatementEditor
-              text={statementText}
+          {/* Interpretação: a revisão vem ANTES de apresentar, e é onde o
+              cuidador relê o que escreveu e classifica o assunto sensível
+              (Fase 4.2, §13). Só ao pedir "Editar" volta para o editor. */}
+          {interpretacaoEmRevisao && !revisandoInterpretacao && (
+            <InterpretationReview
+              text={interpretacaoEmRevisao.currentText}
+              isSensitive={interpretacaoEmRevisao.isSensitive}
+              sensitiveCategory={interpretacaoEmRevisao.sensitiveCategory}
               busy={busy}
-              suggestion={suggestion}
-              onChange={setStatementText}
-              onSubmit={() => void submitStatement(current.statementId)}
-              onCancel={() => {
-                setTyped(null);
-                setScreen(null);
-              }}
+              onChangeSensitive={(isSensitive, category) =>
+                void statementAct(interpretacaoEmRevisao.id, {
+                  kind: "EDIT",
+                  text: interpretacaoEmRevisao.currentText,
+                  isSensitive,
+                  sensitiveCategory: category,
+                })
+              }
+              onEdit={() => setRevisandoInterpretacao(true)}
+              onPresent={() =>
+                void (async () => {
+                  // Apresentar a partir da revisão é DOIS atos do cuidador: ele
+                  // atesta que leu (EDIT, que leva o rascunho a revisada) e só
+                  // então mostra ao paciente. O domínio recusa apresentar
+                  // direto do rascunho, e é essa recusa que garante que
+                  // ninguém mostre ao paciente um texto que não releu.
+                  if (interpretacaoEmRevisao.status === "DRAFT") {
+                    await statementAct(interpretacaoEmRevisao.id, {
+                      kind: "EDIT",
+                      text: interpretacaoEmRevisao.currentText,
+                      isSensitive: interpretacaoEmRevisao.isSensitive,
+                      sensitiveCategory: interpretacaoEmRevisao.sensitiveCategory,
+                    });
+                  }
+                  await statementAct(interpretacaoEmRevisao.id, {
+                    kind: "PRESENT",
+                  });
+                })()
+              }
+              onCancel={() =>
+                void statementAct(interpretacaoEmRevisao.id, { kind: "CANCEL" })
+              }
             />
           )}
+
+          {current.kind === "EDIT_STATEMENT" &&
+            (!interpretacaoEmRevisao || revisandoInterpretacao) && (
+              <StatementEditor
+                text={statementText}
+                busy={busy}
+                suggestion={suggestion}
+                onChange={setStatementText}
+                onSubmit={() => {
+                  setRevisandoInterpretacao(false);
+                  void submitStatement(current.statementId);
+                }}
+                onCancel={() => {
+                  setTyped(null);
+                  setRevisandoInterpretacao(false);
+                  setScreen(null);
+                }}
+              />
+            )}
         </Composer>
       )}
 
@@ -768,6 +845,8 @@ export function OptionConversationFlow({
           }
           canGoBack={crumbs.length > 1}
           busy={busy}
+          prefixo={interpretacao ? "O cuidador entendeu:" : undefined}
+          mostrarAcoesDeCaminho={!interpretacao}
           actions={{
             onRespond: (response) => {
               const changing = statementOnScreen.provisionalResponse !== null;
@@ -821,6 +900,7 @@ export function OptionConversationFlow({
           trailLabels={pathLabels}
           busy={busy}
           onLeave={onLeave}
+          interpretacao={interpretacao}
         />
       )}
 
@@ -870,11 +950,14 @@ function FinishedPath({
   trailLabels,
   busy,
   onLeave,
+  interpretacao,
 }: {
   statement: OptionConversationFinalStatement | null;
   trailLabels: string[];
   busy: boolean;
   onLeave: () => void;
+  /** Interpretação do cuidador: o desfecho fala dela, não de "mensagem". */
+  interpretacao: boolean;
 }) {
   // Só o portão da autoria decide se esta tela está mostrando fala do
   // paciente. Um CONFIRMED incoerente (sem SIM observado, sem a reconfirmação
@@ -888,9 +971,13 @@ function FinishedPath({
           precisa alcançá-lo. */}
       <h2 className="text-3xl font-medium">
         {confirmada
-          ? "Mensagem confirmada"
+          ? interpretacao
+            ? "Interpretação confirmada"
+            : "Mensagem confirmada"
           : rejeitada
-            ? "Frase rejeitada"
+            ? interpretacao
+              ? "Interpretação rejeitada"
+              : "Frase rejeitada"
             : "Conversa encerrada"}
       </h2>
       {trailLabels.length > 0 && (
@@ -904,8 +991,11 @@ function FinishedPath({
         </blockquote>
       )}
       <p className="max-w-md text-sm text-ink-soft">
-        {confirmada
-          ? "A frase foi confirmada pelo paciente e ficou registrada."
+        {fala
+          ? // Quem escreve a frase de autoria é o portão: uma interpretação
+            // confirmada não pode aparecer como se o paciente a tivesse
+            // formulado (Fase 4.2).
+            `${rotuloDeAutoria(fala)} Ficou registrada.`
           : rejeitada
             ? "A frase não foi confirmada. Ela fica registrada como rejeitada e nunca será tratada como comunicação confirmada."
             : "O caminho foi encerrado e permanece registrado. Para retomar este conteúdo, reutilize-o pelo histórico."}

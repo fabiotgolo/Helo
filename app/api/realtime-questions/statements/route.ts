@@ -1,5 +1,6 @@
 import { requirePatientAccess } from "@/lib/auth";
 import {
+  createCaregiverInterpretation,
   createStatement,
   getPathDetail,
   replaceStatement,
@@ -14,6 +15,7 @@ import {
   isSemanticResponse,
   isSensitiveCategory,
 } from "@/lib/realtime-question-types";
+import { isStatementOrigin } from "@/lib/option-conversation-types";
 
 // Mensagem em construção e frase final de um caminho.
 //
@@ -53,6 +55,8 @@ export async function POST(request: Request) {
     isSensitive?: unknown;
     sensitiveCategory?: unknown;
     clientRequestId?: unknown;
+    /** "CAREGIVER_INTERPRETATION" cria a interpretação e seu contêiner (4.2). */
+    origin?: unknown;
     /** "Reutilizar como novo" a partir do histórico (§24). */
     reuseFromStatementId?: unknown;
     /** "Criar versão corrigida" de uma frase já apresentada (§30). */
@@ -84,6 +88,24 @@ export async function POST(request: Request) {
       return Response.json(result);
     }
 
+    // Interpretação do cuidador: sem pathId, porque o contêiner nasce junto.
+    // Mesma entidade da frase final ⇒ mesma rota; rota nova sinalizaria uma
+    // entidade nova, que é justamente o que a Fase 4.2 não cria.
+    if (body.origin === "CAREGIVER_INTERPRETATION" && !body.pathId) {
+      const result = await createCaregiverInterpretation(
+        patientId,
+        body.sessionId,
+        {
+          text: body.text,
+          isSensitive: body.isSensitive,
+          sensitiveCategory: body.sensitiveCategory,
+          clientRequestId: body.clientRequestId,
+        },
+        assistant
+      );
+      return Response.json(result);
+    }
+
     if (!body.pathId) {
       return Response.json({ error: "pathId obrigatório" }, { status: 400 });
     }
@@ -110,6 +132,7 @@ export async function POST(request: Request) {
       {
         text: body.text,
         originNodeId: body.originNodeId,
+        origin: isStatementOrigin(body.origin) ? body.origin : undefined,
         isSensitive: body.isSensitive,
         sensitiveCategory: body.sensitiveCategory,
         clientRequestId: body.clientRequestId,

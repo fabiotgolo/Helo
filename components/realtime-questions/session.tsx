@@ -56,6 +56,11 @@ import {
   type ContextDraft,
 } from "@/components/realtime-questions/session-context";
 import type { SessionContextVersion } from "@/lib/session-context-types";
+import {
+  EMPTY_INTERPRETATION,
+  InterpretationEditor,
+  type InterpretationDraft,
+} from "@/components/realtime-questions/interpretation";
 import type { TurnAction } from "@/lib/realtime-question-machine";
 import {
   isTerminalPathStatus,
@@ -105,6 +110,11 @@ export function RealtimeQuestionSession({
   // Item do histórico em consulta. Abrir NUNCA altera dados (§22).
   const [historyEntry, setHistoryEntry] = useState<HistoryEntry | null>(null);
   const [historyDetail, setHistoryDetail] = useState<HistoryEntry | null>(null);
+  // Interpretação do cuidador (Fase 4.2): o texto é escrito ANTES de o
+  // registro nascer, então o rascunho vive aqui até o cuidador confirmar.
+  const [interpreting, setInterpreting] = useState(false);
+  const [interpretationDraft, setInterpretationDraft] =
+    useState<InterpretationDraft>(EMPTY_INTERPRETATION);
   // Contexto da conversa (Fase 4.8). Edição e consulta durante a sessão.
   const [contextEditing, setContextEditing] = useState(false);
   const [contextVersions, setContextVersions] = useState<
@@ -243,6 +253,39 @@ export function RealtimeQuestionSession({
     session.id,
     loadPaths,
   ]);
+
+  /**
+   * "Registrar o que entendi" (Fase 4.2). O cuidador escreve PRIMEIRO, e só ao
+   * confirmar o registro nasce — nada de rascunho vazio no banco. Criado, o
+   * fluxo aberto é o mesmo da frase final, porque é a mesma entidade.
+   */
+  const saveCaregiverInterpretation = useCallback(
+    async (draft: InterpretationDraft) => {
+      persist.clearError();
+      try {
+        const { path } = await persist.createCaregiverInterpretation(
+          patientId,
+          session.id,
+          {
+            text: draft.text,
+            isSensitive: draft.isSensitive,
+            sensitiveCategory: draft.sensitiveCategory,
+            clientRequestId: newRequestId("interp"),
+          }
+        );
+        const details = await loadPaths();
+        setOpenPathId(
+          details.find((d) => d.path.id === path.id)?.path.id ?? path.id
+        );
+        setInterpreting(false);
+        setInterpretationDraft(EMPTY_INTERPRETATION);
+        setComposing(false);
+      } catch {
+        // A faixa de erro já explica; o texto digitado continua na tela.
+      }
+    },
+    [persist, patientId, session.id, loadPaths]
+  );
 
   /**
    * Sai do caminho e volta ao fluxo de perguntas, sem encerrar a sessão nem o
@@ -702,6 +745,21 @@ export function RealtimeQuestionSession({
               }
               onSkip={() => void salvarContexto({ skipped: true }).catch(() => {})}
             />
+          ) : interpreting ? (
+            /* O cuidador escreve; o registro só nasce ao confirmar. Sair daqui
+               não deixa rascunho nenhum no banco. */
+            <InterpretationEditor
+              draft={interpretationDraft}
+              busy={busy}
+              onChange={setInterpretationDraft}
+              onSubmit={() =>
+                void saveCaregiverInterpretation(interpretationDraft)
+              }
+              onCancel={() => {
+                setInterpreting(false);
+                setInterpretationDraft(EMPTY_INTERPRETATION);
+              }}
+            />
           ) : paused ? (
             <PausedScreen
               busy={busy}
@@ -736,6 +794,9 @@ export function RealtimeQuestionSession({
                 currentTurn == null
                   ? () => void startOptionConversation()
                   : null
+              }
+              onCaregiverInterpretation={
+                currentTurn == null ? () => setInterpreting(true) : null
               }
             />
           ) : currentTurn?.status === "DRAFT" ? (
@@ -773,6 +834,7 @@ export function RealtimeQuestionSession({
               busy={busy}
               onNewQuestion={startQuestion}
               onOptionConversation={() => void startOptionConversation()}
+              onCaregiverInterpretation={() => setInterpreting(true)}
               onFinish={requestExit}
             />
           ) : null}

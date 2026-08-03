@@ -33,6 +33,7 @@ import {
   type PathStatus,
   type StatementStatus,
 } from "@/lib/option-conversation-types";
+import { statementEventFor } from "@/lib/statement-events";
 import {
   isSemanticResponse,
   isSensitiveCategory,
@@ -649,7 +650,11 @@ export const ALLOWED_STATEMENT_TRANSITIONS: Record<
 > = {
   DRAFT: ["DRAFT", "REVIEWED", "CANCELED"],
   REVIEWED: ["DRAFT", "REVIEWED", "PRESENTED", "CANCELED"],
-  PRESENTED: ["PROVISIONAL_RESPONSE", "CANCELED", "REPLACED"],
+  // A autotransição PRESENTED → PRESENTED é o "Repita, por favor" (Fase 4.7):
+  // reapresenta EXATAMENTE o mesmo texto. É idempotente porque EDIT já é
+  // recusado depois da apresentação — `currentText` não pode ter mudado, e o
+  // que o paciente vê continua sendo o mesmo `presentedText`.
+  PRESENTED: ["PRESENTED", "PROVISIONAL_RESPONSE", "CANCELED", "REPLACED"],
   PROVISIONAL_RESPONSE: [
     "PROVISIONAL_RESPONSE", // o assistente corrige o que observou
     "RECONFIRMATION_PENDING", // SIM em frase sensível
@@ -691,6 +696,12 @@ export type StatementAction =
       sensitiveCategory?: SensitiveCategory | null;
     }
   | { kind: "PRESENT" }
+  /**
+   * Reapresentação idempotente da MESMA frase — o "Repita, por favor" do
+   * paciente (Fase 4.7). Não toca no texto, não descarta resposta observada e
+   * não muda o significado: só conta a repetição e registra a auditoria.
+   */
+  | { kind: "REPRESENT" }
   /** A resposta OBSERVADA pelo assistente: SIM, TALVEZ ou NÃO. */
   | { kind: "RESPOND"; response: SemanticResponse }
   | { kind: "CHANGE_RESPONSE"; response: SemanticResponse }
@@ -707,6 +718,7 @@ export type StatementActionKind = StatementAction["kind"];
 export const STATEMENT_ACTION_KINDS: readonly StatementActionKind[] = [
   "EDIT",
   "PRESENT",
+  "REPRESENT",
   "RESPOND",
   "CHANGE_RESPONSE",
   "REMOVE_RESPONSE",
@@ -725,6 +737,7 @@ export function isStatementActionKind(v: unknown): v is StatementActionKind {
 
 const PATIENT_FACING_STATEMENT_ACTIONS: readonly StatementActionKind[] = [
   "PRESENT",
+  "REPRESENT",
   "RESPOND",
   "CHANGE_RESPONSE",
   "REMOVE_RESPONSE",
@@ -740,6 +753,8 @@ const STATEMENT_ACTION_ALLOWED_FROM: Record<
   // nova (§30). O domínio recusa; a interface não tem como contornar.
   EDIT: ["DRAFT", "REVIEWED"],
   PRESENT: ["REVIEWED", "PROVISIONAL_RESPONSE", "RECONFIRMATION_PENDING"],
+  // Só de PRESENTED: repetir é para a frase que está no ar aguardando resposta.
+  REPRESENT: ["PRESENTED"],
   RESPOND: ["PRESENTED"],
   CHANGE_RESPONSE: ["PROVISIONAL_RESPONSE", "RECONFIRMATION_PENDING"],
   REMOVE_RESPONSE: ["PROVISIONAL_RESPONSE", "RECONFIRMATION_PENDING"],
@@ -845,7 +860,10 @@ function buildStatementChange(
           editCount: statement.editCount + (changed ? 1 : 0),
         },
         event: {
-          eventType: "FINAL_STATEMENT_EDITED",
+          eventType: statementEventFor(
+            statement.origin,
+            statement.status === "DRAFT" ? "REVIEWED" : "EDITED"
+          ),
           previousValue: {
             currentText: statement.currentText,
             isSensitive: statement.isSensitive,
@@ -877,15 +895,43 @@ function buildStatementChange(
           correctionCount: statement.correctionCount + (discarded ? 1 : 0),
         },
         event: {
-          eventType: "FINAL_STATEMENT_PRESENTED",
+          eventType: statementEventFor(statement.origin, "PRESENTED"),
           previousValue: {
             status: statement.status,
             provisionalResponse: discarded,
           },
           newValue: { presentedText: statement.currentText },
           metadata: {
-            interactionMode: "FINAL_STATEMENT_CONFIRMATION",
+            interactionMode: statement.interactionMode,
             sensitive: statement.isSensitive,
+          },
+        },
+      };
+    }
+
+    case "REPRESENT": {
+      // Repetir NÃO reapresenta um texto novo: recongela o MESMO
+      // `presentedText`, que EDIT já não deixa mudar depois da apresentação.
+      // Sem resposta observada para descartar (só se chega aqui de PRESENTED),
+      // nada do que o paciente disse é perdido, e o significado não muda.
+      return {
+        status: "PRESENTED",
+        patch: {
+          ...base,
+          status: "PRESENTED",
+          presentedAt: now,
+          representCount: statement.representCount + 1,
+        },
+        event: {
+          eventType: statementEventFor(statement.origin, "REPRESENTED"),
+          previousValue: { representCount: statement.representCount },
+          newValue: {
+            representCount: statement.representCount + 1,
+            presentedText: statement.presentedText,
+          },
+          metadata: {
+            interactionMode: statement.interactionMode,
+            requestedByPatient: true,
           },
         },
       };
@@ -913,9 +959,10 @@ function buildStatementChange(
           correctionCount: statement.correctionCount + (changing ? 1 : 0),
         },
         event: {
-          eventType: changing
-            ? "FINAL_STATEMENT_EDITED"
-            : "FINAL_STATEMENT_PRESENTED",
+          eventType: statementEventFor(
+            statement.origin,
+            changing ? "EDITED" : "PRESENTED"
+          ),
           previousValue: { provisionalResponse: statement.provisionalResponse },
           newValue: { provisionalResponse: action.response },
           metadata: { phase: "response", confirmsStatement: action.response === "YES" },
@@ -935,7 +982,7 @@ function buildStatementChange(
           correctionCount: statement.correctionCount + 1,
         },
         event: {
-          eventType: "FINAL_STATEMENT_EDITED",
+          eventType: statementEventFor(statement.origin, "EDITED"),
           previousValue: { provisionalResponse: statement.provisionalResponse },
           newValue: { provisionalResponse: null },
           metadata: { phase: "response_removed" },
@@ -956,7 +1003,7 @@ function buildStatementChange(
         status: "RECONFIRMATION_PENDING",
         patch: { ...base, status: "RECONFIRMATION_PENDING", reconfirmedAt: now },
         event: {
-          eventType: "FINAL_STATEMENT_PRESENTED",
+          eventType: statementEventFor(statement.origin, "PRESENTED"),
           previousValue: { status: statement.status },
           newValue: { status: "RECONFIRMATION_PENDING" },
           metadata: {
@@ -988,7 +1035,7 @@ function buildStatementChange(
           confirmedAt: now,
         },
         event: {
-          eventType: "FINAL_STATEMENT_CONFIRMED",
+          eventType: statementEventFor(statement.origin, "CONFIRMED"),
           previousValue: { status: statement.status, confirmedResponse: null },
           newValue: {
             status: "CONFIRMED",
@@ -1013,7 +1060,7 @@ function buildStatementChange(
           replacedAt: now,
         },
         event: {
-          eventType: "FINAL_STATEMENT_REPLACED",
+          eventType: statementEventFor(statement.origin, "REPLACED"),
           previousValue: {
             status: statement.status,
             text: statement.presentedText || statement.currentText,
@@ -1036,7 +1083,7 @@ function buildStatementChange(
           canceledAt: now,
         },
         event: {
-          eventType: "FINAL_STATEMENT_REJECTED",
+          eventType: statementEventFor(statement.origin, "CANCELED"),
           previousValue: {
             status: statement.status,
             provisionalResponse: statement.provisionalResponse,
@@ -1076,7 +1123,7 @@ export function applyStatementRejection(
       confirmedResponse: null,
     },
     event: {
-      eventType: "FINAL_STATEMENT_REJECTED",
+      eventType: statementEventFor(statement.origin, "REJECTED"),
       previousValue: { status: statement.status },
       newValue: {
         status: "REJECTED",

@@ -55,6 +55,64 @@ export function isOptionPosition(v: unknown): v is OptionPosition {
   return v === 1 || v === 2 || v === 3;
 }
 
+// ---------- Origem e contêiner ----------
+// A Fase 4.2 acrescenta uma SEGUNDA maneira de uma frase nascer: digitada pelo
+// cuidador, como interpretação do que ele entendeu de uma vocalização. O ciclo
+// é o mesmo (rascunho → revisão → apresentação → resposta → confirmação), e a
+// diferença que precisa sobreviver a tudo é QUEM FORMULOU O TEXTO.
+//
+// Por isso a origem é um campo do domínio, e não uma leitura da tela: sem ele,
+// uma frase confirmada não teria como dizer, mais tarde, que quem a escreveu
+// foi o cuidador — e é justamente isso que o histórico não pode perder.
+
+export type StatementOrigin = "OPTION_PATH" | "CAREGIVER_INTERPRETATION";
+
+export const STATEMENT_ORIGINS: readonly StatementOrigin[] = [
+  "OPTION_PATH",
+  "CAREGIVER_INTERPRETATION",
+] as const;
+
+export function isStatementOrigin(v: unknown): v is StatementOrigin {
+  return (
+    typeof v === "string" && (STATEMENT_ORIGINS as readonly string[]).includes(v)
+  );
+}
+
+export const STATEMENT_ORIGIN_LABELS: Record<StatementOrigin, string> = {
+  OPTION_PATH: "Escolhida pelo paciente entre opções",
+  CAREGIVER_INTERPRETATION: "Formulada pelo cuidador",
+};
+
+/**
+ * FONTE ÚNICA do par origem ↔ modo de interação.
+ *
+ * Congelado de propósito: é este mapa que o portão de autoria consulta, nos
+ * dois sentidos, para recusar um documento cuja origem não corresponda ao modo
+ * sob o qual ele foi apresentado. Duas fontes divergentes aqui seriam duas
+ * verdades sobre quem formulou uma fala confirmada.
+ */
+export const MODO_POR_ORIGEM: Readonly<Record<StatementOrigin, InteractionMode>> =
+  Object.freeze({
+    OPTION_PATH: "FINAL_STATEMENT_CONFIRMATION",
+    CAREGIVER_INTERPRETATION: "CAREGIVER_INTERPRETATION",
+  } as const);
+
+/** Modos sob os quais uma frase pode ser apresentada e confirmada. */
+export type StatementInteractionMode =
+  (typeof MODO_POR_ORIGEM)[StatementOrigin];
+
+/** O que um caminho hospeda: a árvore de opções, ou uma interpretação. */
+export type PathKind = "OPTION_TREE" | "CAREGIVER_INTERPRETATION";
+
+export const PATH_KINDS: readonly PathKind[] = [
+  "OPTION_TREE",
+  "CAREGIVER_INTERPRETATION",
+] as const;
+
+export function isPathKind(v: unknown): v is PathKind {
+  return typeof v === "string" && (PATH_KINDS as readonly string[]).includes(v);
+}
+
 // ---------- Estados ----------
 
 export type PathStatus =
@@ -176,6 +234,13 @@ export interface OptionConversationPath {
   patientId: number;
   assistantId: string;
 
+  /**
+   * O que este contêiner hospeda (Fase 4.2). Uma interpretação do cuidador é
+   * uma frase SEM árvore de opções: o caminho existe só para ordenar a
+   * interação na sessão e reusar pausa, histórico e auditoria.
+   */
+  kind: PathKind;
+
   status: PathStatus;
 
   rootNodeId: string | null;
@@ -267,8 +332,19 @@ export interface OptionConversationFinalStatement {
   /** Nível terminal que originou a frase, quando houve um. */
   originNodeId: string | null;
 
-  /** Sempre FINAL_STATEMENT_CONFIRMATION quando apresentada (§20). */
-  interactionMode: Extract<InteractionMode, "FINAL_STATEMENT_CONFIRMATION">;
+  /**
+   * Quem formulou o texto (Fase 4.2). Escolhido pelo paciente entre opções, ou
+   * digitado pelo cuidador como interpretação. Sobrevive à confirmação: o SIM
+   * confirma o conteúdo, não apaga a origem.
+   */
+  origin: StatementOrigin;
+
+  /**
+   * O modo sob o qual a frase é apresentada, derivado da origem por
+   * MODO_POR_ORIGEM. O par é validado nos dois sentidos — um documento cujo
+   * modo não corresponda à origem é recusado antes de ser gravado.
+   */
+  interactionMode: StatementInteractionMode;
 
   originalDraft: string;
   currentText: string;
@@ -294,6 +370,11 @@ export interface OptionConversationFinalStatement {
   /** Edições do texto antes da apresentação (§19). */
   editCount: number;
   correctionCount: number;
+  /**
+   * Quantas vezes a MESMA frase foi reapresentada sem alteração — o "Repita,
+   * por favor" do paciente (Fase 4.7). Nunca cria frase nova.
+   */
+  representCount: number;
 
   clientRequestId: string | null;
 
@@ -505,6 +586,23 @@ export function assertStatementInvariants(
   if (!statement.currentText.trim()) bad("a frase não pode ficar vazia");
   if (statement.editCount < 0) bad("editCount inválido");
   if (statement.correctionCount < 0) bad("correctionCount inválido");
+  if (statement.representCount < 0) bad("representCount inválido");
+
+  // O par origem ↔ modo é checado NOS DOIS SENTIDOS, e aqui — antes de
+  // qualquer gravação. Um documento forjado (origem de interpretação com o
+  // modo da frase final, ou o contrário) não chega ao banco, e por isso o
+  // portão de autoria nunca precisa confiar num campo isolado.
+  if (!isStatementOrigin(statement.origin)) bad("origem de frase desconhecida");
+  if (MODO_POR_ORIGEM[statement.origin] !== statement.interactionMode) {
+    bad("o modo de interação não corresponde à origem da frase");
+  }
+  if (
+    statement.origin === "CAREGIVER_INTERPRETATION" &&
+    statement.originNodeId
+  ) {
+    // Uma interpretação nasce de uma vocalização, não de uma opção terminal.
+    bad("uma interpretação do cuidador não nasce de um nível de opções");
+  }
 
   if (statement.provisionalResponse !== null) {
     if (!isSemanticResponse(statement.provisionalResponse)) {

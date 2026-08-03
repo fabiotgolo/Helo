@@ -52,25 +52,35 @@ export function isSemanticResponse(v: unknown): v is SemanticResponse {
 //   CLOSED_CONFIRMATION        → SIM · TALVEZ · NÃO (pergunta fechada)
 //   OPTION_SELECTION           → opção 1 · opção 2 · opção 3
 //   FINAL_STATEMENT_CONFIRMATION → SIM · TALVEZ · NÃO (frase completa)
+//   CAREGIVER_INTERPRETATION   → SIM · TALVEZ · NÃO (o que o cuidador entendeu)
 //
 // Em OPTION_SELECTION os rótulos SIM/TALVEZ/NÃO ficam OCULTOS; o gesto físico
 // e o emoji de cada posição continuam exatamente os mesmos do paciente.
+//
+// CAREGIVER_INTERPRETATION (Fase 4.2) é o único modo cujo nome fala da ORIGEM
+// do texto, e não do significado dos sinais — que ali continuam sendo SIM,
+// TALVEZ e NÃO. Ele existe porque a distinção importa para quem opera: o texto
+// apresentado foi formulado pelo CUIDADOR, e o selo precisa dizer isso, sob
+// pena de a tela sugerir que o paciente já declarou aquilo.
 
 export type InteractionMode =
   | "CLOSED_CONFIRMATION"
   | "OPTION_SELECTION"
-  | "FINAL_STATEMENT_CONFIRMATION";
+  | "FINAL_STATEMENT_CONFIRMATION"
+  | "CAREGIVER_INTERPRETATION";
 
 export const INTERACTION_MODES: readonly InteractionMode[] = [
   "CLOSED_CONFIRMATION",
   "OPTION_SELECTION",
   "FINAL_STATEMENT_CONFIRMATION",
+  "CAREGIVER_INTERPRETATION",
 ] as const;
 
 export const INTERACTION_MODE_LABELS: Record<InteractionMode, string> = {
   CLOSED_CONFIRMATION: "Pergunta fechada",
   OPTION_SELECTION: "Escolha entre opções",
   FINAL_STATEMENT_CONFIRMATION: "Confirmação da frase",
+  CAREGIVER_INTERPRETATION: "Interpretação do cuidador",
 };
 
 /** Explica ao assistente o que os três sinais significam AGORA. */
@@ -81,6 +91,8 @@ export const INTERACTION_MODE_HINTS: Record<InteractionMode, string> = {
     "Os sinais do paciente significam opção 1, opção 2 e opção 3 — não SIM, TALVEZ e NÃO.",
   FINAL_STATEMENT_CONFIRMATION:
     "Os sinais do paciente significam SIM, TALVEZ e NÃO sobre a frase apresentada.",
+  CAREGIVER_INTERPRETATION:
+    "Os sinais do paciente significam SIM, TALVEZ e NÃO sobre o que o cuidador entendeu.",
 };
 
 export function isInteractionMode(v: unknown): v is InteractionMode {

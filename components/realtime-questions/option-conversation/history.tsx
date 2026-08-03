@@ -11,7 +11,10 @@
 //   2. um item encerrado não volta a ser ativo: reutilizar cria registro NOVO.
 
 import { ModalShell } from "@/components/modal-shell";
-import { tryToConfirmedPatientStatement } from "@/lib/confirmed-patient-statement";
+import {
+  rotuloDeAutoria,
+  tryToConfirmedPatientStatement,
+} from "@/lib/confirmed-patient-statement";
 import {
   Control,
   Primary,
@@ -85,6 +88,40 @@ export function summarize(entry: HistoryEntry): EntrySummary {
     nodes.find((n) => n.parentNodeId === null) ??
     null;
   const frase = ultimaFrase(statements);
+  const interpretacao = path.kind === "CAREGIVER_INTERPRETATION";
+
+  // A interpretação tem estados próprios no histórico (Fase 4.2, §19): quem
+  // percorre a lista precisa distinguir, sem abrir nada, o que o paciente
+  // escolheu do que o cuidador escreveu — e em que ponto cada coisa parou.
+  if (interpretacao) {
+    const confirmada = tryToConfirmedPatientStatement(frase) != null;
+    const rotulo = confirmada
+      ? "Interpretação confirmada"
+      : frase?.status === "REJECTED"
+        ? "Interpretação rejeitada"
+        : frase?.status === "REPLACED"
+          ? "Interpretação substituída"
+          : frase?.status === "DRAFT" || frase?.status === "REVIEWED"
+            ? "Interpretação em construção"
+            : isTerminalPathStatus(path.status)
+              ? "Interpretação encerrada sem confirmar"
+              : "Interpretação aguardando confirmação";
+    return {
+      icon: confirmada
+        ? "✓"
+        : frase?.status === "REJECTED"
+          ? "×"
+          : frase?.status === "REPLACED"
+            ? "↺"
+            : frase?.status === "DRAFT" || frase?.status === "REVIEWED"
+              ? "✎"
+              : "◔",
+      label: rotulo,
+      title: frase?.presentedText || frase?.currentText || "Interpretação do cuidador",
+      emAndamento,
+    };
+  }
+
   const label =
     path.status === "COMPLETED"
       ? tryToConfirmedPatientStatement(frase)
@@ -394,7 +431,7 @@ function PathDetailView({
           </Campo>
           <Campo rotulo="Resultado">
             {falaDoPaciente
-              ? "Confirmada pelo paciente"
+              ? rotuloDeAutoria(falaDoPaciente)
               : frase.status === "REJECTED"
                 ? "Rejeitada — nunca tratada como comunicação confirmada"
                 : frase.status === "CANCELED"

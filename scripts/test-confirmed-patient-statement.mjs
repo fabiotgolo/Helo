@@ -18,6 +18,7 @@ const {
   toConfirmedPatientStatement,
   tryToConfirmedPatientStatement,
   isConfirmedPatientStatement,
+  rotuloDeAutoria,
 } = await import("../lib/confirmed-patient-statement.ts");
 const { RtqDomainError } = await import("../lib/option-conversation-types.ts");
 
@@ -45,6 +46,7 @@ function frase(over = {}) {
     patientId: 7,
     assistantId: "user-1",
     originNodeId: "node-1",
+    origin: "OPTION_PATH",
     interactionMode: "FINAL_STATEMENT_CONFIRMATION",
     originalDraft: "Quero água",
     currentText: "Quero água",
@@ -59,6 +61,7 @@ function frase(over = {}) {
     sensitiveCategory: null,
     editCount: 0,
     correctionCount: 0,
+    representCount: 0,
     clientRequestId: null,
     presentedAt: T,
     respondedAt: T,
@@ -144,6 +147,55 @@ console.log("\nEdição posterior não vira fala do paciente:");
   );
   check("a fala ignora currentText editado depois", fala.text === "Quero água");
 }
+
+console.log("\nOrigem e modo (Fase 4.2):");
+recusa("origem desconhecida", { origin: "SEI_LA" });
+recusa("origem ausente", { origin: undefined });
+recusa("interpretação alegando o modo da frase final", {
+  origin: "CAREGIVER_INTERPRETATION",
+  interactionMode: "FINAL_STATEMENT_CONFIRMATION",
+  originNodeId: null,
+});
+recusa("frase de opções alegando o modo da interpretação", {
+  origin: "OPTION_PATH",
+  interactionMode: "CAREGIVER_INTERPRETATION",
+});
+recusa("interpretação nascida de um nível de opções", {
+  origin: "CAREGIVER_INTERPRETATION",
+  interactionMode: "CAREGIVER_INTERPRETATION",
+  originNodeId: "node-1",
+});
+
+console.log("\nInterpretação do cuidador confirmada pelo paciente:");
+{
+  const interpretacao = frase({
+    origin: "CAREGIVER_INTERPRETATION",
+    interactionMode: "CAREGIVER_INTERPRETATION",
+    originNodeId: null,
+    presentedText: "Gostaria de falar sobre comer churrasco.",
+    currentText: "Gostaria de falar sobre comer churrasco.",
+  });
+  const fala = toConfirmedPatientStatement(interpretacao);
+  check("o SIM do paciente confirma a interpretação", isConfirmedPatientStatement(fala));
+  check("a origem sobrevive à confirmação", fala.origin === "CAREGIVER_INTERPRETATION");
+  check("registra que o texto foi formulado pelo cuidador", fala.textFormulatedBy === "CAREGIVER");
+  check("o texto continua sendo o apresentado", fala.text === "Gostaria de falar sobre comer churrasco.");
+  check("o rótulo de autoria não omite quem escreveu",
+    rotuloDeAutoria(fala) === "Confirmada pelo paciente · texto formulado pelo cuidador.");
+  check("a frase escolhida entre opções tem o rótulo simples",
+    rotuloDeAutoria(toConfirmedPatientStatement(frase())) === "Confirmada pelo paciente.");
+  check("e é marcada como formulada pelo próprio paciente",
+    toConfirmedPatientStatement(frase()).textFormulatedBy === "PATIENT_BY_CHOICE");
+}
+
+console.log("\nInterpretação ainda não confirmada NUNCA é fala do paciente:");
+const interp = { origin: "CAREGIVER_INTERPRETATION", interactionMode: "CAREGIVER_INTERPRETATION", originNodeId: null };
+recusa("interpretação em rascunho", { ...interp, status: "DRAFT", provisionalResponse: null, confirmedResponse: null, confirmedAt: null });
+recusa("interpretação apresentada e sem resposta", { ...interp, status: "PRESENTED", provisionalResponse: null, confirmedResponse: null, confirmedAt: null });
+recusa("interpretação com TALVEZ observado", { ...interp, status: "PROVISIONAL_RESPONSE", provisionalResponse: "MAYBE", confirmedResponse: null, confirmedAt: null });
+recusa("interpretação com NÃO observado", { ...interp, status: "PROVISIONAL_RESPONSE", provisionalResponse: "NO", confirmedResponse: null, confirmedAt: null });
+recusa("interpretação sensível sem reconfirmação", { ...interp, isSensitive: true, sensitiveCategory: "MEDICAL", reconfirmedAt: null });
+recusa("interpretação sem texto apresentado", { ...interp, presentedText: "" });
 
 console.log("\nA marca não se forja:");
 {

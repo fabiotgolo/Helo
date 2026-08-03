@@ -16,8 +16,16 @@
 //     da resposta observada;
 //   • frase sensível sem a reconfirmação reforçada concluída;
 //   • frase sem vínculo íntegro com sessão, caminho, paciente e assistente;
-//   • origem fora de FINAL_STATEMENT_CONFIRMATION — nenhum outro modo de
-//     interação produz fala confirmada.
+//   • origem desconhecida, ou origem que não corresponde ao modo sob o qual a
+//     frase foi apresentada — o par é conferido NOS DOIS SENTIDOS.
+//
+// AUTORIA ≠ FORMULAÇÃO (Fase 4.2). Uma frase pode nascer de duas maneiras: o
+// paciente a escolheu entre opções, ou o cuidador a digitou como interpretação
+// do que entendeu. Nos dois casos, quem CONFIRMA é o paciente, e só o SIM dele
+// confirma — mas quem FORMULOU o texto é diferente, e isso não pode se perder
+// na confirmação. Por isso o valor devolvido carrega `origin` e
+// `textFormulatedBy`, e a interface pergunta a `rotuloDeAutoria` em vez de
+// escrever a frase de autoria por conta própria.
 //
 // O construtor aceita APENAS um `OptionConversationFinalStatement` já
 // persistido. Ele não aceita string, contexto de sessão, comando do paciente,
@@ -27,9 +35,12 @@
 
 import {
   assertStatementInvariants,
+  isStatementOrigin,
+  MODO_POR_ORIGEM,
   RtqDomainError,
   type OptionConversationFinalStatement,
   type SensitiveCategory,
+  type StatementOrigin,
 } from "@/lib/option-conversation-types";
 
 // Marca em tempo de execução e de compilação. Não é exportada: de fora deste
@@ -54,6 +65,11 @@ export interface ConfirmedPatientStatement {
 
   readonly isSensitive: boolean;
   readonly sensitiveCategory: SensitiveCategory | null;
+
+  /** Como o texto nasceu. Preservado: o SIM confirma o conteúdo, não a origem. */
+  readonly origin: StatementOrigin;
+  /** Quem escreveu o texto — nunca quem o confirmou, que é sempre o paciente. */
+  readonly textFormulatedBy: "PATIENT_BY_CHOICE" | "CAREGIVER";
 
   readonly confirmedAt: string;
   /** Preenchido quando o conteúdo é sensível; nulo quando não é. */
@@ -111,10 +127,18 @@ export function toConfirmedPatientStatement(
   }
   if (!preenchido(statement.assistantId)) reject("frase sem assistente");
 
-  // 5. Origem permitida: só a confirmação de frase final produz fala do
-  //    paciente. Nenhum outro modo de interação chega aqui.
-  if (statement.interactionMode !== "FINAL_STATEMENT_CONFIRMATION") {
-    reject(`origem não permitida (${statement.interactionMode})`);
+  // 5. Origem permitida, conferida NOS DOIS SENTIDOS contra a fonte única.
+  //    Uma origem desconhecida não passa, e um par inconsistente — origem de
+  //    interpretação alegando o modo da frase final, ou o contrário — também
+  //    não. É o que impede um documento adulterado de trocar a autoria do
+  //    texto sem que o portão perceba.
+  if (!isStatementOrigin(statement.origin)) {
+    reject("origem desconhecida");
+  }
+  if (MODO_POR_ORIGEM[statement.origin] !== statement.interactionMode) {
+    reject(
+      `origem e modo não correspondem (${statement.origin} ≠ ${statement.interactionMode})`
+    );
   }
 
   // 6. O texto é o que foi APRESENTADO. Uma frase confirmada sempre passou pela
@@ -135,9 +159,27 @@ export function toConfirmedPatientStatement(
     text: statement.presentedText,
     isSensitive: statement.isSensitive,
     sensitiveCategory: statement.sensitiveCategory,
+    origin: statement.origin,
+    textFormulatedBy:
+      statement.origin === "CAREGIVER_INTERPRETATION"
+        ? "CAREGIVER"
+        : "PATIENT_BY_CHOICE",
     confirmedAt: statement.confirmedAt,
     reconfirmedAt: statement.reconfirmedAt,
   };
+}
+
+/**
+ * A frase de autoria que a interface deve exibir.
+ *
+ * Existe para que nenhuma tela escreva "Confirmada pelo paciente" por conta
+ * própria e acabe omitindo que o texto foi formulado pelo cuidador. Quem tem a
+ * fala confirmada em mãos pergunta aqui.
+ */
+export function rotuloDeAutoria(fala: ConfirmedPatientStatement): string {
+  return fala.textFormulatedBy === "CAREGIVER"
+    ? "Confirmada pelo paciente · texto formulado pelo cuidador."
+    : "Confirmada pelo paciente.";
 }
 
 /**

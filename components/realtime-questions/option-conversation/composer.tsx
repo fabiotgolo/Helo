@@ -19,7 +19,10 @@ import {
 } from "@/components/realtime-questions/ui";
 import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { useAnswerChoices } from "@/components/realtime-questions/question-stage";
-import { tryToConfirmedPatientStatement } from "@/lib/confirmed-patient-statement";
+import {
+  rotuloDeAutoria,
+  tryToConfirmedPatientStatement,
+} from "@/lib/confirmed-patient-statement";
 import { MAX_STATEMENT_LEN } from "@/lib/option-conversation-types";
 import type { OptionConversationFinalStatement } from "@/lib/option-conversation-types";
 import {
@@ -36,6 +39,7 @@ export function Composer({
   busy,
   onEdit,
   children,
+  interpretacao = false,
 }: {
   trailLabels: string[];
   statement: OptionConversationFinalStatement | null;
@@ -43,6 +47,11 @@ export function Composer({
   /** Ausente quando a frase já foi apresentada — daí a edição vira versão nova. */
   onEdit: (() => void) | null;
   children?: React.ReactNode;
+  /**
+   * Interpretação do cuidador (Fase 4.2): não há caminho de opções para
+   * mostrar, e o rótulo precisa dizer de quem é o texto.
+   */
+  interpretacao?: boolean;
 }) {
   // "Confirmada" é uma afirmação de autoria: quem responde por ela é o portão,
   // não o status isolado.
@@ -51,7 +60,7 @@ export function Composer({
   const rejeitada = statement?.status === "REJECTED";
   return (
     <section className="flex w-full flex-col gap-4 rounded-3xl border border-line bg-card/70 px-5 py-5">
-      <div className="flex flex-col gap-1">
+      <div className={`flex flex-col gap-1 ${interpretacao ? "hidden" : ""}`}>
         <span className="text-xs font-semibold uppercase tracking-widest text-ink-soft">
           Caminho
         </span>
@@ -63,7 +72,13 @@ export function Composer({
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-widest text-ink-soft">
-            {confirmada ? "Mensagem confirmada" : "Mensagem em construção"}
+            {interpretacao
+              ? confirmada
+                ? "Interpretação confirmada"
+                : "Interpretação do cuidador"
+              : confirmada
+                ? "Mensagem confirmada"
+                : "Mensagem em construção"}
           </span>
           {onEdit && (
             <EditButton
@@ -82,11 +97,13 @@ export function Composer({
 
       <div className="flex flex-wrap items-center gap-2">
         <p aria-live="polite" className="text-sm text-ink-soft">
-          {confirmada
-            ? "Confirmada pelo paciente."
+          {fala
+            ? rotuloDeAutoria(fala)
             : rejeitada
               ? "Rejeitada pelo paciente. Não é uma comunicação confirmada."
-              : "Mensagem em construção, aguardando confirmação do paciente."}
+              : interpretacao
+                ? "Interpretação aguardando confirmação do paciente."
+                : "Mensagem em construção, aguardando confirmação do paciente."}
         </p>
         {statement?.isSensitive && (
           <Selo>
@@ -204,6 +221,8 @@ export function StatementConfirmation({
   canGoBack,
   busy,
   actions,
+  prefixo,
+  mostrarAcoesDeCaminho = true,
 }: {
   text: string;
   profile: PatientResponseProfile | null;
@@ -213,6 +232,18 @@ export function StatementConfirmation({
   canGoBack: boolean;
   busy: boolean;
   actions: StatementActions;
+  /**
+   * Linha acima da frase, dizendo de quem é o texto ("O cuidador entendeu:").
+   * Sem ela, uma interpretação apareceria ao paciente como se já fosse uma
+   * declaração dele (Fase 4.2).
+   */
+  prefixo?: string;
+  /**
+   * Ações que pressupõem uma árvore de opções (voltar um nível, reiniciar a
+   * conversa). Numa interpretação não existe árvore — mostrá-las ofereceria
+   * caminhos que não levam a lugar nenhum.
+   */
+  mostrarAcoesDeCaminho?: boolean;
 }) {
   const {
     onRespond,
@@ -237,6 +268,11 @@ export function StatementConfirmation({
       aria-live="polite"
       className="flex w-full flex-col items-center gap-8"
     >
+      {prefixo && (
+        <p className="text-center text-sm font-medium uppercase tracking-widest text-ink-soft">
+          {prefixo}
+        </p>
+      )}
       <blockquote className="text-balance text-center text-3xl font-medium leading-tight tracking-tight text-ink sm:text-4xl lg:text-5xl">
         {text}
       </blockquote>
@@ -343,9 +379,11 @@ export function StatementConfirmation({
           <Primary onClick={onReject} disabled={busy}>
             Registrar como rejeitada
           </Primary>
-          <Control onClick={onDeepen} disabled={busy}>
-            Voltar ao caminho
-          </Control>
+          {mostrarAcoesDeCaminho && (
+            <Control onClick={onDeepen} disabled={busy}>
+              Voltar ao caminho
+            </Control>
+          )}
           <Control onClick={onAdjust} disabled={busy}>
             Reformular frase
           </Control>

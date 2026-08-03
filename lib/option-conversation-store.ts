@@ -40,7 +40,10 @@ import {
   assertNodeInvariants,
   assertStatementInvariants,
   activeTrail,
+  isPathKind,
+  isStatementOrigin,
   isTerminalPathStatus,
+  MODO_POR_ORIGEM,
   MAX_NODE_DEPTH,
   MAX_PROMPT_LEN,
   MAX_STATEMENT_LEN,
@@ -54,9 +57,12 @@ import {
   type OptionConversationPath,
   type OptionPosition,
   type PathDetail,
+  type PathKind,
   type PathStatus,
+  type StatementOrigin,
   type StatementStatus,
 } from "@/lib/option-conversation-types";
+import { statementEventFor } from "@/lib/statement-events";
 import {
   cleanText,
   getRtqSession,
@@ -90,6 +96,9 @@ function toPath(
     sessionId: String(v.sessionId ?? ""),
     patientId: Number(v.patientId),
     assistantId: String(v.assistantId ?? ""),
+    // Caminhos gravados antes da Fase 4.2 não têm o campo: todos são árvore
+    // de opções. Padrão seguro, sem migração de dados (§34).
+    kind: isPathKind(v.kind) ? v.kind : "OPTION_TREE",
     status: (v.status as PathStatus) ?? "ACTIVE",
     rootNodeId: (v.rootNodeId as string) ?? null,
     activeNodeId: (v.activeNodeId as string) ?? null,
@@ -174,7 +183,12 @@ function toStatement(
     patientId: Number(v.patientId),
     assistantId: String(v.assistantId ?? ""),
     originNodeId: (v.originNodeId as string) ?? null,
-    interactionMode: "FINAL_STATEMENT_CONFIRMATION",
+    // Frases gravadas antes da Fase 4.2 nasceram de um caminho de opções. O
+    // modo NUNCA é lido do documento: deriva da origem, para que um campo
+    // adulterado no banco não consiga alegar outra autoria.
+    origin: isStatementOrigin(v.origin) ? v.origin : "OPTION_PATH",
+    interactionMode:
+      MODO_POR_ORIGEM[isStatementOrigin(v.origin) ? v.origin : "OPTION_PATH"],
     originalDraft: String(v.originalDraft ?? ""),
     currentText: String(v.currentText ?? ""),
     presentedText: String(v.presentedText ?? ""),
@@ -188,6 +202,7 @@ function toStatement(
     sensitiveCategory: (v.sensitiveCategory as SensitiveCategory) ?? null,
     editCount: Number(v.editCount ?? 0),
     correctionCount: Number(v.correctionCount ?? 0),
+    representCount: Number(v.representCount ?? 0),
     clientRequestId: (v.clientRequestId as string) ?? null,
     presentedAt: (v.presentedAt as string) ?? null,
     respondedAt: (v.respondedAt as string) ?? null,
@@ -353,6 +368,8 @@ export interface CreatePathInput {
   clientRequestId?: unknown;
   reusedFromPathId?: unknown;
   restartedFromPathId?: unknown;
+  /** O que o caminho hospeda. Ausente = árvore de opções (Fase 4.2). */
+  kind?: PathKind;
 }
 
 function requestIdOf(v: unknown): string | null {
@@ -399,6 +416,7 @@ export async function createPath(
     const path: OptionConversationPath = {
       id,
       sessionId,
+      kind: isPathKind(input.kind) ? input.kind : "OPTION_TREE",
       // patientId e assistantId nunca vêm do corpo: o paciente é o da sessão
       // (imutável) e o assistente é o usuário autenticado.
       patientId,
@@ -550,6 +568,8 @@ export async function restartPath(
     const created: OptionConversationPath = {
       id: newPathId,
       sessionId,
+      // Reiniciar preserva o que o caminho hospeda.
+      kind: path.kind,
       patientId,
       assistantId: assistant.id,
       status: "ACTIVE",
@@ -1468,6 +1488,8 @@ export async function replaceNode(
 export interface CreateStatementInput {
   text?: unknown;
   originNodeId?: unknown;
+  /** Quem formulou o texto. Ausente = escolhido entre opções (Fase 4.2). */
+  origin?: StatementOrigin;
   isSensitive?: unknown;
   sensitiveCategory?: unknown;
   clientRequestId?: unknown;
@@ -1488,6 +1510,7 @@ function buildStatement(args: {
   reusedFromStatementId: string | null;
   replacesStatementId: string | null;
   clientRequestId: string | null;
+  origin: StatementOrigin;
   now: string;
 }): OptionConversationFinalStatement {
   return {
@@ -1497,7 +1520,10 @@ function buildStatement(args: {
     patientId: args.patientId,
     assistantId: args.assistantId,
     originNodeId: args.originNodeId,
-    interactionMode: "FINAL_STATEMENT_CONFIRMATION",
+    origin: args.origin,
+    // O modo deriva da origem, sempre pela fonte única — nunca é escolhido
+    // aqui nem aceito do cliente.
+    interactionMode: MODO_POR_ORIGEM[args.origin],
     originalDraft: args.text,
     currentText: args.text,
     presentedText: "",
@@ -1511,6 +1537,7 @@ function buildStatement(args: {
     sensitiveCategory: args.sensitiveCategory,
     editCount: 0,
     correctionCount: 0,
+    representCount: 0,
     clientRequestId: args.clientRequestId,
     presentedAt: null,
     respondedAt: null,
@@ -1544,6 +1571,16 @@ export async function createStatement(
   if (!text) throw new RtqDomainError("a frase não pode ficar vazia");
   const clientRequestId = requestIdOf(input.clientRequestId);
   const originNodeId = requestIdOf(input.originNodeId);
+  const origin: StatementOrigin = isStatementOrigin(input.origin)
+    ? input.origin
+    : "OPTION_PATH";
+  if (origin === "CAREGIVER_INTERPRETATION" && originNodeId) {
+    // Uma interpretação nasce de uma vocalização do paciente, não de uma opção
+    // que ele escolheu. Aceitar as duas coisas juntas confundiria a autoria.
+    throw new RtqDomainError(
+      "uma interpretação do cuidador não nasce de um nível de opções"
+    );
+  }
   const reusedFromStatementId = requestIdOf(input.reusedFromStatementId);
   const declared = normalizeSensitivity(input.isSensitive, input.sensitiveCategory);
 
@@ -1576,6 +1613,7 @@ export async function createStatement(
       id,
       sessionId,
       pathId,
+      origin,
       patientId,
       assistantId: assistant.id,
       originNodeId,
@@ -1605,7 +1643,7 @@ export async function createStatement(
         statementId: id,
         patientId,
         assistantId: assistant.id,
-        eventType: "FINAL_STATEMENT_DRAFTED",
+        eventType: statementEventFor(origin, "DRAFTED"),
         newValue: { originalDraft: text, status: "DRAFT" },
         metadata: {
           trail: trail.map((n) => n.promptText),
@@ -1628,7 +1666,7 @@ export async function createStatement(
           statementId: id,
           patientId,
           assistantId: assistant.id,
-          eventType: "FINAL_STATEMENT_REUSED",
+          eventType: statementEventFor(origin, "REUSED"),
           previousValue: { sourceStatementId: reusedFromStatementId },
           newValue: { targetStatementId: id, status: "DRAFT" },
           metadata: { note: "nenhuma resposta anterior foi copiada" },
@@ -1639,6 +1677,60 @@ export async function createStatement(
 
     return statement;
   });
+}
+
+/**
+ * Interpretação digitada pelo cuidador (Fase 4.2).
+ *
+ * Compõe o contêiner e a frase numa operação só. O contêiner é um caminho SEM
+ * nós: ele existe para ordenar a interação na sessão e para que a
+ * interpretação herde de graça pausa, histórico, reutilização e auditoria —
+ * exatamente o que a frase final já usa. Não há entidade nem coleção nova.
+ *
+ * Idempotente nos DOIS documentos: o caminho leva `${clientRequestId}:path` e a
+ * frase leva o id puro, a mesma convenção de fan-out de reuseNode/reuseStatement.
+ * Um clique repetido devolve o par que o primeiro criou.
+ */
+export async function createCaregiverInterpretation(
+  patientId: number,
+  sessionId: string,
+  input: {
+    text?: unknown;
+    isSensitive?: unknown;
+    sensitiveCategory?: unknown;
+    clientRequestId?: unknown;
+    reusedFromStatementId?: unknown;
+  },
+  assistant: Assistant
+): Promise<{
+  path: OptionConversationPath;
+  statement: OptionConversationFinalStatement;
+}> {
+  const clientRequestId = requestIdOf(input.clientRequestId);
+  const path = await createPath(
+    patientId,
+    sessionId,
+    {
+      kind: "CAREGIVER_INTERPRETATION",
+      clientRequestId: clientRequestId ? `${clientRequestId}:path` : undefined,
+    },
+    assistant
+  );
+  const statement = await createStatement(
+    patientId,
+    sessionId,
+    path.id,
+    {
+      text: input.text,
+      origin: "CAREGIVER_INTERPRETATION",
+      isSensitive: input.isSensitive,
+      sensitiveCategory: input.sensitiveCategory,
+      clientRequestId,
+      reusedFromStatementId: input.reusedFromStatementId,
+    },
+    assistant
+  );
+  return { path, statement };
 }
 
 export async function runStatementAction(
@@ -1718,10 +1810,20 @@ export async function runStatementAction(
           patientId,
           assistantId: assistant.id,
           eventType: "INTERACTION_MODE_SELECTED",
-          previousValue: { interactionMode: "OPTION_SELECTION" },
-          newValue: { interactionMode: "FINAL_STATEMENT_CONFIRMATION" },
+          // Numa interpretação não houve escolha entre opções antes: o modo
+          // anterior é nenhum, e dizer "OPTION_SELECTION" seria falso.
+          previousValue: {
+            interactionMode:
+              statement.origin === "CAREGIVER_INTERPRETATION"
+                ? null
+                : "OPTION_SELECTION",
+          },
+          newValue: { interactionMode: statement.interactionMode },
           metadata: {
-            note: "os sinais do paciente voltam a significar SIM, TALVEZ e NÃO",
+            note:
+              statement.origin === "CAREGIVER_INTERPRETATION"
+                ? "os sinais do paciente significam SIM, TALVEZ e NÃO sobre o que o cuidador entendeu"
+                : "os sinais do paciente voltam a significar SIM, TALVEZ e NÃO",
           },
         },
         now
@@ -1821,7 +1923,7 @@ export async function replaceStatement(
         statementId,
         patientId,
         assistantId: assistant.id,
-        eventType: "FINAL_STATEMENT_EDIT_REQUESTED",
+        eventType: statementEventFor(original.origin, "EDIT_REQUESTED"),
         previousValue: {
           status: original.status,
           text: original.presentedText || original.currentText,
@@ -1835,6 +1937,9 @@ export async function replaceStatement(
     const created = buildStatement({
       id: newStatementId,
       sessionId,
+      // A versão corrigida herda a origem: corrigir o texto não muda quem o
+      // formulou.
+      origin: original.origin,
       pathId,
       patientId,
       assistantId: assistant.id,
@@ -1948,7 +2053,7 @@ async function replaceStatementIntoNewPath(
         statementId,
         patientId,
         assistantId: assistant.id,
-        eventType: "FINAL_STATEMENT_EDIT_REQUESTED",
+        eventType: statementEventFor(original.origin, "EDIT_REQUESTED"),
         previousValue: {
           status: fresh.status,
           text: fresh.presentedText || fresh.currentText,
@@ -1965,6 +2070,9 @@ async function replaceStatementIntoNewPath(
     const created = buildStatement({
       id: newStatementId,
       sessionId,
+      // A versão corrigida herda a origem: corrigir o texto não muda quem o
+      // formulou.
+      origin: original.origin,
       pathId: path.id,
       patientId,
       assistantId: assistant.id,
