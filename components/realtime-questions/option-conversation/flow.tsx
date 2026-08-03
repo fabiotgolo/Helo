@@ -41,6 +41,7 @@ import {
   InteractionModeBadge,
   Primary,
 } from "@/components/realtime-questions/ui";
+import { tryToConfirmedPatientStatement } from "@/lib/confirmed-patient-statement";
 import {
   newRequestId,
   type RtqPersistence,
@@ -875,7 +876,11 @@ function FinishedPath({
   busy: boolean;
   onLeave: () => void;
 }) {
-  const confirmada = statement?.status === "CONFIRMED";
+  // Só o portão da autoria decide se esta tela está mostrando fala do
+  // paciente. Um CONFIRMED incoerente (sem SIM observado, sem a reconfirmação
+  // de um assunto sensível) não vira "Mensagem confirmada" aqui.
+  const fala = tryToConfirmedPatientStatement(statement);
+  const confirmada = fala !== null;
   const rejeitada = statement?.status === "REJECTED";
   return (
     <section className="flex w-full flex-col items-center gap-4 text-center">
@@ -891,9 +896,11 @@ function FinishedPath({
       {trailLabels.length > 0 && (
         <p className="text-ink-soft">{trailLabels.join(" › ")}</p>
       )}
+      {/* Confirmada, o texto vem do portão — o congelado na apresentação.
+          Fora disso é só a frase proposta, que não é fala do paciente. */}
       {statement && (
         <blockquote className="max-w-xl text-xl font-medium text-ink">
-          {statement.presentedText || statement.currentText}
+          {fala ? fala.text : statement.presentedText || statement.currentText}
         </blockquote>
       )}
       <p className="max-w-md text-sm text-ink-soft">

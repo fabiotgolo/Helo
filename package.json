@@ -13,6 +13,7 @@
     "test:activities": "node scripts/test-activities.mjs",
     "test:feedback": "node scripts/test-feedback.mjs",
     "test:realtime-questions": "node scripts/test-realtime-questions.mjs",
+    "test:authorship": "node scripts/test-confirmed-patient-statement.mjs",
     "test:oc:core": "node scripts/test-option-conversation-core.mjs",
     "test:oc:branches": "node scripts/test-option-conversation-branches.mjs",
     "test:oc:versioning": "node scripts/test-option-conversation-versioning.mjs",

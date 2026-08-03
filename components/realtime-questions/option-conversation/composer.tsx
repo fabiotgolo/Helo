@@ -19,6 +19,7 @@ import {
 } from "@/components/realtime-questions/ui";
 import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { useAnswerChoices } from "@/components/realtime-questions/question-stage";
+import { tryToConfirmedPatientStatement } from "@/lib/confirmed-patient-statement";
 import { MAX_STATEMENT_LEN } from "@/lib/option-conversation-types";
 import type { OptionConversationFinalStatement } from "@/lib/option-conversation-types";
 import {
@@ -43,7 +44,10 @@ export function Composer({
   onEdit: (() => void) | null;
   children?: React.ReactNode;
 }) {
-  const confirmada = statement?.status === "CONFIRMED";
+  // "Confirmada" é uma afirmação de autoria: quem responde por ela é o portão,
+  // não o status isolado.
+  const fala = tryToConfirmedPatientStatement(statement);
+  const confirmada = fala !== null;
   const rejeitada = statement?.status === "REJECTED";
   return (
     <section className="flex w-full flex-col gap-4 rounded-3xl border border-line bg-card/70 px-5 py-5">
@@ -70,7 +74,9 @@ export function Composer({
           )}
         </div>
         <p className="text-xl font-medium leading-snug text-ink">
-          {statement ? statement.currentText : "—"}
+          {/* Confirmada, vale o texto congelado na apresentação; em construção,
+              o texto corrente é justamente o que ainda está sendo escrito. */}
+          {fala ? fala.text : statement ? statement.currentText : "—"}
         </p>
       </div>
 

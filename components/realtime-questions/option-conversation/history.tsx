@@ -11,6 +11,7 @@
 //   2. um item encerrado não volta a ser ativo: reutilizar cria registro NOVO.
 
 import { ModalShell } from "@/components/modal-shell";
+import { tryToConfirmedPatientStatement } from "@/lib/confirmed-patient-statement";
 import {
   Control,
   Primary,
@@ -86,7 +87,7 @@ export function summarize(entry: HistoryEntry): EntrySummary {
   const frase = ultimaFrase(statements);
   const label =
     path.status === "COMPLETED"
-      ? frase?.status === "CONFIRMED"
+      ? tryToConfirmedPatientStatement(frase)
         ? "Mensagem confirmada"
         : "Concluída"
       : path.status === "RESTARTED"
@@ -353,6 +354,9 @@ function PathDetailView({
   const { path, nodes, statements } = detail;
   const trilha = trailLabels(activeTrail(nodes, path.activeNodeId));
   const frase = ultimaFrase(statements);
+  // O histórico só chama uma frase de "confirmada pelo paciente" quando o
+  // portão da autoria atesta a confirmação — status sozinho não basta.
+  const falaDoPaciente = tryToConfirmedPatientStatement(frase);
   const encerrado = isTerminalPathStatus(path.status);
 
   return (
@@ -386,10 +390,10 @@ function PathDetailView({
       {frase && (
         <div className="flex flex-col gap-2 rounded-2xl border border-line bg-bg/40 px-4 py-3">
           <Campo rotulo="Frase final">
-            {frase.presentedText || frase.currentText}
+            {falaDoPaciente?.text || frase.presentedText || frase.currentText}
           </Campo>
           <Campo rotulo="Resultado">
-            {frase.status === "CONFIRMED"
+            {falaDoPaciente
               ? "Confirmada pelo paciente"
               : frase.status === "REJECTED"
                 ? "Rejeitada — nunca tratada como comunicação confirmada"
