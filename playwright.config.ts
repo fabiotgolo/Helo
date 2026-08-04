@@ -20,7 +20,17 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? "line" : [["list"]],
-  timeout: 45_000,
+  // 45s cortava no meio da distribuição real: rodando em lotes, as durações
+  // medidas nos specs mais longos foram 46,9 · 46,5 · 45,4 · 44,4 · 41,1s. Os
+  // dois que falhavam não erravam asserção nenhuma — um deles chegou a
+  // ENCONTRAR o botão e ficou sem orçamento no meio do clique. Um caminho por
+  // opções com vários níveis é muitas idas e vindas ao servidor em modo dev, e
+  // um limite abaixo da duração natural do teste só produz falha falsa.
+  //
+  // 90s dá folga sem virar espera indefinida: `expect.timeout` continua em 10s,
+  // então uma asserção que de fato não vai passar falha em 10s como antes — o
+  // que este número mudou foi só o teto do teste inteiro.
+  timeout: 90_000,
   expect: { timeout: 10_000 },
   use: {
     baseURL: BASE_URL,
