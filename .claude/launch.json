@@ -18,7 +18,7 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-lc",
-        "node scripts/gen-version.mjs && NEXT_DIST_DIR=.next-check next dev --webpack -p 3472"
+        "node scripts/gen-version.mjs && NEXT_DIST_DIR=.next-check npx next dev --webpack -p 3472"
       ],
       "port": 3472
     }

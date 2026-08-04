@@ -428,14 +428,47 @@ test("26. falha de persistência não cria resposta falsa e preserva o texto", a
   await expect(page.getByText("Revisar antes de apresentar")).toBeVisible();
 });
 
-test("27. perda de conexão avisa sem assumir que salvou", async ({ page }) => {
+test("27. perda de conexão guarda no aparelho sem assumir que o servidor salvou", async ({
+  page,
+}) => {
+  // Este teste MUDOU na Fase 4.9.2, e a mudança é o ponto da fase.
+  //
+  // Antes, uma resposta observada com a rede fora era PERDIDA, e a tela dizia
+  // "Sem conexão. O registro não foi salvo." — verdade na época. Agora ela é
+  // guardada neste aparelho, cifrada, e sobrevive a um refresh; dizer que não
+  // foi salva passou a ser falso.
+  //
+  // O que NÃO mudou, e é o que este teste continua guardando: a resposta não é
+  // tratada como confirmada. Salvar localmente não é confirmar pelo paciente.
   await perguntaApresentada(page, dados.pacienteId);
   await page.route("**/api/realtime-questions/turns", (route) => route.abort());
   await resposta(page, "SIM").click();
 
-  await expect(page.getByRole("alert").filter({ hasText: "⚠" })).toContainText("Sem conexão");
-  await expect(page.getByText("Resposta observada: SIM")).toHaveCount(0);
+  // O gesto observado aparece — o cuidador registrou o que viu.
+  await expect(page.getByText("Resposta observada: SIM")).toBeVisible();
+  // A confirmação, não: ela depende do servidor.
   await expect(page.getByText(/Resposta confirmada/)).toHaveCount(0);
+
+  // O registro está mesmo neste aparelho. Conferimos no banco local, e não pela
+  // faixa: com a pergunta em PROVISIONAL_RESPONSE o palco ainda é do PACIENTE,
+  // e a faixa é do cuidador — ela fica escondida aqui, e é isso que se espera.
+  const guardadas = await page.evaluate(async () => {
+    const banco = await new Promise<IDBDatabase>((res, rej) => {
+      const r = indexedDB.open("helo-offline");
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    return new Promise<number>((res) => {
+      const r = banco
+        .transaction("operacoes", "readonly")
+        .objectStore("operacoes")
+        .count();
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => res(-1);
+    });
+  });
+  expect(guardadas).toBeGreaterThan(0);
+  await expect(page.getByTestId("offline-chip")).toBeHidden();
 });
 
 test("28. duplo clique em Confirmar registra uma única vez", async ({ page }) => {

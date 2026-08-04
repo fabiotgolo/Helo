@@ -82,6 +82,11 @@ const LOTES = [
     arquivos: ["tests/e2e/patient-controls.spec.ts"],
   },
   {
+    nome: "offline",
+    titulo: "Continuidade sem conexão e armazenamento local",
+    arquivos: ["tests/e2e/offline-continuidade.spec.ts"],
+  },
+  {
     nome: "responsivo-base",
     titulo: "Tablet: pergunta fechada",
     arquivos: ["tests/e2e/responsivo.spec.ts"],

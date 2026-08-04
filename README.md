@@ -448,8 +448,59 @@ conversa" devolve texto digitado, seleção provisória e breadcrumb intactos.
 é do cuidador, inclusive a versão simplificada, que **ele** escreve. Encerrar
 exige uma confirmação final: escolher "encerrar" não encerra sozinho.
 
-Ainda **não** implementados aqui: ElevenLabs, voz, geração por IA, e a Fase 4.9
-(offline).
+Ainda **não** implementados aqui: ElevenLabs, voz e geração por IA.
+
+### Continuidade sem conexão (4.9.2)
+
+Quando a conexão cai no meio de uma conversa **já iniciada e já autenticada**, o
+cuidador continua registrando. O que ele faz vai para uma **fila de intenções**
+guardada neste aparelho, cifrada, que sobrevive a atualizar a página e a fechar
+o navegador.
+
+**O armazenamento local é um registro de INTENÇÕES, nunca uma réplica do banco.**
+Três estatutos, com tipos diferentes: o *snapshot* é o que o servidor disse (é
+fato, e só ele alimenta o portão de autoria), a *fila* é o que o cuidador pediu
+e ainda não foi aceito, e o *rascunho* não é nem um nem outro. A tela mostra a
+soma dos três, rodando as **mesmas máquinas de estados** que o servidor executa
+— não uma segunda implementação que pudesse divergir.
+
+**Salvar localmente não é confirmar pelo paciente.** Uma frase nunca chega a
+`CONFIRMED` pela projeção local: o guarda olha o *resultado* de cada transição e
+descarta o patch que resultaria em confirmação, registrando a intenção como
+"confirmação pendente". A prova não é uma cópia da regra — é
+`tryToConfirmedPatientStatement`, o portão de verdade, conferindo a projeção
+inteira ao fim de cada execução.
+
+Sem conexão **não** se faz: entrar, criar ou trocar de paciente, iniciar
+conversa nova, concluir ou abandonar a conversa, recusar uma frase, IA e voz.
+Pausar, retomar, criar pergunta, montar e apresentar níveis, registrar a
+seleção observada, escrever interpretação, editar o contexto e abrir os
+controles do paciente: tudo isso continua.
+
+A faixa do armazenamento diz **Salvo neste aparelho**, **Aguardando conexão** ou
+**Sincronização pendente** — e nunca "Sincronizado", porque nesta fase nada foi
+confirmado remotamente. Ela vive na moldura do cuidador e some no palco do
+paciente, pela MESMA `pacienteEstaOlhando` que governa a barra de contexto.
+
+- `lib/offline/types.ts` — vocabulário, versão do schema, TTL e a recusa de
+  credenciais no payload.
+- `lib/offline/ids.ts` — identidade cunhada no cliente, que o servidor
+  preservará (4.9.3).
+- `lib/offline/queue.ts` — fila pura: ordem causal, dependências, deduplicação.
+- `lib/offline/projection.ts` — snapshot + fila, com o guarda de autoria.
+- `lib/offline/crypto.ts` · `db.ts` — AES-GCM com chave não extraível sobre
+  IndexedDB, com versionamento de schema.
+- `lib/offline/store.ts` · `use-offline-session.ts` · `retomada.ts` — fachada,
+  ponte com a tela e recuperação após refresh.
+
+**Limitações, ditas por inteiro.** Um *reload com a rede completamente fora* não
+carrega o app: falta o Service Worker do app shell, que não faz parte desta
+entrega. O que já funciona é o servidor inalcançável com a página carregada —
+API fora do ar, backend reiniciando —, e é esse o caminho testado. **O envio da
+fila ao servidor é a 4.9.3**: nada sai deste aparelho ainda. E a cifra local é
+**higiene, não confidencialidade**: ela não protege contra XSS, extensão do
+navegador, aparelho desbloqueado ou perícia com acesso ao disco. O escopo
+(`usuário::paciente`) fica legível; o conteúdo da conversa, não.
 
 ## Testes
 

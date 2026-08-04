@@ -17,6 +17,8 @@
 // ações das Fases 1 e 2.
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { newEntityId, PREFIXO } from "@/lib/offline/ids";
+import type { OfflineBridge } from "@/lib/offline/use-offline-session";
 import type { SessionAction, TurnAction } from "@/lib/realtime-question-machine";
 import type { SessionContextVersion } from "@/lib/session-context-types";
 import type { PatientControlRequest } from "@/lib/patient-control-types";
@@ -53,7 +55,13 @@ export type RtqErrorKind =
   | "unauthorized"
   | "conflict"
   | "notFound"
-  | "unknown";
+  | "unknown"
+  /**
+   * A escrita não foi ao servidor e ficou GUARDADA neste aparelho (Fase 4.9).
+   * É o único `kind` que não representa perda: a interface o traduz como
+   * "salvo localmente", nunca como falha.
+   */
+  | "queued";
 
 export class RtqClientError extends Error {
   readonly kind: RtqErrorKind;
@@ -845,7 +853,18 @@ export interface RtqPersistence {
   ) => Promise<{ ok: true }>;
 }
 
-export function useRtqPersistence(): RtqPersistence {
+/**
+ * Continuidade sem conexão (Fase 4.9.2).
+ *
+ * Passar a ponte LIGA o comportamento offline; omiti-la deixa este hook
+ * exatamente como sempre foi — e é por isso que a tela de escolha de sessão,
+ * que precisa de rede de qualquer forma, não passa nada.
+ *
+ * O contrato de `RtqPersistence` não muda. Nenhum componente sabe que existe
+ * uma fila: eles continuam pedindo entidades e recebendo entidades. O que muda
+ * é de onde a entidade vem quando a rede não responde.
+ */
+export function useRtqPersistence(offline?: OfflineBridge): RtqPersistence {
   const [pending, setPending] = useState(0);
   const [error, setError] = useState<RtqClientError | null>(null);
   // Fila: cada escrita só começa quando a anterior termina, então o servidor
@@ -889,6 +908,46 @@ export function useRtqPersistence(): RtqPersistence {
     []
   );
 
+  /**
+   * Tenta o servidor; se — e SOMENTE se — a falha for de rede, cai no
+   * armazenamento local.
+   *
+   * O recorte é estreito de propósito. Um 400 é o domínio recusando a ação e
+   * precisa chegar ao cuidador como recusa; um 401 é sessão expirada e precisa
+   * mandá-lo entrar de novo. Nenhum dos dois vira "salvo neste aparelho" —
+   * guardar localmente algo que o servidor já disse que não aceita é prometer
+   * um registro que nunca vai existir.
+   */
+  const comQueda = useCallback(
+    async <T,>(
+      naRede: () => Promise<T>,
+      semRede: (() => Promise<T>) | null
+    ): Promise<T> => {
+      try {
+        const resultado = await naRede();
+        offline?.registrarSucesso();
+        return resultado;
+      } catch (e) {
+        if (!(e instanceof RtqClientError) || e.kind !== "offline") throw e;
+        offline?.registrarQueda();
+        if (!semRede || !offline?.disponivel) throw e;
+        try {
+          return await semRede();
+        } catch (local) {
+          // A continuidade local recusou (sessão encerrada, dados nunca
+          // carregados neste aparelho, ação que exige conexão). O cuidador
+          // precisa saber o motivo REAL, não "sem conexão".
+          throw new RtqClientError(
+            "offline",
+            (local as Error).message ||
+              "Sem conexão com o Helo. O registro não foi salvo."
+          );
+        }
+      }
+    },
+    [offline]
+  );
+
   return useMemo<RtqPersistence>(
     () => ({
       saving: pending > 0,
@@ -900,10 +959,30 @@ export function useRtqPersistence(): RtqPersistence {
         run(`profile:${patientId}`, () => api.responseProfile(patientId), false),
       listSessions: (patientId) =>
         run(`list:${patientId}`, () => api.listSessions(patientId), false),
+      // Toda leitura bem-sucedida vira snapshot. É o que faz um refresh sem
+      // rede — ou um navegador reaberto — voltar na conversa em vez de numa
+      // tela vazia. Sem isto, a fila teria intenções sobre um estado que a
+      // tela não teria como mostrar.
       sessionDetail: (patientId, sessionId) =>
         run(
           `detail:${patientId}:${sessionId}`,
-          () => api.sessionDetail(patientId, sessionId),
+          () =>
+            comQueda(
+              async () => {
+                const d = await api.sessionDetail(patientId, sessionId);
+                offline?.guardarSessao(d);
+                return d;
+              },
+              async () => {
+                const local = offline?.sessaoLocal();
+                if (!local) {
+                  throw new Error(
+                    "esta conversa ainda não foi carregada neste aparelho"
+                  );
+                }
+                return local as SessionDetail;
+              }
+            ),
           false
         ),
 
@@ -916,13 +995,48 @@ export function useRtqPersistence(): RtqPersistence {
       openPatientControl: (patientId, sessionId, input) =>
         run(
           `ctrlOpen:${sessionId}:${input.clientRequestId}`,
-          () => api.openPatientControl(patientId, sessionId, input),
+          () =>
+            comQueda(
+              () => api.openPatientControl(patientId, sessionId, input),
+              async () => {
+                const requestId = newEntityId(PREFIXO.control);
+                const { sessao } = await offline!.registrar({
+                  operationType: "openPatientControl",
+                  createdEntityId: requestId,
+                  idempotencyKey: input.clientRequestId,
+                  payload: { sessionId, requestId, ...input },
+                });
+                if (!sessao?.controlRequest) {
+                  throw new Error("não foi possível abrir os controles");
+                }
+                return sessao.controlRequest;
+              }
+            ),
           true
         ),
       patientControlAction: (patientId, sessionId, requestId, action) =>
         run(
           `ctrlAct:${requestId}:${JSON.stringify(action)}`,
-          () => api.patientControlAction(patientId, sessionId, requestId, action),
+          () =>
+            comQueda(
+              () =>
+                api.patientControlAction(patientId, sessionId, requestId, action),
+              async () => {
+                const antes = offline!.sessaoLocal()?.controlRequest;
+                const { sessao } = await offline!.registrar({
+                  operationType: "patientControlAction",
+                  baseVersion: antes?.updatedAt ?? null,
+                  payload: { sessionId, requestId, action },
+                });
+                if (!sessao?.controlRequest) {
+                  throw new Error("painel não encontrado neste aparelho");
+                }
+                // Sem conexão devolvemos SÓ o pedido. Turno, nível, frase e
+                // caminho ficam de fora porque a execução de um comando
+                // confirmado é justamente o que não acontece localmente.
+                return { request: sessao.controlRequest };
+              }
+            ),
           true
         ),
       sessionContext: (patientId, sessionId) =>
@@ -949,13 +1063,47 @@ export function useRtqPersistence(): RtqPersistence {
       sessionAction: (patientId, sessionId, action) =>
         run(
           `session:${sessionId}:${action}`,
-          () => api.sessionAction(patientId, sessionId, action),
+          () =>
+            comQueda(
+              () => api.sessionAction(patientId, sessionId, action),
+              async () => {
+                // Pausar e retomar cabem offline. Concluir e abandonar não —
+                // `motivoParaRecusarOffline` recusa antes de virar intenção.
+                const { sessao } = await offline!.registrar({
+                  operationType: "sessionAction",
+                  payload: { sessionId, action },
+                });
+                if (!sessao) throw new Error("conversa não encontrada neste aparelho");
+                return sessao.session;
+              }
+            ),
           true
         ),
       createCaregiverInterpretation: (patientId, sessionId, input) =>
         run(
           `interp:${sessionId}:${input.clientRequestId}`,
-          () => api.createCaregiverInterpretation(patientId, sessionId, input),
+          () =>
+            comQueda(
+              () => api.createCaregiverInterpretation(patientId, sessionId, input),
+              async () => {
+                const pathId = newEntityId(PREFIXO.path);
+                const statementId = newEntityId(PREFIXO.statement);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "createCaregiverInterpretation",
+                  createdEntityId: pathId,
+                  idempotencyKey: input.clientRequestId,
+                  payload: { sessionId, pathId, statementId, ...input },
+                });
+                const detalhe = caminhos.find((d) => d.path.id === pathId);
+                const statement = detalhe?.statements.find(
+                  (s) => s.id === statementId
+                );
+                if (!detalhe || !statement) {
+                  throw new Error("não foi possível registrar a interpretação");
+                }
+                return { path: detalhe.path, statement };
+              }
+            ),
           true
         ),
       saveSessionContext: (patientId, sessionId, input) =>
@@ -963,7 +1111,26 @@ export function useRtqPersistence(): RtqPersistence {
           // O clientRequestId entra na chave: um segundo clique no MESMO botão
           // compartilha a requisição em voo, e o servidor dedupica o resto.
           `ctxSave:${sessionId}:${input.clientRequestId}`,
-          () => api.saveSessionContext(patientId, sessionId, input),
+          () =>
+            comQueda(
+              () => api.saveSessionContext(patientId, sessionId, input),
+              async () => {
+                const contextId = newEntityId(PREFIXO.context);
+                const { sessao } = await offline!.registrar({
+                  operationType: "saveSessionContext",
+                  createdEntityId: contextId,
+                  // A chave de idempotência REAPROVEITA o clientRequestId que a
+                  // tela já gerou para este gesto. Duas chaves para a mesma
+                  // intenção dariam ao servidor duas intenções.
+                  idempotencyKey: input.clientRequestId,
+                  payload: { sessionId, contextId, ...input },
+                });
+                if (!sessao?.context) {
+                  throw new Error("não foi possível registrar o contexto");
+                }
+                return sessao.context;
+              }
+            ),
           true
         ),
       createTurn: (patientId, sessionId, input) =>
@@ -971,13 +1138,53 @@ export function useRtqPersistence(): RtqPersistence {
           // O texto entra na chave: reenviar a MESMA pergunta é clique
           // duplicado; uma pergunta diferente é intenção nova.
           `newTurn:${sessionId}:${input.text}`,
-          () => api.createTurn(patientId, sessionId, input),
+          () =>
+            comQueda(
+              () => api.createTurn(patientId, sessionId, input),
+              async () => {
+                // O id nasce AQUI e é o definitivo: o servidor o preservará
+                // (§5). Não é um provisório a ser trocado na sincronização.
+                const turnId = newEntityId(PREFIXO.turn);
+                const { sessao } = await offline!.registrar({
+                  operationType: "createTurn",
+                  createdEntityId: turnId,
+                  payload: {
+                    sessionId,
+                    turnId,
+                    text: input.text,
+                    questionSource: input.questionSource ?? "MANUAL_TEXT",
+                    isSensitive: input.isSensitive ?? false,
+                    sensitiveCategory: input.sensitiveCategory ?? null,
+                    reusedFromTurnId: input.reusedFromTurnId ?? null,
+                  },
+                });
+                const turno = sessao?.turns.find((t) => t.id === turnId);
+                if (!turno) throw new Error("não foi possível registrar a pergunta");
+                return turno;
+              }
+            ),
           true
         ),
       turnAction: (patientId, sessionId, turnId, action) =>
         run(
           `turn:${turnId}:${JSON.stringify(action)}`,
-          () => api.turnAction(patientId, sessionId, turnId, action),
+          () =>
+            comQueda(
+              () => api.turnAction(patientId, sessionId, turnId, action),
+              async () => {
+                const antes = offline!
+                  .sessaoLocal()
+                  ?.turns.find((t) => t.id === turnId);
+                const { sessao } = await offline!.registrar({
+                  operationType: "turnAction",
+                  baseVersion: antes?.updatedAt ?? null,
+                  payload: { sessionId, turnId, action },
+                });
+                const turno = sessao?.turns.find((t) => t.id === turnId);
+                if (!turno) throw new Error("pergunta não encontrada neste aparelho");
+                return turno;
+              }
+            ),
           true
         ),
 
@@ -989,26 +1196,85 @@ export function useRtqPersistence(): RtqPersistence {
       pathDetails: (patientId, sessionId) =>
         run(
           `paths:${patientId}:${sessionId}`,
-          () => api.pathDetails(patientId, sessionId),
+          () =>
+            comQueda(
+              async () => {
+                const d = await api.pathDetails(patientId, sessionId);
+                offline?.guardarCaminhos(d);
+                return d;
+              },
+              async () => {
+                const local = offline?.caminhosLocais();
+                if (!local) {
+                  throw new Error(
+                    "esta conversa ainda não foi carregada neste aparelho"
+                  );
+                }
+                return local;
+              }
+            ),
           false
         ),
       pathDetail: (patientId, sessionId, pathId) =>
         run(
           `path:${patientId}:${sessionId}:${pathId}`,
-          () => api.pathDetail(patientId, sessionId, pathId),
+          () =>
+            comQueda(
+              () => api.pathDetail(patientId, sessionId, pathId),
+              async () => {
+                // Um caminho só: recortado do mesmo estado projetado, para
+                // não existirem duas versões locais do mesmo caminho.
+                const achado = offline
+                  ?.caminhosLocais()
+                  ?.find((d) => d.path.id === pathId);
+                if (!achado) throw new Error("conversa não encontrada neste aparelho");
+                return achado;
+              }
+            ),
           false
         ),
 
       createPath: (patientId, sessionId, clientRequestId) =>
         run(
           `newPath:${sessionId}:${clientRequestId}`,
-          () => api.createPath(patientId, sessionId, clientRequestId),
+          () =>
+            comQueda(
+              () => api.createPath(patientId, sessionId, clientRequestId),
+              async () => {
+                const pathId = newEntityId(PREFIXO.path);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "createPath",
+                  createdEntityId: pathId,
+                  idempotencyKey: clientRequestId,
+                  payload: { sessionId, pathId },
+                });
+                const detalhe = caminhos.find((d) => d.path.id === pathId);
+                if (!detalhe) throw new Error("não foi possível abrir a conversa");
+                return detalhe.path;
+              }
+            ),
           true
         ),
       pathAction: (patientId, sessionId, pathId, action) =>
         run(
           `pathAction:${pathId}:${JSON.stringify(action)}`,
-          () => api.pathAction(patientId, sessionId, pathId, action),
+          () =>
+            comQueda(
+              () => api.pathAction(patientId, sessionId, pathId, action),
+              async () => {
+                const antes = offline!
+                  .caminhosLocais()
+                  ?.find((d) => d.path.id === pathId);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "pathAction",
+                  baseVersion: antes?.path.updatedAt ?? null,
+                  payload: { sessionId, pathId, action },
+                });
+                const detalhe = caminhos.find((d) => d.path.id === pathId);
+                if (!detalhe) throw new Error("conversa não encontrada neste aparelho");
+                return detalhe.path;
+              }
+            ),
           true
         ),
       returnToLevel: (patientId, sessionId, pathId, nodeId, clientRequestId) =>
@@ -1034,19 +1300,75 @@ export function useRtqPersistence(): RtqPersistence {
       createNode: (patientId, sessionId, pathId, input) =>
         run(
           `newNode:${pathId}:${input.clientRequestId}`,
-          () => api.createNode(patientId, sessionId, pathId, input),
+          () =>
+            comQueda(
+              () => api.createNode(patientId, sessionId, pathId, input),
+              async () => {
+                const nodeId = newEntityId(PREFIXO.node);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "createNode",
+                  createdEntityId: nodeId,
+                  idempotencyKey: input.clientRequestId,
+                  payload: { sessionId, pathId, nodeId, ...input },
+                });
+                const nivel = caminhos
+                  .find((d) => d.path.id === pathId)
+                  ?.nodes.find((n) => n.id === nodeId);
+                if (!nivel) throw new Error("não foi possível criar o nível");
+                return nivel;
+              }
+            ),
           true
         ),
       nodeAction: (patientId, sessionId, pathId, nodeId, action) =>
         run(
           `node:${nodeId}:${JSON.stringify(action)}`,
-          () => api.nodeAction(patientId, sessionId, pathId, nodeId, action),
+          () =>
+            comQueda(
+              () => api.nodeAction(patientId, sessionId, pathId, nodeId, action),
+              async () => {
+                const antes = offline!
+                  .caminhosLocais()
+                  ?.find((d) => d.path.id === pathId)
+                  ?.nodes.find((n) => n.id === nodeId);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "nodeAction",
+                  baseVersion: antes?.updatedAt ?? null,
+                  payload: { sessionId, pathId, nodeId, action },
+                });
+                const detalhe = caminhos.find((d) => d.path.id === pathId);
+                const nivel = detalhe?.nodes.find((n) => n.id === nodeId);
+                if (!detalhe || !nivel) {
+                  throw new Error("nível não encontrado neste aparelho");
+                }
+                return { node: nivel, path: detalhe.path };
+              }
+            ),
           true
         ),
       reviewNode: (patientId, sessionId, pathId, nodeId, input) =>
         run(
           `reviewNode:${nodeId}:${JSON.stringify(input)}`,
-          () => api.reviewNode(patientId, sessionId, pathId, nodeId, input),
+          () =>
+            comQueda(
+              () => api.reviewNode(patientId, sessionId, pathId, nodeId, input),
+              async () => {
+                const antes = offline!
+                  .caminhosLocais()
+                  ?.find((d) => d.path.id === pathId)
+                  ?.nodes.find((n) => n.id === nodeId);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "reviewNode",
+                  baseVersion: antes?.updatedAt ?? null,
+                  payload: { sessionId, pathId, nodeId, input },
+                });
+                const nivel = caminhos
+                  .find((d) => d.path.id === pathId)
+                  ?.nodes.find((n) => n.id === nodeId);
+                if (!nivel) throw new Error("nível não encontrado neste aparelho");
+                return nivel;
+              }
+            ),
           true
         ),
       replaceNode: (patientId, sessionId, pathId, nodeId, clientRequestId) =>
@@ -1066,19 +1388,59 @@ export function useRtqPersistence(): RtqPersistence {
       createStatement: (patientId, sessionId, pathId, input) =>
         run(
           `newStatement:${pathId}:${input.clientRequestId}`,
-          () => api.createStatement(patientId, sessionId, pathId, input),
+          () =>
+            comQueda(
+              () => api.createStatement(patientId, sessionId, pathId, input),
+              async () => {
+                const statementId = newEntityId(PREFIXO.statement);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "createStatement",
+                  createdEntityId: statementId,
+                  idempotencyKey: input.clientRequestId,
+                  payload: { sessionId, pathId, statementId, ...input },
+                });
+                const frase = caminhos
+                  .find((d) => d.path.id === pathId)
+                  ?.statements.find((s) => s.id === statementId);
+                if (!frase) throw new Error("não foi possível registrar a frase");
+                return frase;
+              }
+            ),
           true
         ),
       statementAction: (patientId, sessionId, pathId, statementId, action) =>
         run(
           `statement:${statementId}:${JSON.stringify(action)}`,
           () =>
-            api.statementAction(
-              patientId,
-              sessionId,
-              pathId,
-              statementId,
-              action
+            comQueda(
+              () =>
+                api.statementAction(
+                  patientId,
+                  sessionId,
+                  pathId,
+                  statementId,
+                  action
+                ),
+              async () => {
+                const antes = offline!
+                  .caminhosLocais()
+                  ?.find((d) => d.path.id === pathId)
+                  ?.statements.find((s) => s.id === statementId);
+                const { caminhos } = await offline!.registrar({
+                  operationType: "statementAction",
+                  baseVersion: antes?.updatedAt ?? null,
+                  payload: { sessionId, pathId, statementId, action },
+                });
+                const detalhe = caminhos.find((d) => d.path.id === pathId);
+                const frase = detalhe?.statements.find((s) => s.id === statementId);
+                if (!detalhe || !frase) {
+                  throw new Error("frase não encontrada neste aparelho");
+                }
+                // A frase devolvida NUNCA está CONFIRMED: a projeção descarta
+                // esse patch e guarda a intenção. Quem confirma é o servidor,
+                // com o SIM que o paciente deu — salvar não é confirmar (§7).
+                return { statement: frase, path: detalhe.path };
+              }
             ),
           true
         ),
@@ -1151,7 +1513,10 @@ export function useRtqPersistence(): RtqPersistence {
           false
         ),
     }),
-    [pending, error, run]
+    // `comQueda` e `offline` entram aqui: sem eles, os fechamentos ficariam
+    // com a ponte da primeira renderização e as escritas cairiam numa fila
+    // antiga depois de qualquer troca de sessão.
+    [pending, error, run, comQueda, offline]
   );
 }
 

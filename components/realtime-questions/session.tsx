@@ -35,6 +35,8 @@ import {
 } from "@/components/realtime-questions/session-screens";
 import { Control } from "@/components/realtime-questions/ui";
 import { OptionConversationFlow } from "@/components/realtime-questions/option-conversation/flow";
+import { OfflineChip } from "@/components/realtime-questions/offline-chip";
+import { useOfflineSession } from "@/lib/offline/use-offline-session";
 import { pacienteEstaOlhando } from "@/lib/option-conversation-screen";
 import {
   HistoryActionsDialog,
@@ -90,13 +92,29 @@ export function RealtimeQuestionSession({
   patientId,
   initial,
   onLeave,
+  userId,
+  userName,
 }: {
   patientId: number;
   initial: SessionDetail;
   /** Sai do modo depois que a sessão já foi encerrada como o assistente quis. */
   onLeave: () => void;
+  /** Cuidador autenticado — escopa o armazenamento local (Fase 4.9). */
+  userId?: string | null;
+  userName?: string | null;
 }) {
-  const persist = useRtqPersistence();
+  // A continuidade sem conexão é ligada AQUI, e só aqui: esta é a única tela
+  // que opera uma sessão manual já autenticada, que é exatamente o escopo da
+  // Fase 4.9. A tela de escolha de sessão continua exigindo rede — começar uma
+  // conversa sem servidor seria criar identidade offline, que a fase proíbe.
+  const offline = useOfflineSession({
+    userId: userId ?? null,
+    patientId,
+    sessionId: initial.session.id,
+    assistantName: userName ?? null,
+    sementeSessao: initial,
+  });
+  const persist = useRtqPersistence(offline);
   const dialog = useHeloDialog();
 
   const [detail, setDetail] = useState<SessionDetail>(initial);
@@ -220,10 +238,41 @@ export function RealtimeQuestionSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patientId, session.id]);
 
+  /**
+   * O snapshot local acompanha o que o servidor devolveu (Fase 4.9.2).
+   *
+   * A condição é estreita, e precisa ser: gravamos SÓ quando há rede E a fila
+   * está vazia. Com a fila vazia, `detail` só pode ter vindo do servidor —
+   * toda mutação passou por ele e voltou. Com qualquer pendência, `detail` é a
+   * projeção (snapshot + fila), e regravá-la como snapshot aplicaria a mesma
+   * intenção duas vezes na leitura seguinte.
+   *
+   * Sem isto, uma sessão RECÉM-CRIADA não teria snapshot nenhum: a tela a
+   * recebe pronta de `createSession`, sem passar por `sessionDetail`. Ela cairia
+   * offline sem ter o que continuar — que foi exatamente o que os testes de
+   * interface encontraram.
+   */
+  const podeGuardarSnapshot = offline.online && offline.status.pending === 0;
+
+  useEffect(() => {
+    // Sem esperar por `pronto`: gravar o snapshot não depende da fila ter
+    // sido lida, e esperar reabriria a janela que a semente fechou.
+    if (!offline.disponivel || !podeGuardarSnapshot) return;
+    offline.guardarSessao(detail);
+  }, [detail, offline, podeGuardarSnapshot]);
+
   const openPath = useMemo(
     () => pathDetails.find((d) => d.path.id === openPathId) ?? null,
     [pathDetails, openPathId]
   );
+
+  useEffect(() => {
+    if (!offline.disponivel || !podeGuardarSnapshot) return;
+    // Um caminho recém-criado chega por `createPath`, não por uma releitura —
+    // mesma razão do efeito acima.
+    if (pathDetails.length === 0) return;
+    offline.guardarCaminhos(pathDetails);
+  }, [pathDetails, offline, podeGuardarSnapshot]);
 
   const applyPathDetail = useCallback((detail: PathDetail) => {
     setPathDetails((all) =>
@@ -821,6 +870,17 @@ export function RealtimeQuestionSession({
   // tela: se um dia a regra mudar lá, muda aqui junto.
   const pacienteNoCaminho = openPath != null && pacienteEstaOlhando(openPath);
 
+  /**
+   * A tela é do PACIENTE. Uma expressão só, usada pela barra de contexto e
+   * pela faixa do armazenamento local — as duas coisas que existem para o
+   * cuidador e que não podem aparecer sobre o palco.
+   *
+   * Calcular isto duas vezes seria o começo de duas regras, e a que
+   * divergisse mostraria ao paciente algo que não é para ele. É o mesmo
+   * cuidado que levou `pacienteEstaOlhando` para lib/ no commit 286a3f9.
+   */
+  const telaEDoPaciente = showStage || pacienteNoCaminho;
+
   return (
     <div className="relative flex flex-1 flex-col">
       <OverlayVeil />
@@ -848,12 +908,22 @@ export function RealtimeQuestionSession({
               caminho inteiro obrigava o cuidador a SAIR do caminho para
               consultar o contexto — e sair no meio é justamente o que não
               pode custar uma conversa. */}
-          {context && !sessionOver && !showStage && !pacienteNoCaminho && (
+          {context && !sessionOver && !telaEDoPaciente && (
             <SessionContextBar
               context={context}
               busy={busy}
               onEdit={() => setContextEditing(true)}
               onView={() => void verContexto().catch(() => {})}
+            />
+          )}
+
+          {/* O que este aparelho guardou sem conexão. MESMA fronteira da barra
+              de contexto, pela MESMA expressão: nunca sobre o palco. */}
+          {!telaEDoPaciente && (
+            <OfflineChip
+              status={offline.status}
+              aviso={offline.avisoDeDescarte}
+              onReconhecerAviso={offline.reconhecerDescarte}
             />
           )}
 

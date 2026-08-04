@@ -23,6 +23,9 @@
     "test:oc:history": "node scripts/test-option-conversation-history.mjs",
     "test:oc:screen": "node scripts/test-option-conversation-screen.mjs",
     "test:option-conversation": "npm run test:oc:core && npm run test:oc:branches && npm run test:oc:versioning && npm run test:oc:history && npm run test:oc:screen",
+    "test:offline:queue": "node scripts/test-offline-queue.mjs",
+    "test:offline:projection": "node scripts/test-offline-projection.mjs",
+    "test:offline": "npm run test:offline:queue && npm run test:offline:projection",
     "test:ui": "playwright test",
     "test:ui:oc": "playwright test tests/e2e/option-conversation-",
     "test:ui:lotes": "node scripts/run-e2e-batches.mjs"

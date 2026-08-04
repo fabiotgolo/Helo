@@ -14,6 +14,7 @@ import { RealtimeQuestionSession } from "@/components/realtime-questions/session
 import { usePatient } from "@/lib/patient";
 import { useAuthUser, redirectToLogin } from "@/lib/use-auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
+import { sessaoLocalEmCurso } from "@/lib/offline/retomada";
 import {
   useRtqPersistence,
   type SessionDetail,
@@ -37,6 +38,8 @@ export default function PerguntasEmTempoRealPage() {
   );
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  /** A conversa retomável veio deste aparelho, não do servidor (Fase 4.9). */
+  const [offline, setOffline] = useState(false);
   const loading = patientId != null && checkedFor !== patientId;
 
   useEffect(() => {
@@ -55,8 +58,22 @@ export default function PerguntasEmTempoRealPage() {
         setResumable(sessions.find((s) => !isTerminalSessionStatus(s.status)) ?? null);
         setFailure(null);
       })
-      .catch((e: Error) => {
-        if (!cancelled) setFailure(e.message);
+      .catch(async (e: Error) => {
+        if (cancelled) return;
+        // Sem rede, a lista do servidor não chega — e é justamente aqui que a
+        // Fase 4.9 precisa aparecer. Se ESTE aparelho já tem uma conversa
+        // guardada para este cuidador e este paciente, ela volta a ser
+        // retomável. Sem isto, tudo o que a fase guarda ficaria inalcançável
+        // no momento em que ela existe para servir: o refresh sem conexão.
+        const local = await sessaoLocalEmCurso(user?.id ?? null, patientId);
+        if (cancelled) return;
+        if (local) {
+          setResumable(local.session);
+          setFailure(null);
+          setOffline(true);
+          return;
+        }
+        setFailure(e.message);
       })
       .finally(() => {
         if (!cancelled) setCheckedFor(patientId);
@@ -65,7 +82,7 @@ export default function PerguntasEmTempoRealPage() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [patientId, recheck]);
+  }, [patientId, recheck, user?.id]);
 
   const startNew = useCallback(async () => {
     if (patientId == null) return;
@@ -97,10 +114,28 @@ export default function PerguntasEmTempoRealPage() {
         controlRequest: fresh.controlRequest,
       });
       setFailure(null);
+      setOffline(false);
     } catch (e) {
+      // Sem rede, retomamos do que este aparelho guardou — e NÃO enviamos
+      // RESUME daqui. A sessão volta como estava (inclusive pausada), e
+      // retomar passa a ser um gesto do cuidador dentro da tela, onde vira
+      // uma intenção guardada como qualquer outra. Fingir "retomada" no
+      // servidor sem falar com ele seria afirmar um estado que ninguém tem.
+      const local = await sessaoLocalEmCurso(user?.id ?? null, patientId);
+      if (local && local.session.id === resumable.id) {
+        setDetail({
+          session: local.session,
+          turns: local.detail.turns,
+          context: local.detail.context,
+          controlRequest: local.detail.controlRequest,
+        });
+        setFailure(null);
+        setOffline(true);
+        return;
+      }
       setFailure((e as Error).message);
     }
-  }, [persist, patientId, resumable]);
+  }, [persist, patientId, resumable, user?.id]);
 
   // Sair de uma sessão devolve à abertura DO MODO — não à conversa guiada.
   // O assistente costuma encadear sessões; tirá-lo do modo a cada término
@@ -120,6 +155,12 @@ export default function PerguntasEmTempoRealPage() {
         patientId={patientId}
         initial={detail}
         onLeave={leave}
+        // A identidade do cuidador desce por props, e não por um segundo
+        // `useAuthUser` lá dentro: ela ESCOPA o armazenamento local (Fase
+        // 4.9), e duas leituras do mesmo usuário poderiam divergir por um
+        // instante — tempo suficiente para uma gravação cair no escopo errado.
+        userId={user?.id ?? null}
+        userName={user?.name ?? null}
       />
     );
   }
@@ -198,12 +239,31 @@ export default function PerguntasEmTempoRealPage() {
                         ? "pergunta já registrada"
                         : "perguntas já registradas"}
                     </p>
+                    {offline && (
+                      <p
+                        role="status"
+                        data-testid="retomada-local"
+                        className="max-w-sm rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-900 dark:text-amber-100"
+                      >
+                        Sem conexão. Esta conversa está guardada neste aparelho
+                        — você pode continuar, e o que registrar fica aqui até a
+                        conexão voltar.
+                      </p>
+                    )}
                   </>
                 )}
+                {/* Sem conexão não se começa conversa nova: uma sessão nasce no
+                    servidor, com o paciente e o assistente conferidos lá. §2 da
+                    Fase 4.9 — nada de identidade nova offline. */}
                 <button
                   type="button"
                   onClick={() => void startNew()}
-                  disabled={patientId == null || busy}
+                  disabled={patientId == null || busy || offline}
+                  title={
+                    offline
+                      ? "Iniciar uma conversa nova exige conexão"
+                      : undefined
+                  }
                   className={
                     resumable
                       ? "rounded-full border border-line bg-card px-8 py-3 font-medium text-ink transition-colors hover:border-ink-mute focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-40"
