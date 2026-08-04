@@ -501,13 +501,17 @@ npm run test:ui                   # a suíte inteira, num servidor só
 npm run test:ui:oc                # só a conversa por opções
 ```
 
-**Prefira `test:ui:lotes`.** Rodar os 138 testes contra um único dev server que
+**Prefira `test:ui:lotes`.** Rodar os 143 testes contra um único dev server que
 fica quase uma hora no ar produzia falhas que não eram do produto: o servidor
 degradava e testes variados quebravam ao *carregar a página* — os mesmos que
 passavam quando rodados por arquivo. `scripts/run-e2e-batches.mjs` corta a
 suíte em seis lotes por domínio e dá a cada um banco de teste vazio, dev server
 novo e rotas pré-compiladas, sem retry nenhum; ao final imprime um resultado
 agregado único com aprovados, falhos e ignorados por lote.
+
+Nesse arranjo a suíte fecha **143 aprovados, 0 falhos, 0 ignorados** em cerca de
+41 minutos — `base` 31, `conversa-por-opcoes` 32, `fases-4x` 30,
+`controles-do-paciente` 12, `responsivo-base` 10, `responsivo-fases` 28.
 
 ```bash
 npm run test:ui:lotes -- --list         # os lotes disponíveis
