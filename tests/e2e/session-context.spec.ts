@@ -8,7 +8,7 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
-import { confirmarOpcao, criarNivel, resposta } from "./option-conversation-helpers";
+import { confirmarOpcao, criarNivel, opcao, resposta } from "./option-conversation-helpers";
 
 let dados: Semente;
 
@@ -262,4 +262,125 @@ test("o contexto acompanha a interpretação até ela ir para o paciente", async
   // Aguardando o SIM: some, como em qualquer caminho.
   await expect(resposta(page, "SIM")).toBeVisible();
   await expect(barraDoContexto(page)).toBeHidden();
+});
+
+// ——— Confirmação direta: pacienteEstaOlhando é quem decide, não uma cópia ———
+//
+// lib/option-conversation-screen.ts prova, por enumeração pura
+// (scripts/test-option-conversation-screen.mjs), que `pacienteEstaOlhando`
+// vale exatamente para os `kind` STAGE e CONFIRM_STATEMENT. Os testes abaixo
+// fecham o outro lado da garantia: que a UI de verdade usa essa MESMA função
+// — e não uma condição parecida — para abrir e fechar a barra, e que abrir,
+// editar ou fechar o contexto não altera breadcrumb, rascunho, seleção
+// provisória, nó ativo nem o estado da interação por baixo.
+
+test("editar o contexto durante a composição da frase preserva o rascunho digitado", async ({
+  page,
+}) => {
+  await sessaoComContexto(page);
+  await page.getByRole("button", { name: "Conversa por opções" }).click();
+  await criarNivel(page, {
+    titulo: "O que o senhor quer?",
+    opcoes: ["Água", "Descansar"],
+    terminal: 0,
+    fraseFinal: "Quero água.",
+  });
+  await confirmarOpcao(page, "Água");
+
+  // EDIT_STATEMENT: tela do cuidador, frase ainda em rascunho — editável.
+  const frase = page.getByLabel(/Frase que será apresentada/);
+  await expect(frase).toHaveValue("Quero água.");
+  await expect(barraDoContexto(page)).toBeVisible();
+
+  // Rascunho alterado ANTES de abrir o contexto — é ele que não pode se perder.
+  await frase.fill("Quero água gelada, por favor.");
+  await barraDoContexto(page).click();
+  await page.getByLabel("Assunto inicial").fill("dor no ombro");
+  await page.getByRole("button", { name: "Salvar nova versão" }).click();
+  await expect(page.getByText(/versão 2/)).toBeVisible();
+
+  // O rascunho digitado sobrevive — não foi o quê o compositor guardou antes
+  // de abrir o contexto, e sim exatamente o que o cuidador tinha digitado.
+  await expect(frase).toHaveValue("Quero água gelada, por favor.");
+  await page.getByRole("button", { name: "Apresentar ao paciente" }).click();
+  // A frase apresentada é a editada, prova de que é a MESMA frase — não uma
+  // reaberta do zero pela edição do contexto.
+  await expect(page.getByText("Quero água gelada, por favor.")).toBeVisible();
+});
+
+test("o contexto continua fora de alcance do TALVEZ até uma decisão terminal", async ({
+  page,
+}) => {
+  await sessaoComContexto(page);
+  await page.getByRole("button", { name: "Conversa por opções" }).click();
+  await criarNivel(page, {
+    titulo: "O que o senhor quer?",
+    opcoes: ["Água", "Descansar"],
+    terminal: 0,
+    fraseFinal: "Quero água.",
+  });
+  await confirmarOpcao(page, "Água");
+  await page.getByRole("button", { name: "Apresentar ao paciente" }).click();
+  await expect(resposta(page, "SIM")).toBeVisible();
+  await expect(barraDoContexto(page)).toBeHidden();
+
+  // TALVEZ: a frase segue viva e não-terminal (PROVISIONAL_RESPONSE) — a
+  // negociação com o paciente continua, e o contexto continua fora de cena.
+  await resposta(page, "TALVEZ").click();
+  await expect(page.getByText("A frase não foi confirmada.")).toBeVisible();
+  await expect(barraDoContexto(page)).toBeHidden();
+
+  // "Ajustar frase" avisa que o texto já foi apresentado — como qualquer
+  // edição pós-apresentação — e só então volta para EDIT_STATEMENT.
+  await page.getByRole("button", { name: "Ajustar frase" }).click();
+  await page.getByRole("button", { name: "Criar versão corrigida" }).click();
+  await expect(page.getByLabel(/Frase que será apresentada/)).toBeVisible();
+  await expect(barraDoContexto(page)).toBeVisible();
+});
+
+test("consultar o contexto durante a seleção observada não altera o nó ativo nem o breadcrumb", async ({
+  page,
+}) => {
+  await sessaoComContexto(page);
+  await page.getByRole("button", { name: "Conversa por opções" }).click();
+  await criarNivel(page, { titulo: "O que o senhor quer?", opcoes: ["Água", "Descansar"] });
+  await confirmarOpcao(page, "Água");
+  await criarNivel(page, { titulo: "Qual água?", opcoes: ["Gelada", "Natural"] });
+
+  // Segundo nível, gesto observado mas ainda NÃO conferido — o estado mais
+  // frágil que o domínio expõe nesta tela.
+  await opcao(page, "Gelada").click();
+  await expect(page.getByText("Opção observada: Gelada")).toBeVisible();
+  await expect(barraDoContexto(page)).toBeHidden();
+
+  await page.getByRole("button", { name: "Confirmar", exact: true }).click();
+  // De volta ao cuidador: o breadcrumb mostra os dois degraus anteriores
+  // clicáveis, e "Gelada" como o degrau ATUAL (não clicável, §14) — prova de
+  // que o nó ativo é o terceiro nível, aberto pela escolha confirmada, e não
+  // um caminho reiniciado pela consulta.
+  await expect(barraDoContexto(page)).toBeVisible();
+  const trilha = page.getByRole("navigation", { name: "Caminho da conversa" });
+  await expect(
+    page.getByRole("button", { name: "Voltar para O que o senhor quer?", exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Voltar para O que o senhor quer?: Água" })
+  ).toBeVisible();
+  // O rótulo visível vem acompanhado de um sufixo só-para-leitor-de-tela
+  // (" — nível atual"), então o texto completo do nó não é "Gelada" exato.
+  await expect(trilha.getByText("Gelada")).toBeVisible();
+
+  // Consultar (não editar) o contexto aqui não altera nada disso: mesmos
+  // dois degraus clicáveis, mesmo degrau atual, depois de abrir e fechar a
+  // lista de versões. O botão de resumo — não o "Editar" — é quem abre essa
+  // leitura (SessionContextBar.onView).
+  await page.getByRole("button", { name: /dor no joelho/ }).click();
+  await expect(page.getByRole("heading", { name: "Contexto da conversa" })).toBeVisible();
+  await page.getByRole("button", { name: "Fechar" }).click();
+  await expect(
+    page.getByRole("button", { name: "Voltar para O que o senhor quer?: Água" })
+  ).toBeVisible();
+  // O rótulo visível vem acompanhado de um sufixo só-para-leitor-de-tela
+  // (" — nível atual"), então o texto completo do nó não é "Gelada" exato.
+  await expect(trilha.getByText("Gelada")).toBeVisible();
 });

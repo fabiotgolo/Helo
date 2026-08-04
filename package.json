@@ -21,7 +21,8 @@
     "test:oc:branches": "node scripts/test-option-conversation-branches.mjs",
     "test:oc:versioning": "node scripts/test-option-conversation-versioning.mjs",
     "test:oc:history": "node scripts/test-option-conversation-history.mjs",
-    "test:option-conversation": "npm run test:oc:core && npm run test:oc:branches && npm run test:oc:versioning && npm run test:oc:history",
+    "test:oc:screen": "node scripts/test-option-conversation-screen.mjs",
+    "test:option-conversation": "npm run test:oc:core && npm run test:oc:branches && npm run test:oc:versioning && npm run test:oc:history && npm run test:oc:screen",
     "test:ui": "playwright test",
     "test:ui:oc": "playwright test tests/e2e/option-conversation-",
     "test:ui:lotes": "node scripts/run-e2e-batches.mjs"

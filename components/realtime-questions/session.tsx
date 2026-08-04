@@ -34,10 +34,8 @@ import {
   UncertainScreen,
 } from "@/components/realtime-questions/session-screens";
 import { Control } from "@/components/realtime-questions/ui";
-import {
-  OptionConversationFlow,
-  pacienteEstaOlhando,
-} from "@/components/realtime-questions/option-conversation/flow";
+import { OptionConversationFlow } from "@/components/realtime-questions/option-conversation/flow";
+import { pacienteEstaOlhando } from "@/lib/option-conversation-screen";
 import {
   HistoryActionsDialog,
   HistoryDetail,
