@@ -485,8 +485,28 @@ tablet nas duas orientações e a regressão da conversa guiada:
 
 ```bash
 npx playwright install chromium   # uma vez
-npm run test:ui
+npm run test:ui:lotes             # a suíte inteira, em lotes (recomendado)
+npm run test:ui                   # a suíte inteira, num servidor só
 npm run test:ui:oc                # só a conversa por opções
 ```
 
-Aponte para outra porta com `HELO_BASE_URL=http://localhost:3459 npm run test:ui`.
+**Prefira `test:ui:lotes`.** Rodar os 138 testes contra um único dev server que
+fica quase uma hora no ar produzia falhas que não eram do produto: o servidor
+degradava e testes variados quebravam ao *carregar a página* — os mesmos que
+passavam quando rodados por arquivo. `scripts/run-e2e-batches.mjs` corta a
+suíte em seis lotes por domínio e dá a cada um banco de teste vazio, dev server
+novo e rotas pré-compiladas, sem retry nenhum; ao final imprime um resultado
+agregado único com aprovados, falhos e ignorados por lote.
+
+```bash
+npm run test:ui:lotes -- --list         # os lotes disponíveis
+npm run test:ui:lotes -- fases-4x       # um lote só
+```
+
+O runner usa o banco dedicado `e2e-lotes` na porta 3210 (`HELO_E2E_DATABASE_ID`,
+`HELO_E2E_PORT`) e **recusa** rodar contra `helo-db` — os testes apagam o banco
+antes de semear, e é em `helo-db` que vive o dev server do dia a dia.
+
+O `test:ui` direto continua existindo para rodar um arquivo avulso; ele usa
+`helo-db` e a porta do seu dev server. Aponte para outra com
+`HELO_BASE_URL=http://localhost:3459 npm run test:ui`.
