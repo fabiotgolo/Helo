@@ -410,6 +410,17 @@ uma conversa urgente não pode ficar atrás de um formulário. O contexto **não
 fala do paciente** e nunca aparece no palco dele. Editar durante a sessão cria
 uma versão nova e preserva a anterior.
 
+A barra de contexto segue o cuidador por todas as telas dele — inclusive dentro
+de um caminho por opções ou de uma interpretação — e some no instante em que a
+tela passa a ser do paciente: as opções apresentadas e a frase aguardando o SIM.
+Quem responde por essa fronteira é `pacienteEstaOlhando` em
+`components/realtime-questions/option-conversation/flow.tsx`, a mesma função que
+escolhe qual tela o caminho mostra; duas cópias da regra divergiriam, e a que
+divergisse mostraria ao paciente algo que só o cuidador deveria ver. Consultar
+ou editar o contexto **sobrepõe** o caminho em vez de substituí-lo: rascunho
+digitado, seleção provisória e breadcrumb continuam montados por baixo, e
+fechar devolve a interação exatamente como estava.
+
 O interlocutor pode vir da rede do paciente (nome e relação copiados como
 snapshot) ou ser digitado à mão — e **digitar um nome nunca cria contato**.
 

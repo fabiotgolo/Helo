@@ -371,6 +371,12 @@ export function ContextVersionsList({
           </li>
         ))}
       </ol>
+      {/* Saída visível: o modo é operado no tablet à beira do leito, onde não
+          existe Esc. Consultar o contexto no meio de um caminho só é seguro
+          se voltar for tão óbvio quanto abrir. */}
+      <div className="mt-5 flex">
+        <Control onClick={onClose}>Fechar</Control>
+      </div>
     </ModalShell>
   );
 }

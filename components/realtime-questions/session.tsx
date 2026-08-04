@@ -34,7 +34,10 @@ import {
   UncertainScreen,
 } from "@/components/realtime-questions/session-screens";
 import { Control } from "@/components/realtime-questions/ui";
-import { OptionConversationFlow } from "@/components/realtime-questions/option-conversation/flow";
+import {
+  OptionConversationFlow,
+  pacienteEstaOlhando,
+} from "@/components/realtime-questions/option-conversation/flow";
 import {
   HistoryActionsDialog,
   HistoryDetail,
@@ -816,6 +819,10 @@ export function RealtimeQuestionSession({
       status === "PROVISIONAL_RESPONSE" ||
       status === "RECONFIRMATION_PENDING");
 
+  // Quem responde por isto é o próprio flow, pela mesma função que escolhe a
+  // tela: se um dia a regra mudar lá, muda aqui junto.
+  const pacienteNoCaminho = openPath != null && pacienteEstaOlhando(openPath);
+
   return (
     <div className="relative flex flex-1 flex-col">
       <OverlayVeil />
@@ -835,8 +842,15 @@ export function RealtimeQuestionSession({
           )}
 
           {/* Barra do contexto: só nas telas do CUIDADOR. Nunca aparece sobre
-              o palco do paciente — o contexto não é para ele ver. */}
-          {context && !sessionOver && !showStage && !openPath && (
+              o palco do paciente — o contexto não é para ele ver.
+
+              Com um caminho aberto (conversa por opções ou interpretação), a
+              barra acompanha as telas de composição, revisão e navegação, e
+              some quando o caminho passa a ser do paciente. Escondê-la o
+              caminho inteiro obrigava o cuidador a SAIR do caminho para
+              consultar o contexto — e sair no meio é justamente o que não
+              pode custar uma conversa. */}
+          {context && !sessionOver && !showStage && !pacienteNoCaminho && (
             <SessionContextBar
               context={context}
               busy={busy}
