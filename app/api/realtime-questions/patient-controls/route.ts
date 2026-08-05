@@ -112,6 +112,7 @@ export async function PATCH(request: Request) {
     sessionId?: string;
     requestId?: string;
     action?: unknown;
+    clientRequestId?: unknown;
   };
   const patientId = Number(body.patientId);
   const action = parseControlAction(body.action);
@@ -130,7 +131,8 @@ export async function PATCH(request: Request) {
       body.sessionId,
       body.requestId,
       action,
-      { id: auth.user.id, name: auth.user.name }
+      { id: auth.user.id, name: auth.user.name },
+      body.clientRequestId
     );
     return Response.json(result);
   } catch (e) {

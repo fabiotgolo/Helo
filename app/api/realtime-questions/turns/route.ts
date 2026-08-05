@@ -46,6 +46,8 @@ export async function POST(request: Request) {
     sensitiveCategory?: unknown;
     /** "Reutilizar como novo" a partir do histórico (§24). */
     reusedFromTurnId?: unknown;
+    /** Chave de idempotência (Fase 4.9.3). */
+    clientRequestId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId) {
@@ -66,6 +68,7 @@ export async function POST(request: Request) {
         isSensitive: body.isSensitive,
         sensitiveCategory: body.sensitiveCategory,
         reusedFromTurnId: body.reusedFromTurnId,
+        clientRequestId: body.clientRequestId,
       },
       { id: auth.user.id, name: auth.user.name }
     );
@@ -120,6 +123,8 @@ export async function PATCH(request: Request) {
     sessionId?: string;
     turnId?: string;
     action?: unknown;
+    /** Chave de idempotência (Fase 4.9.3). */
+    clientRequestId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId || !body.turnId) {
@@ -140,7 +145,8 @@ export async function PATCH(request: Request) {
       body.sessionId,
       body.turnId,
       action,
-      { id: auth.user.id, name: auth.user.name }
+      { id: auth.user.id, name: auth.user.name },
+      body.clientRequestId
     );
     return Response.json({ turn });
   } catch (e) {

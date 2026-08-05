@@ -18,6 +18,8 @@
 
 import { firestore } from "@/lib/firestore";
 import {
+  gravarLedger,
+  lerLedger,
   newId,
   sessionDoc,
   writeAudit,
@@ -253,17 +255,20 @@ export async function runPatientControlAction(
   sessionId: string,
   requestId: string,
   action: PatientControlAction,
-  assistant: Assistant
+  assistant: Assistant,
+  clientRequestIdRaw?: unknown
 ): Promise<ControlActionResult> {
   const now = new Date().toISOString();
+  const clientRequestId = requestIdOf(clientRequestIdRaw);
 
   return firestore.runTransaction(async (transaction) => {
     // Firestore exige todas as leituras antes de qualquer escrita.
     const sRef = sessionDoc(sessionId);
     const rRef = controlsCol(sessionId).doc(requestId);
-    const [sDoc, rDoc] = await Promise.all([
+    const [sDoc, rDoc, jaAplicada] = await Promise.all([
       transaction.get(sRef),
       transaction.get(rRef),
+      lerLedger(transaction, sessionId, clientRequestId),
     ]);
     if (!sDoc.exists) throw new RtqDomainError("sessão não encontrada");
     const sessionData = sDoc.data()!;
@@ -272,10 +277,18 @@ export async function runPatientControlAction(
     }
     if (!rDoc.exists) throw new RtqDomainError("pedido de controles não encontrado");
 
+    const request = toControl(rDoc.id, rDoc.data()!);
+    // EXECUTE delega a verbos com efeito cascata (turno, nível, frase,
+    // caminho, sessão) — reconstruir tudo isso a partir do ledger exigiria
+    // guardar o resultado inteiro. Nesta fase, o replay devolve só o pedido
+    // já com a ação aplicada; o cuidador que perdeu a resposta do primeiro
+    // envio já recebe a confirmação de que a ação foi registrada, mesmo sem
+    // os campos opcionais de "o que a execução tocou".
+    if (jaAplicada) return { request };
+
     const sessionStatus = (sessionData.status as RtqSessionStatus) ?? "ACTIVE";
     assertSessionAcceptsControlAction(sessionStatus, action.kind);
 
-    const request = toControl(rDoc.id, rDoc.data()!);
     const change = applyPatientControlAction(request, action, now);
 
     const result: ControlActionResult = {
@@ -347,6 +360,15 @@ export async function runPatientControlAction(
     }
 
     transaction.set(sRef, { updatedAt: now }, { merge: true });
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: `runPatientControlAction:${action.kind}`, resultRef: { kind: "control", id: requestId }, assistantId: assistant.id },
+        now
+      );
+    }
     return result;
   });
 }

@@ -25,6 +25,7 @@
     "test:option-conversation": "npm run test:oc:core && npm run test:oc:branches && npm run test:oc:versioning && npm run test:oc:history && npm run test:oc:screen",
     "test:offline:queue": "node scripts/test-offline-queue.mjs",
     "test:offline:projection": "node scripts/test-offline-projection.mjs",
+    "test:offline:idempotency": "node scripts/test-offline-idempotency.mjs",
     "test:offline": "npm run test:offline:queue && npm run test:offline:projection",
     "test:ui": "playwright test",
     "test:ui:oc": "playwright test tests/e2e/option-conversation-",

@@ -192,6 +192,7 @@ export async function PATCH(request: Request) {
     pathId?: string;
     statementId?: string;
     action?: unknown;
+    clientRequestId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId || !body.pathId || !body.statementId) {
@@ -213,7 +214,8 @@ export async function PATCH(request: Request) {
       body.pathId,
       body.statementId,
       action,
-      { id: auth.user.id, name: auth.user.name }
+      { id: auth.user.id, name: auth.user.name },
+      body.clientRequestId
     );
     return Response.json(result);
   } catch (e) {

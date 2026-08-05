@@ -155,6 +155,7 @@ export async function PATCH(request: Request) {
     pathId?: string;
     nodeId?: string;
     action?: unknown;
+    clientRequestId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId || !body.pathId || !body.nodeId) {
@@ -182,6 +183,7 @@ export async function PATCH(request: Request) {
           options: raw.options,
           isSensitive: raw.isSensitive,
           sensitiveCategory: raw.sensitiveCategory,
+          clientRequestId: body.clientRequestId,
         },
         assistant
       );
@@ -202,7 +204,8 @@ export async function PATCH(request: Request) {
       body.pathId,
       body.nodeId,
       action,
-      assistant
+      assistant,
+      body.clientRequestId
     );
     return Response.json(result);
   } catch (e) {

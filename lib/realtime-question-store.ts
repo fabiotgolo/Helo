@@ -220,6 +220,83 @@ export function writeAudit(
   });
 }
 
+// ---------- Ledger de idempotência (Fase 4.9.3, §3.4a da auditoria) ----------
+//
+// `conversationQuestionSessions/{sessionId}/appliedRequests/{clientRequestId}`
+// — um documento por INTENÇÃO já aplicada, escrito na MESMA transação que a
+// aplica. Antes de agir, toda função transacional desta camada relê este
+// documento: se existe, a intenção já foi cumprida, e a função devolve o
+// resultado registrado em vez de reaplicar.
+//
+// Isto fecha duas lacunas da auditoria de uma vez, para TODAS as operações,
+// sem espalhar checagens `clientRequestId` por dez funções:
+//
+//   G1 — reuseNode/reuseStatement/reusePath chamavam recordReuse numa
+//   transação PRÓPRIA; um reenvio duplicava o evento CONTENT_REUSED mesmo com
+//   a criação corretamente deduplicada.
+//   G2 — as transições de estado (runTurnAction, runNodeAction, ...) não
+//   tinham proteção nenhuma contra replay. Na maioria dos casos a máquina de
+//   estados barra a repetição — mas devolve um ERRO DE DOMÍNIO para uma ação
+//   que de fato já foi aplicada, o que uma fila offline não consegue
+//   distinguir de "recusada". Um caso, `REMOVE_RESPONSE` sobre frase, não era
+//   nem barrado: o replay incrementava `correctionCount` de novo.
+//
+// Deliberadamente NÃO se usa `If-Match`/versão otimista (§3.4, nota final): a
+// releitura transacional já resolve a concorrência ENTRE dispositivos — dois
+// não confirmam respostas diferentes. O ledger resolve o REPLAY do mesmo
+// dispositivo, que é um problema diferente.
+
+export interface LedgerEntry {
+  /** Nome curto da operação — só para leitura humana em caso de investigação. */
+  op: string;
+  /** O que o replay deve reler e devolver. `null` quando não há entidade própria. */
+  resultRef: { kind: string; id: string } | null;
+  assistantId: string;
+  appliedAt: string;
+}
+
+const appliedRequestsCol = (sessionId: string) =>
+  sessionDoc(sessionId).collection("appliedRequests");
+
+/** Normaliza um `clientRequestId` recebido do corpo da requisição. */
+export function requestIdOf(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v.trim().slice(0, 80) : null;
+}
+
+/**
+ * Lê o ledger DENTRO da transação — precisa ser chamado junto das demais
+ * leituras, antes de qualquer `transaction.set`/`.update` (exigência do
+ * Firestore: todas as leituras de uma transação vêm antes de toda escrita).
+ *
+ * `clientRequestId` ausente ou inválido devolve `null` sem tocar o banco: uma
+ * chamada sem chave de idempotência nunca é deduplicada — é o comportamento
+ * anterior, preservado para quem ainda não manda a chave.
+ */
+export async function lerLedger(
+  transaction: FirebaseFirestore.Transaction,
+  sessionId: string,
+  clientRequestId: unknown
+): Promise<LedgerEntry | null> {
+  const key = requestIdOf(clientRequestId);
+  if (!key) return null;
+  const doc = await transaction.get(appliedRequestsCol(sessionId).doc(key));
+  return doc.exists ? (doc.data() as LedgerEntry) : null;
+}
+
+/** Grava a marca de aplicada. Só chamar quando `clientRequestId` é válido. */
+export function gravarLedger(
+  transaction: FirebaseFirestore.Transaction,
+  sessionId: string,
+  clientRequestId: string,
+  entry: Omit<LedgerEntry, "appliedAt">,
+  now: string
+): void {
+  transaction.set(appliedRequestsCol(sessionId).doc(clientRequestId), {
+    ...entry,
+    appliedAt: now,
+  });
+}
+
 // ---------- Sessões ----------
 
 export async function createRtqSession(
@@ -303,9 +380,11 @@ export async function runSessionAction(
   patientId: number,
   sessionId: string,
   action: SessionAction,
-  assistant: Assistant
+  assistant: Assistant,
+  clientRequestIdRaw?: unknown
 ): Promise<ConversationQuestionSession> {
   const now = new Date().toISOString();
+  const clientRequestId = requestIdOf(clientRequestIdRaw);
   return firestore.runTransaction(async (transaction) => {
     const ref = sessionDoc(sessionId);
     const doc = await transaction.get(ref);
@@ -314,6 +393,8 @@ export async function runSessionAction(
     if (session.patientId !== patientId) {
       throw new RtqDomainError("sessão não encontrada");
     }
+    const jaAplicada = await lerLedger(transaction, sessionId, clientRequestId);
+    if (jaAplicada) return session;
 
     // Todas as leituras acontecem ANTES de qualquer escrita (exigência do
     // Firestore).
@@ -367,6 +448,15 @@ export async function runSessionAction(
       );
     }
 
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: `runSessionAction:${action}`, resultRef: null, assistantId: assistant.id },
+        now
+      );
+    }
     return { ...session, ...(change.patch as Partial<ConversationQuestionSession>) };
   });
 }
@@ -380,6 +470,8 @@ export interface TurnInput {
   sensitiveCategory?: unknown;
   /** Origem quando a pergunta nasce de "Reutilizar como novo" no histórico. */
   reusedFromTurnId?: unknown;
+  /** Chave de idempotência (Fase 4.9.3, §3.4a). Opcional — quem não manda não é deduplicado. */
+  clientRequestId?: unknown;
 }
 
 function normalizeSource(v: unknown): QuestionSource {
@@ -431,6 +523,7 @@ export async function createTurn(
 
   const now = new Date().toISOString();
   const id = newId("cqt");
+  const clientRequestId = requestIdOf(input.clientRequestId);
 
   return firestore.runTransaction(async (transaction) => {
     const ref = sessionDoc(sessionId);
@@ -440,6 +533,20 @@ export async function createTurn(
     if (session.patientId !== patientId) {
       throw new RtqDomainError("sessão não encontrada");
     }
+
+    // G2 fechado para criação: um reenvio da mesma intenção (mesma
+    // `clientRequestId`) devolve o turno já criado em vez de tentar criar um
+    // segundo. Antes disto, a dedup só existia no cliente.
+    const jaAplicada = await lerLedger(transaction, sessionId, clientRequestId);
+    if (jaAplicada?.resultRef) {
+      const existente = await transaction.get(
+        turnsCol(sessionId).doc(jaAplicada.resultRef.id)
+      );
+      if (existente.exists) return toTurn(existente.id, existente.data()!);
+      // Ledger aponta para algo que sumiu — segue como se não houvesse
+      // registro; é mais seguro tentar de novo do que travar o cuidador.
+    }
+
     assertSessionAcceptsNewTurn(session.status);
 
     // A origem precisa existir NESTA sessão: reutilizar não atravessa
@@ -523,6 +630,15 @@ export async function createTurn(
         now
       );
     }
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: "createTurn", resultRef: { kind: "turn", id }, assistantId: assistant.id },
+        now
+      );
+    }
     return turn;
   });
 }
@@ -537,15 +653,18 @@ export async function runTurnAction(
   sessionId: string,
   turnId: string,
   action: TurnAction,
-  assistant: Assistant
+  assistant: Assistant,
+  clientRequestIdRaw?: unknown
 ): Promise<ConversationQuestionTurn> {
   const now = new Date().toISOString();
+  const clientRequestId = requestIdOf(clientRequestIdRaw);
   return firestore.runTransaction(async (transaction) => {
     const sRef = sessionDoc(sessionId);
     const tRef = turnsCol(sessionId).doc(turnId);
-    const [sDoc, tDoc] = await Promise.all([
+    const [sDoc, tDoc, jaAplicada] = await Promise.all([
       transaction.get(sRef),
       transaction.get(tRef),
+      lerLedger(transaction, sessionId, clientRequestId),
     ]);
     if (!sDoc.exists) throw new RtqDomainError("sessão não encontrada");
     const session = toSession(sDoc.id, sDoc.data()!);
@@ -554,6 +673,14 @@ export async function runTurnAction(
     }
     if (!tDoc.exists) throw new RtqDomainError("pergunta não encontrada");
     const turn = toTurn(tDoc.id, tDoc.data()!);
+
+    // G2: um reenvio da mesma ação devolve o turno como ficou da primeira
+    // vez, em vez de reexecutar a transição (que na maioria dos casos seria
+    // recusada pela máquina de estados como se fosse uma ação NOVA rejeitada
+    // — indistinguível de "sua ação não foi aceita" para quem está sem rede)
+    // ou, no caso de REMOVE_RESPONSE sobre frase, seria aceita de novo e
+    // incrementaria `correctionCount` uma segunda vez.
+    if (jaAplicada) return turn;
 
     assertSessionAcceptsTurnAction(session.status, action.kind);
     const change = applyTurnAction(turn, action, now);
@@ -574,6 +701,15 @@ export async function runTurnAction(
       },
       now
     );
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: `runTurnAction:${action.kind}`, resultRef: { kind: "turn", id: turnId }, assistantId: assistant.id },
+        now
+      );
+    }
     return { ...turn, ...change.patch };
   });
 }

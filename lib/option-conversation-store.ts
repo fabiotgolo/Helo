@@ -66,6 +66,8 @@ import { statementEventFor } from "@/lib/statement-events";
 import {
   cleanText,
   getRtqSession,
+  gravarLedger,
+  lerLedger,
   newId,
   sessionDoc,
   writeAudit,
@@ -490,11 +492,16 @@ export async function runPathAction(
   sessionId: string,
   pathId: string,
   action: PathAction,
-  assistant: Assistant
+  assistant: Assistant,
+  clientRequestIdRaw?: unknown
 ): Promise<OptionConversationPath> {
   const now = new Date().toISOString();
+  const clientRequestId = requestIdOf(clientRequestIdRaw);
   return firestore.runTransaction(async (transaction) => {
     const path = await readPath(transaction, patientId, sessionId, pathId);
+    const jaAplicada = await lerLedger(transaction, sessionId, clientRequestId);
+    if (jaAplicada) return path;
+
     const change = applyPathAction(path.status, action, now);
     transaction.set(pathsCol(sessionId).doc(pathId), change.patch, { merge: true });
     transaction.set(sessionDoc(sessionId), { updatedAt: now }, { merge: true });
@@ -513,6 +520,15 @@ export async function runPathAction(
       },
       now
     );
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: `runPathAction:${action.kind}`, resultRef: { kind: "path", id: pathId }, assistantId: assistant.id },
+        now
+      );
+    }
     return { ...path, ...(change.patch as Partial<OptionConversationPath>) };
   });
 }
@@ -910,6 +926,8 @@ export interface ReviewNodeInput {
   options?: unknown;
   isSensitive?: unknown;
   sensitiveCategory?: unknown;
+  /** Chave de idempotência (Fase 4.9.3). */
+  clientRequestId?: unknown;
 }
 
 /**
@@ -939,11 +957,17 @@ export async function reviewNode(
       : normalizeOptions(input.options, () => newId("opt"));
 
   const now = new Date().toISOString();
+  const clientRequestId = requestIdOf(input.clientRequestId);
   return firestore.runTransaction(async (transaction) => {
     const session = await requireSessionInTx(transaction, patientId, sessionId);
     const path = await readPath(transaction, patientId, sessionId, pathId);
     const node = await readNode(transaction, patientId, sessionId, nodeId);
     if (node.pathId !== pathId) throw new RtqDomainError("nível não encontrado");
+    // Sem esta checagem, um reenvio não corrompe contador (REVIEW é
+    // naturalmente idempotente no conteúdo), mas grava um SEGUNDO evento de
+    // auditoria para a mesma edição — G2 da auditoria.
+    const jaAplicada = await lerLedger(transaction, sessionId, clientRequestId);
+    if (jaAplicada) return node;
 
     assertAcceptsNodeAction(session.status, path.status, "REVIEW");
     const change = applyNodeAction(
@@ -984,6 +1008,15 @@ export async function reviewNode(
       },
       now
     );
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: "reviewNode", resultRef: { kind: "node", id: nodeId }, assistantId: assistant.id },
+        now
+      );
+    }
     return { ...node, ...change.patch };
   });
 }
@@ -994,14 +1027,18 @@ export async function runNodeAction(
   pathId: string,
   nodeId: string,
   action: NodeAction,
-  assistant: Assistant
+  assistant: Assistant,
+  clientRequestIdRaw?: unknown
 ): Promise<{ node: OptionConversationNode; path: OptionConversationPath }> {
   const now = new Date().toISOString();
+  const clientRequestId = requestIdOf(clientRequestIdRaw);
   return firestore.runTransaction(async (transaction) => {
     const session = await requireSessionInTx(transaction, patientId, sessionId);
     const path = await readPath(transaction, patientId, sessionId, pathId);
     const node = await readNode(transaction, patientId, sessionId, nodeId);
     if (node.pathId !== pathId) throw new RtqDomainError("nível não encontrado");
+    const jaAplicada = await lerLedger(transaction, sessionId, clientRequestId);
+    if (jaAplicada) return { node, path };
 
     assertAcceptsNodeAction(session.status, path.status, action.kind);
     const change = applyNodeAction(node, action, now);
@@ -1036,6 +1073,15 @@ export async function runNodeAction(
       },
       now
     );
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: `runNodeAction:${action.kind}`, resultRef: { kind: "node", id: nodeId }, assistantId: assistant.id },
+        now
+      );
+    }
 
     return {
       node: { ...node, ...change.patch },
@@ -1739,12 +1785,14 @@ export async function runStatementAction(
   pathId: string,
   statementId: string,
   action: StatementAction | { kind: "REJECT" },
-  assistant: Assistant
+  assistant: Assistant,
+  clientRequestIdRaw?: unknown
 ): Promise<{
   statement: OptionConversationFinalStatement;
   path: OptionConversationPath;
 }> {
   const now = new Date().toISOString();
+  const clientRequestId = requestIdOf(clientRequestIdRaw);
   return firestore.runTransaction(async (transaction) => {
     const session = await requireSessionInTx(transaction, patientId, sessionId);
     const path = await readPath(transaction, patientId, sessionId, pathId);
@@ -1755,6 +1803,16 @@ export async function runStatementAction(
       statementId
     );
     if (statement.pathId !== pathId) throw new RtqDomainError("frase não encontrada");
+
+    // G2 da auditoria — o caso que CORROMPE, não só confunde: sem esta
+    // checagem, um reenvio de REMOVE_RESPONSE sobre uma frase (única
+    // transição do domínio que aceita replay — PROVISIONAL_RESPONSE →
+    // PROVISIONAL_RESPONSE) incrementava `correctionCount` de novo a cada
+    // repetição. `correctionCount` é dado observacional sobre a interação do
+    // paciente; infla-lo é o tipo de corrupção silenciosa que o resto do
+    // projeto evita.
+    const jaAplicada = await lerLedger(transaction, sessionId, clientRequestId);
+    if (jaAplicada) return { statement, path };
 
     const kind = action.kind === "REJECT" ? "CONFIRM" : action.kind;
     assertAcceptsStatementAction(session.status, path.status, kind);
@@ -1844,6 +1902,15 @@ export async function runStatementAction(
           newValue: pathChange.event.newValue,
           metadata: { finalStatementId: statementId },
         },
+        now
+      );
+    }
+    if (clientRequestId) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        clientRequestId,
+        { op: `runStatementAction:${action.kind}`, resultRef: { kind: "statement", id: statementId }, assistantId: assistant.id },
         now
       );
     }
@@ -2209,7 +2276,8 @@ export async function reuseNode(
     sessionId,
     assistant,
     { sourceType: "NODE", sourceId: sourceNodeId },
-    { targetType: "NODE", targetId: node.id, pathId: path.id, nodeId: node.id }
+    { targetType: "NODE", targetId: node.id, pathId: path.id, nodeId: node.id },
+    clientRequestId
   );
 
   return { path, node };
@@ -2282,7 +2350,8 @@ export async function reuseStatement(
       targetId: statement.id,
       pathId: path.id,
       statementId: statement.id,
-    }
+    },
+    clientRequestId
   );
 
   return { path, statement };
@@ -2347,13 +2416,27 @@ export async function reusePath(
     sessionId,
     assistant,
     { sourceType: "PATH", sourceId: sourcePathId },
-    { targetType: "PATH", targetId: path.id, pathId: path.id, nodeId: node?.id }
+    { targetType: "PATH", targetId: path.id, pathId: path.id, nodeId: node?.id },
+    clientRequestId
   );
 
   return { path, node };
 }
 
-/** Evento único de reutilização, seja qual for o tipo de conteúdo (§34). */
+/**
+ * Evento único de reutilização, seja qual for o tipo de conteúdo (§34).
+ *
+ * G1 da auditoria da Fase 4.9: esta função abria uma transação PRÓPRIA,
+ * separada da criação (`createNode`/`createStatement`/`createPath`, essas
+ * sim idempotentes por `clientRequestId`). Um reenvio da mesma intenção —
+ * rotina numa fila offline, não exceção — deduplicava a criação
+ * corretamente e ainda assim gravava um SEGUNDO evento `CONTENT_REUSED` para
+ * a mesma reutilização, porque nada aqui sabia que já tinha rodado.
+ *
+ * A chave de ledger usa um sufixo (`:reuse-event`) diferente da chave que a
+ * criação já consumiu: são duas coisas que a mesma intenção do cuidador
+ * produz, e cada uma precisa da sua própria marca de "já aconteceu".
+ */
 async function recordReuse(
   patientId: number,
   sessionId: string,
@@ -2365,10 +2448,15 @@ async function recordReuse(
     pathId?: string;
     nodeId?: string;
     statementId?: string;
-  }
+  },
+  clientRequestId: string | null
 ): Promise<void> {
   const now = new Date().toISOString();
+  const ledgerKey = clientRequestId ? `${clientRequestId}:reuse-event` : null;
   await firestore.runTransaction(async (transaction) => {
+    const jaAplicada = await lerLedger(transaction, sessionId, ledgerKey);
+    if (jaAplicada) return;
+
     writeAudit(
       transaction,
       {
@@ -2388,6 +2476,15 @@ async function recordReuse(
       },
       now
     );
+    if (ledgerKey) {
+      gravarLedger(
+        transaction,
+        sessionId,
+        ledgerKey,
+        { op: "recordReuse", resultRef: null, assistantId: assistant.id },
+        now
+      );
+    }
   });
 }
 

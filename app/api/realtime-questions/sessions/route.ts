@@ -84,6 +84,8 @@ export async function PATCH(request: Request) {
     patientId?: number;
     sessionId?: string;
     action?: string;
+    /** Chave de idempotência (Fase 4.9.3). */
+    clientRequestId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId || !SESSION_ACTIONS.includes(body.action as SessionAction)) {
@@ -99,7 +101,8 @@ export async function PATCH(request: Request) {
       patientId,
       body.sessionId,
       body.action as SessionAction,
-      { id: auth.user.id, name: auth.user.name }
+      { id: auth.user.id, name: auth.user.name },
+      body.clientRequestId
     );
     void logAudit({
       userId: auth.user.id,

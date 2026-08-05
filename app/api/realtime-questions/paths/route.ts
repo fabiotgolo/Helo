@@ -182,7 +182,8 @@ export async function PATCH(request: Request) {
       body.sessionId,
       body.pathId,
       action,
-      assistant
+      assistant,
+      body.clientRequestId
     );
     return Response.json({ path });
   } catch (e) {
