@@ -59,6 +59,8 @@ import {
   SessionContextDialog,
   SessionContextScreen,
   ContextVersionsList,
+  RASCUNHO_CONTEXTO,
+  RASCUNHO_CONTEXTO_EDICAO,
   type ContextDraft,
 } from "@/components/realtime-questions/session-context";
 import type { SessionContextVersion } from "@/lib/session-context-types";
@@ -643,9 +645,15 @@ export function RealtimeQuestionSession({
       });
       setDetail((d) => ({ ...d, context: salvo }));
       setContextEditing(false);
+      // Gravado: os rascunhos das duas telas de contexto cumpriram o papel e
+      // saem do aparelho. Só aqui — enquanto a gravação não volta, o texto
+      // continua guardado, porque é justamente a falha que ele existe para
+      // atravessar.
+      offline.descartarRascunho(RASCUNHO_CONTEXTO);
+      offline.descartarRascunho(RASCUNHO_CONTEXTO_EDICAO);
       return salvo;
     },
-    [persist, patientId, session.id]
+    [persist, patientId, session.id, offline]
   );
 
   const verContexto = useCallback(async () => {
@@ -1122,6 +1130,7 @@ export function RealtimeQuestionSession({
                 }).catch(() => {})
               }
               onSkip={() => void salvarContexto({ skipped: true }).catch(() => {})}
+              offline={offline}
             />
           ) : interpreting ? (
             /* O cuidador escreve; o registro só nasce ao confirmar. Sair daqui
@@ -1446,6 +1455,7 @@ export function RealtimeQuestionSession({
             }).catch(() => {})
           }
           onClose={() => setContextEditing(false)}
+          offline={offline}
         />
       )}
 

@@ -18,8 +18,9 @@
 // Editar durante a sessão não reescreve: cria uma versão nova e preserva a
 // anterior. A tela avisa antes de gravar.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ModalShell } from "@/components/modal-shell";
+import { RascunhoLocalAviso } from "@/components/realtime-questions/offline-chip";
 import {
   EMPTY_INTERLOCUTOR,
   PersonPicker,
@@ -38,6 +39,36 @@ import {
   MAX_CONTEXT_NOTES_LEN,
   type SessionContextVersion,
 } from "@/lib/session-context-types";
+import type { OfflineBridge } from "@/lib/offline/use-offline-session";
+
+/**
+ * Chaves dos rascunhos DESTAS telas (Fase 4.9.3).
+ *
+ * São duas, e não uma, porque as duas telas partem de valores diferentes: a
+ * inicial nasce vazia, a de edição nasce preenchida com a versão vigente.
+ * Compartilhar a chave faria um texto abandonado numa reaparecer na outra
+ * como se fosse o que valia — e contexto trocado é o tipo de erro que só se
+ * descobre lendo o histórico depois.
+ *
+ * Quem as APAGA depois de gravar é `session.tsx`, no caminho de sucesso de
+ * `salvarContexto` — mesma regra da pergunta e da interpretação: o rascunho só
+ * sai quando o registro entrou.
+ */
+export const RASCUNHO_CONTEXTO = "contexto";
+export const RASCUNHO_CONTEXTO_EDICAO = "contexto-edicao";
+
+/** Há algo digitado? É o que decide se a marca de rascunho local aparece. */
+function temConteudo(draft: ContextDraft): boolean {
+  return Boolean(
+    draft.interlocutor.personId ||
+      draft.interlocutor.name.trim() ||
+      draft.interlocutor.relation.trim() ||
+      draft.intention.trim() ||
+      draft.environment.trim() ||
+      draft.initialTopic.trim() ||
+      draft.notes.trim()
+  );
+}
 
 export interface ContextDraft {
   interlocutor: InterlocutorValue;
@@ -217,13 +248,41 @@ export function SessionContextScreen({
   busy,
   onSave,
   onSkip,
+  offline,
 }: {
   patientId: number;
   busy: boolean;
   onSave: (draft: ContextDraft) => void;
   onSkip: () => void;
+  /** Guarda o que foi digitado e ainda não gravado (Fase 4.9.3). */
+  offline?: OfflineBridge;
 }) {
-  const [draft, setDraft] = useState<ContextDraft>(EMPTY_CONTEXT_DRAFT);
+  // Mesmo desenho do nível em construção (option-conversation/flow.tsx): quem
+  // manda enquanto o cuidador digita é o estado local; o que está guardado é
+  // só o valor de PARTIDA, lido sem estado e sem re-renderizar por isso.
+  const [digitado, setDigitado] = useState<ContextDraft | null>(null);
+
+  const guardado = offline?.rascunhosProntos
+    ? (offline.lerRascunho(RASCUNHO_CONTEXTO) as ContextDraft | undefined)
+    : undefined;
+
+  const draft = digitado ?? guardado ?? EMPTY_CONTEXT_DRAFT;
+
+  // A atualização é FUNCIONAL de propósito. Montar o próximo a partir do
+  // `draft` desta renderização já custou um campo perdido uma vez: dois
+  // eventos antes do próximo render partiam da mesma cópia velha, e o segundo
+  // desfazia o primeiro.
+  const aplicar = (patch: Partial<ContextDraft>) =>
+    setDigitado((atual) => ({
+      ...(atual ?? guardado ?? EMPTY_CONTEXT_DRAFT),
+      ...patch,
+    }));
+
+  // A gravação mora num efeito, e não dentro do atualizador de estado: um
+  // atualizador precisa ser puro, e o React pode executá-lo duas vezes.
+  useEffect(() => {
+    if (digitado) offline?.definirRascunho(RASCUNHO_CONTEXTO, digitado);
+  }, [digitado, offline]);
 
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col gap-5">
@@ -251,8 +310,12 @@ export function SessionContextScreen({
       <CamposDoContexto
         patientId={patientId}
         draft={draft}
-        onChange={(patch) => setDraft((atual) => ({ ...atual, ...patch }))}
+        onChange={aplicar}
         busy={busy}
+      />
+
+      <RascunhoLocalAviso
+        visivel={Boolean(offline?.disponivel) && temConteudo(draft)}
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -307,20 +370,51 @@ export function SessionContextDialog({
   busy,
   onSave,
   onClose,
+  offline,
 }: {
   patientId: number;
   context: SessionContextVersion;
   busy: boolean;
   onSave: (draft: ContextDraft) => void;
   onClose: () => void;
+  /** Guarda o que foi digitado e ainda não gravado (Fase 4.9.3). */
+  offline?: OfflineBridge;
 }) {
-  const [draft, setDraft] = useState<ContextDraft>(() =>
-    context.skipped ? EMPTY_CONTEXT_DRAFT : draftFromContext(context)
-  );
+  const [digitado, setDigitado] = useState<ContextDraft | null>(null);
+
+  // Aqui o ponto de partida NÃO é vazio: é a versão que vale agora. Um
+  // rascunho guardado só entra na frente dela se existir.
+  const base = context.skipped ? EMPTY_CONTEXT_DRAFT : draftFromContext(context);
+  const guardado = offline?.rascunhosProntos
+    ? (offline.lerRascunho(RASCUNHO_CONTEXTO_EDICAO) as ContextDraft | undefined)
+    : undefined;
+
+  const draft = digitado ?? guardado ?? base;
+
+  const aplicar = (patch: Partial<ContextDraft>) =>
+    setDigitado((atual) => ({ ...(atual ?? guardado ?? base), ...patch }));
+
+  useEffect(() => {
+    if (digitado) offline?.definirRascunho(RASCUNHO_CONTEXTO_EDICAO, digitado);
+  }, [digitado, offline]);
+
+  /**
+   * Fechar é cancelamento EXPLÍCITO, e o rascunho sai do aparelho.
+   *
+   * Vale para "Cancelar" e para o descarte do modal (ESC, clique fora), porque
+   * `ModalShell` os trata pelo mesmo caminho. Preferimos assim a guardar um
+   * texto que o cuidador acha que descartou: a versão vigente continua
+   * intacta, e é ela que a tela mostra ao reabrir.
+   */
+  const fechar = () => {
+    setDigitado(null);
+    offline?.descartarRascunho(RASCUNHO_CONTEXTO_EDICAO);
+    onClose();
+  };
 
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={fechar}
       label="Editar o contexto da conversa"
       disableDismiss={busy}
     >
@@ -336,14 +430,17 @@ export function SessionContextDialog({
         <CamposDoContexto
           patientId={patientId}
           draft={draft}
-          onChange={(patch) => setDraft((atual) => ({ ...atual, ...patch }))}
+          onChange={aplicar}
           busy={busy}
+        />
+        <RascunhoLocalAviso
+          visivel={Boolean(offline?.disponivel) && digitado != null}
         />
         <div className="flex flex-wrap gap-3">
           <Primary onClick={() => onSave(draft)} disabled={busy}>
             Salvar nova versão
           </Primary>
-          <Control onClick={onClose} disabled={busy}>
+          <Control onClick={fechar} disabled={busy}>
             Cancelar
           </Control>
         </div>

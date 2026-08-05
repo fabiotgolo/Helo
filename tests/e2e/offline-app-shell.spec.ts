@@ -101,6 +101,18 @@ async function trocarDePaciente(page: Page, patientId: number) {
   await page.goto("/conversa/perguntas", { waitUntil: "domcontentloaded" });
 }
 
+/**
+ * Sessão nova PARADA na etapa de contexto — o formulário que antecede a
+ * conversa. `sessaoCarregada` atravessa esta etapa; aqui ela é o alvo.
+ */
+async function sessaoNoContexto(page: Page) {
+  await abrirModo(page, dados.pacienteId);
+  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Contexto da conversa (opcional)" })
+  ).toBeVisible();
+}
+
 /** Sessão aberta e carregada, com a rede no ar. */
 async function sessaoCarregada(page: Page) {
   await abrirModo(page, dados.pacienteId);
@@ -507,4 +519,110 @@ test("com a rede inteira fora, voltam o caminho, o breadcrumb e a seleção obse
   // …e a seleção provisória preservada, sem virar confirmação.
   await expect(page.getByText("Opção observada: Sim")).toBeVisible();
   await expect(page.getByText(/Resposta confirmada/)).toHaveCount(0);
+});
+
+test("o nível em construção volta com a rede fora — e não vira registro", async ({
+  page,
+  context,
+}) => {
+  // O teste acima recupera o que o SERVIDOR já sabia. Este recupera o que ele
+  // nunca ouviu falar: um nível digitado e não submetido, que só existe neste
+  // aparelho. É a última peça do "recuperar sessão, breadcrumb, seleção e
+  // rascunho" — e a que ninguém consegue redigitar de memória com o paciente
+  // esperando.
+  await iniciarConversaPorOpcoes(page, dados.pacienteId);
+  await shellPronto(page);
+
+  // Digitado, NÃO submetido: nada de "Continuar" aqui.
+  await page.getByLabel("Título ou pergunta do nível").fill("Quer trocar de lugar?");
+  await page.getByLabel(/^Opção 1/).fill("Poltrona");
+  await expect(marcaDeRascunho(page)).toBeVisible();
+  await expect.poll(() => rascunhosGuardados(page)).toBeGreaterThan(0);
+
+  // Enquanto é rascunho, é só rascunho: nenhuma intenção nasceu.
+  const operacoesAntes = await operacoesGuardadas(page);
+
+  await context.setOffline(true);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: /Retomar sessão de/ }).click();
+
+  await expect(page.getByLabel("Título ou pergunta do nível")).toHaveValue(
+    "Quer trocar de lugar?"
+  );
+  await expect(page.getByLabel(/^Opção 1/)).toHaveValue("Poltrona");
+  await expect(marcaDeRascunho(page)).toBeVisible();
+  // Voltou como rascunho, e não como registro: a fila não cresceu.
+  expect(await operacoesGuardadas(page)).toBe(operacoesAntes);
+});
+
+// ════ Rascunho dos campos de contexto (Fase 4.9.3) ════
+//
+// O contexto da conversa é o ÚNICO formulário livre que antecede a sessão —
+// intenção, ambiente, assunto, notas. Ele ficou de fora da 4.9.2 e é o que
+// esta etapa fecha: até aqui, um refresh no meio do preenchimento levava tudo.
+
+const campoIntencao = (page: Page) =>
+  page.getByRole("textbox", { name: "Intenção da conversa" });
+
+test("o contexto digitado e não salvo volta depois de recarregar sem rede", async ({
+  page,
+  context,
+}) => {
+  await sessaoNoContexto(page);
+  await shellPronto(page);
+
+  await campoIntencao(page).fill("Entender por que ele não quis almoçar");
+  await page.getByLabel("Assunto inicial").fill("recusa de alimento");
+  await expect(marcaDeRascunho(page)).toBeVisible();
+  await expect.poll(() => rascunhosGuardados(page)).toBeGreaterThan(0);
+  // Preencher o formulário não registra nada: contexto só existe depois de
+  // "Salvar e começar".
+  expect(await operacoesGuardadas(page)).toBe(0);
+
+  await context.setOffline(true);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: /Retomar sessão de/ }).click();
+
+  await expect(campoIntencao(page)).toHaveValue(
+    "Entender por que ele não quis almoçar"
+  );
+  await expect(page.getByLabel("Assunto inicial")).toHaveValue(
+    "recusa de alimento"
+  );
+  await expect(marcaDeRascunho(page)).toBeVisible();
+  expect(await operacoesGuardadas(page)).toBe(0);
+
+  // Gravado com a rede de volta, o rascunho cumpriu o papel e sai do aparelho.
+  await context.setOffline(false);
+  await page.getByRole("button", { name: "Salvar e começar" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Escreva a pergunta" })
+  ).toBeVisible();
+  await expect.poll(() => rascunhosGuardados(page)).toBe(0);
+});
+
+test("cancelar a edição do contexto apaga o rascunho do aparelho", async ({
+  page,
+}) => {
+  await sessaoNoContexto(page);
+  await shellPronto(page);
+  await page.getByRole("button", { name: "Começar sem contexto" }).first().click();
+  await expect(
+    page.getByRole("heading", { name: "Escreva a pergunta" })
+  ).toBeVisible();
+  await expect.poll(() => rascunhosGuardados(page)).toBe(0);
+
+  // Editar durante a sessão é a segunda tela de contexto — chave própria, para
+  // que um texto abandonado aqui nunca reapareça como se fosse o que valia.
+  await page.getByRole("button", { name: /Editar o contexto/ }).click();
+  await campoIntencao(page).fill("Texto que será descartado");
+  await expect.poll(() => rascunhosGuardados(page)).toBeGreaterThan(0);
+  expect(await operacoesGuardadas(page)).toBe(0);
+
+  await page.getByRole("button", { name: "Cancelar" }).click();
+  await expect.poll(() => rascunhosGuardados(page)).toBe(0);
+
+  // Reabrir mostra a versão vigente, não o texto descartado.
+  await page.getByRole("button", { name: /Editar o contexto/ }).click();
+  await expect(campoIntencao(page)).toHaveValue("");
 });

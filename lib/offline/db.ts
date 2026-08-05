@@ -165,26 +165,75 @@ export function abrirBanco(): Promise<IDBDatabase> {
 // ---------- Chave por escopo ----------
 
 /**
+ * Chaves sendo obtidas AGORA, por escopo. Duas gravações simultâneas partilham
+ * a mesma promessa em vez de disputarem quem cria a chave.
+ */
+const chavesEmVoo = new Map<string, Promise<CryptoKey>>();
+
+/**
  * A chave do escopo. Criada na primeira gravação e mantida até logout, troca
  * de paciente ou expiração. Nunca sai daqui em texto — nem tem como.
+ *
+ * ——— POR QUE ISTO PRECISA SER ATÔMICO ———
+ *
+ * A primeira versão lia numa transação e gravava em outra. Entre as duas cabia
+ * um segundo chamador: os dois liam "não existe", os dois geravam uma chave, e
+ * o segundo `put` sobrescrevia o primeiro. Tudo o que tinha sido cifrado com a
+ * chave perdida virava lixo ilegível — em silêncio, porque `lerTodos` descarta
+ * o que não decifra.
+ *
+ * Não era hipótese. Ao abrir uma sessão, a tela grava o snapshot da sessão e o
+ * dos caminhos no mesmo instante: as duas gravações chamavam isto juntas, uma
+ * das chaves morria, e a conversa ficava irrecuperável exatamente no refresh
+ * sem rede que a Fase 4.9 existe para atravessar. O sintoma era cruel — o
+ * banco cheio, o aparelho "com tudo guardado", e a tela oferecendo só
+ * "Iniciar nova sessão".
+ *
+ * São duas defesas, e as duas são necessárias:
+ *
+ *   1. `chavesEmVoo` resolve a concorrência DENTRO desta aba, que é a que
+ *      causava o problema;
+ *   2. o `get` + `put` na MESMA transação `readwrite` resolve a concorrência
+ *      entre abas — o IndexedDB serializa transações sobre o mesmo store, e
+ *      nenhuma outra se intromete entre as duas operações.
  */
-export async function obterChave(escopo: string): Promise<CryptoKey> {
-  const banco = await abrirBanco();
-  const leitura = banco.transaction(COL.chaves, "readonly");
-  const existente = await pedido<{ escopo: string; chave: CryptoKey } | undefined>(
-    leitura.objectStore(COL.chaves).get(escopo)
-  );
-  if (existente?.chave) return existente.chave;
+export function obterChave(escopo: string): Promise<CryptoKey> {
+  const emVoo = chavesEmVoo.get(escopo);
+  if (emVoo) return emVoo;
 
-  const chave = await gerarChave();
-  const escrita = banco.transaction(COL.chaves, "readwrite");
-  escrita.objectStore(COL.chaves).put({
-    escopo,
-    chave,
-    criadaEm: new Date().toISOString(),
+  const promessa = obterChaveAtomica(escopo).catch((erro) => {
+    // Uma falha não pode ficar memorizada: a gravação seguinte tenta de novo.
+    chavesEmVoo.delete(escopo);
+    throw erro;
   });
-  await transacaoConcluida(escrita);
-  return chave;
+  chavesEmVoo.set(escopo, promessa);
+  return promessa;
+}
+
+async function obterChaveAtomica(escopo: string): Promise<CryptoKey> {
+  const banco = await abrirBanco();
+
+  // A chave é gerada ANTES de abrir a transação de escrita. `gerarChave` é uma
+  // promessa do WebCrypto, e esperar por algo que não seja um pedido do
+  // IndexedDB no meio de uma transação a encerra sozinha.
+  const candidata = await gerarChave();
+
+  const tx = banco.transaction(COL.chaves, "readwrite");
+  const store = tx.objectStore(COL.chaves);
+  // A releitura acontece DENTRO da transação: se outra aba criou a chave nesse
+  // intervalo, é a dela que vale, e a candidata é descartada sem ter cifrado
+  // nada.
+  const existente = await pedido<{ escopo: string; chave: CryptoKey } | undefined>(
+    store.get(escopo)
+  );
+  if (existente?.chave) {
+    await transacaoConcluida(tx);
+    return existente.chave;
+  }
+
+  store.put({ escopo, chave: candidata, criadaEm: new Date().toISOString() });
+  await transacaoConcluida(tx);
+  return candidata;
 }
 
 // ---------- Gravação e leitura de conteúdo ----------
@@ -343,6 +392,10 @@ export function apagarRascunho(
 export async function limparEscopo(escopo: string): Promise<void> {
   const banco = await abrirBanco();
 
+  // A chave memorizada sai junto: guardá-la depois de apagar a do banco faria
+  // esta aba cifrar com uma chave que a próxima abertura não encontraria.
+  chavesEmVoo.delete(escopo);
+
   const txChave = banco.transaction(COL.chaves, "readwrite");
   txChave.objectStore(COL.chaves).delete(escopo);
   await transacaoConcluida(txChave);
@@ -364,6 +417,7 @@ export async function limparEscopo(escopo: string): Promise<void> {
 
 /** Apaga o banco inteiro. É o que o logout chama. */
 export async function limparTudo(): Promise<void> {
+  chavesEmVoo.clear();
   if (bancoAberto) {
     try {
       (await bancoAberto).close();

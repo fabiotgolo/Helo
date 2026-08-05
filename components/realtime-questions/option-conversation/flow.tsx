@@ -31,6 +31,7 @@ import {
   NodeReview,
   type NodeDraft,
 } from "@/components/realtime-questions/option-conversation/node-editor";
+import { RascunhoLocalAviso } from "@/components/realtime-questions/offline-chip";
 import {
   NodeStage,
   useOptionChoices,
@@ -640,6 +641,18 @@ export function OptionConversationFlow({
       <InteractionModeBadge mode={mode} />
 
       {current.kind === "EDIT_NODE" && (
+        <>
+        {/* O nível em construção já era guardado no aparelho, mas a tela não
+            dizia. Sem esta marca, o cuidador não tem como saber que pode
+            fechar o navegador sem perder o que digitou — e a garantia só vale
+            se ele souber que existe. */}
+        <RascunhoLocalAviso
+          visivel={
+            Boolean(offline?.disponivel) &&
+            (draft.promptText.trim().length > 0 ||
+              draft.options.some((o) => o.label.trim().length > 0))
+          }
+        />
         <NodeEditor
           draft={draft}
           busy={busy}
@@ -657,6 +670,7 @@ export function OptionConversationFlow({
             else onLeave();
           }}
         />
+        </>
       )}
 
       {current.kind === "REVIEW_NODE" &&
