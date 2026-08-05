@@ -89,7 +89,10 @@ const LOTES = [
     // reage a isso recarregando em laço. É comportamento do servidor de
     // desenvolvimento, não do produto — por isso aquela suíte roda contra um
     // build de produção, por `npm run test:ui:shell`.
-    arquivos: ["tests/e2e/offline-continuidade.spec.ts"],
+    arquivos: [
+      "tests/e2e/offline-continuidade.spec.ts",
+      "tests/e2e/offline-logout-expiracao.spec.ts",
+    ],
   },
   {
     nome: "responsivo-base",
