@@ -21,6 +21,15 @@
         "node scripts/gen-version.mjs && NEXT_DIST_DIR=.next-check npx next dev --webpack -p 3472"
       ],
       "port": 3472
+    },
+    {
+      "name": "helo-prod-shell",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "NEXT_DIST_DIR=.next-shell npm run build && NEXT_DIST_DIR=.next-shell npx next start -p 3480"
+      ],
+      "port": 3480
     }
   ]
 }

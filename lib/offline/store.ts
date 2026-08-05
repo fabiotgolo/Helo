@@ -13,10 +13,13 @@
 import {
   apagarMeta,
   apagarOperacao,
+  apagarRascunho,
   gravarOperacao,
+  gravarRascunho,
   gravarSnapshot,
   lerMeta,
   lerOperacoes,
+  lerRascunhos,
   lerSnapshots,
   limparEscopo,
   META_DESCARTE,
@@ -50,9 +53,23 @@ export interface AvisoDeDescarte {
   em: string;
 }
 
+/**
+ * Um texto ainda não submetido. `sensivel` encurta o prazo: um rascunho sobre
+ * assunto sensível não fica sete dias num aparelho compartilhado.
+ */
+export interface RascunhoLocal {
+  chave: string;
+  valor: unknown;
+  sensivel: boolean;
+  atualizadoEm: string;
+  sessionId: string;
+  patientId: string;
+}
+
 export interface CargaLocal {
   fila: OfflineOperation[];
   snapshots: OfflineSnapshot[];
+  rascunhos: RascunhoLocal[];
   /** Migração de schema descartou dados. Nunca em silêncio (§8). */
   avisoDeDescarte: AvisoDeDescarte | null;
   /** Snapshots removidos por expiração nesta carga. */
@@ -95,9 +112,10 @@ export class OfflineSessionStore {
    * expira, porque ele é sempre reconstruível.
    */
   async carregar(agora: number = Date.now()): Promise<CargaLocal> {
-    const [brutas, snapshotsBrutos, aviso] = await Promise.all([
+    const [brutas, snapshotsBrutos, rascunhosBrutos, aviso] = await Promise.all([
       lerOperacoes<unknown>(this.escopo),
       lerSnapshots<OfflineSnapshot>(this.escopo),
+      lerRascunhos<RascunhoLocal>(this.escopo),
       lerMeta<AvisoDeDescarte & { chave: string }>(META_DESCARTE),
     ]);
 
@@ -128,9 +146,21 @@ export class OfflineSessionStore {
       vivos.push(s);
     }
 
+    // Rascunho é do escopo E da sessão: um texto da conversa anterior não
+    // reaparece nesta, e um de outro paciente não existe aqui — a chave da
+    // gravação já garante o segundo, e o filtro garante o primeiro.
+    const rascunhos = rascunhosBrutos.filter(
+      (r) =>
+        r &&
+        r.patientId === this.patientId &&
+        r.sessionId === this.sessionId &&
+        !isExpired(r.atualizadoEm, agora, r.sensivel === true)
+    );
+
     return {
       fila,
       snapshots: vivos,
+      rascunhos,
       avisoDeDescarte: aviso
         ? {
             de: aviso.de,
@@ -230,6 +260,28 @@ export class OfflineSessionStore {
       (s) => s.kind === kind && s.sessionId === this.sessionId
     );
     return achado ? (achado.value as T) : null;
+  }
+
+  // ---------- Rascunhos ----------
+
+  salvarRascunho(
+    chave: string,
+    valor: unknown,
+    sensivel = false
+  ): Promise<void> {
+    const rascunho: RascunhoLocal = {
+      chave,
+      valor,
+      sensivel,
+      atualizadoEm: new Date().toISOString(),
+      sessionId: this.sessionId,
+      patientId: this.patientId,
+    };
+    return gravarRascunho(this.escopo, this.sessionId, chave, rascunho);
+  }
+
+  descartarRascunho(chave: string): Promise<void> {
+    return apagarRascunho(this.escopo, this.sessionId, chave);
   }
 
   // ---------- Limpeza ----------

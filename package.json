@@ -28,7 +28,8 @@
     "test:offline": "npm run test:offline:queue && npm run test:offline:projection",
     "test:ui": "playwright test",
     "test:ui:oc": "playwright test tests/e2e/option-conversation-",
-    "test:ui:lotes": "node scripts/run-e2e-batches.mjs"
+    "test:ui:lotes": "node scripts/run-e2e-batches.mjs",
+    "test:ui:shell": "playwright test tests/e2e/offline-app-shell.spec.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

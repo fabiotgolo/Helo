@@ -14,6 +14,7 @@ import { RealtimeQuestionSession } from "@/components/realtime-questions/session
 import { usePatient } from "@/lib/patient";
 import { useAuthUser, redirectToLogin } from "@/lib/use-auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
+import { useAppShell } from "@/lib/offline/app-shell";
 import { sessaoLocalEmCurso } from "@/lib/offline/retomada";
 import {
   useRtqPersistence,
@@ -23,6 +24,10 @@ import { isTerminalSessionStatus } from "@/lib/realtime-question-types";
 import type { ConversationQuestionSession } from "@/lib/realtime-question-types";
 
 export default function PerguntasEmTempoRealPage() {
+  // O app shell é registrado AQUI, e só aqui: esta é a tela que precisa abrir
+  // sem rede. Quem nunca usou o modo não instala Service Worker nenhum, que é
+  // o que "não transformar o Helo inteiro em PWA" quer dizer na prática.
+  const shell = useAppShell();
   const persist = useRtqPersistence();
   const { user, loading: authLoading } = useAuthUser();
   const { patient, patientId, settings, loading: patientLoading } = usePatient();
@@ -207,6 +212,18 @@ export default function PerguntasEmTempoRealPage() {
                   Dashboard
                 </Link>{" "}
                 para iniciar.
+              </p>
+            )}
+
+            {shell.atualizacaoPendente && (
+              <p
+                role="status"
+                data-testid="shell-atualizacao"
+                className="w-full rounded-2xl border border-line bg-card px-5 py-3 text-sm text-ink-soft"
+              >
+                Há uma versão nova do Helo pronta. Ela entra quando você fechar
+                esta aba — não trocamos nada no meio de uma conversa. O que já
+                está guardado neste aparelho não se perde na troca.
               </p>
             )}
 

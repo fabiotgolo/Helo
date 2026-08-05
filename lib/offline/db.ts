@@ -43,13 +43,18 @@ const COL = {
   chaves: "chaves",
   operacoes: "operacoes",
   snapshots: "snapshots",
+  rascunhos: "rascunhos",
   meta: "meta",
 } as const;
 
 type Colecao = (typeof COL)[keyof typeof COL];
 
 /** Coleções de conteúdo: apagadas por escopo, cifradas, com índice por escopo. */
-const COLECOES_DE_CONTEUDO: Colecao[] = [COL.operacoes, COL.snapshots];
+const COLECOES_DE_CONTEUDO: Colecao[] = [
+  COL.operacoes,
+  COL.snapshots,
+  COL.rascunhos,
+];
 
 interface RegistroCifrado {
   id: string;
@@ -280,6 +285,50 @@ export function gravarSnapshot(
 
 export function lerSnapshots<T>(escopo: string): Promise<T[]> {
   return lerTodos<T>(COL.snapshots, escopo);
+}
+
+// ---------- Rascunhos ----------
+//
+// Texto que o cuidador digitou e AINDA NÃO submeteu. Não é intenção (não vai
+// para a fila, não vira operação, não gera auditoria) e não é fato (o servidor
+// nunca ouviu falar dele). É o terceiro estatuto, e por isso mora numa coleção
+// própria em vez de virar um caso especial de uma das outras duas.
+//
+// A chave carrega escopo E sessão: um rascunho nunca reaparece na conversa de
+// outro paciente, nem na sessão seguinte do mesmo.
+
+export function chaveDeRascunho(
+  escopo: string,
+  sessionId: string,
+  chave: string
+): string {
+  return `${escopo}|${sessionId}|${chave}`;
+}
+
+export function gravarRascunho(
+  escopo: string,
+  sessionId: string,
+  chave: string,
+  valor: unknown
+): Promise<void> {
+  return gravar(
+    COL.rascunhos,
+    escopo,
+    chaveDeRascunho(escopo, sessionId, chave),
+    valor
+  );
+}
+
+export function lerRascunhos<T>(escopo: string): Promise<T[]> {
+  return lerTodos<T>(COL.rascunhos, escopo);
+}
+
+export function apagarRascunho(
+  escopo: string,
+  sessionId: string,
+  chave: string
+): Promise<void> {
+  return apagar(COL.rascunhos, chaveDeRascunho(escopo, sessionId, chave));
 }
 
 // ---------- Limpeza ----------

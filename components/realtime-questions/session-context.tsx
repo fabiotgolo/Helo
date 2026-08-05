@@ -109,6 +109,19 @@ function Atalhos({
   );
 }
 
+/**
+ * Os campos avisam O QUE MUDOU, não o rascunho inteiro.
+ *
+ * A versão anterior mandava `{ ...draft, campo: valor }`, com `draft` fechado
+ * na renderização. Funcionava até uma atualização de estado vinda de fora
+ * (agora existem várias, assíncronas, do armazenamento local) cair entre o
+ * evento e a gravação: o rascunho "novo" era montado sobre uma cópia velha, e
+ * o campo digitado ANTES voltava ao valor anterior. Some um campo, sem erro e
+ * sem aviso — e num formulário de contexto clínico isso é dado perdido.
+ *
+ * Mandando só o pedaço, quem aplica é o dono do estado, com atualização
+ * funcional. Não há closure velha para atropelar nada.
+ */
 function CamposDoContexto({
   patientId,
   draft,
@@ -117,7 +130,7 @@ function CamposDoContexto({
 }: {
   patientId: number;
   draft: ContextDraft;
-  onChange: (d: ContextDraft) => void;
+  onChange: (patch: Partial<ContextDraft>) => void;
   busy: boolean;
 }) {
   return (
@@ -125,7 +138,7 @@ function CamposDoContexto({
       <PersonPicker
         patientId={patientId}
         value={draft.interlocutor}
-        onChange={(interlocutor) => onChange({ ...draft, interlocutor })}
+        onChange={(interlocutor) => onChange({ interlocutor })}
         disabled={busy}
       />
 
@@ -137,7 +150,7 @@ function CamposDoContexto({
             value={draft.intention}
             maxLength={MAX_CONTEXT_FIELD_LEN}
             disabled={busy}
-            onChange={(e) => onChange({ ...draft, intention: e.target.value })}
+            onChange={(e) => onChange({ intention: e.target.value })}
             className="min-h-11 rounded-xl border border-line bg-bg px-3 text-ink"
           />
         </label>
@@ -145,7 +158,7 @@ function CamposDoContexto({
           legenda="Sugestões de intenção"
           opcoes={INTENTION_SHORTCUTS}
           valor={draft.intention}
-          onEscolher={(intention) => onChange({ ...draft, intention })}
+          onEscolher={(intention) => onChange({ intention })}
           disabled={busy}
         />
       </div>
@@ -158,7 +171,7 @@ function CamposDoContexto({
             value={draft.environment}
             maxLength={MAX_CONTEXT_FIELD_LEN}
             disabled={busy}
-            onChange={(e) => onChange({ ...draft, environment: e.target.value })}
+            onChange={(e) => onChange({ environment: e.target.value })}
             className="min-h-11 rounded-xl border border-line bg-bg px-3 text-ink"
           />
         </label>
@@ -166,7 +179,7 @@ function CamposDoContexto({
           legenda="Sugestões de ambiente"
           opcoes={ENVIRONMENT_SHORTCUTS}
           valor={draft.environment}
-          onEscolher={(environment) => onChange({ ...draft, environment })}
+          onEscolher={(environment) => onChange({ environment })}
           disabled={busy}
         />
       </div>
@@ -178,7 +191,7 @@ function CamposDoContexto({
           value={draft.initialTopic}
           maxLength={MAX_CONTEXT_FIELD_LEN}
           disabled={busy}
-          onChange={(e) => onChange({ ...draft, initialTopic: e.target.value })}
+          onChange={(e) => onChange({ initialTopic: e.target.value })}
           className="min-h-11 rounded-xl border border-line bg-bg px-3 text-ink"
         />
       </label>
@@ -190,7 +203,7 @@ function CamposDoContexto({
           maxLength={MAX_CONTEXT_NOTES_LEN}
           rows={3}
           disabled={busy}
-          onChange={(e) => onChange({ ...draft, notes: e.target.value })}
+          onChange={(e) => onChange({ notes: e.target.value })}
           className="rounded-xl border border-line bg-bg px-3 py-2 text-ink"
         />
       </label>
@@ -238,7 +251,7 @@ export function SessionContextScreen({
       <CamposDoContexto
         patientId={patientId}
         draft={draft}
-        onChange={setDraft}
+        onChange={(patch) => setDraft((atual) => ({ ...atual, ...patch }))}
         busy={busy}
       />
 
@@ -323,7 +336,7 @@ export function SessionContextDialog({
         <CamposDoContexto
           patientId={patientId}
           draft={draft}
-          onChange={setDraft}
+          onChange={(patch) => setDraft((atual) => ({ ...atual, ...patch }))}
           busy={busy}
         />
         <div className="flex flex-wrap gap-3">

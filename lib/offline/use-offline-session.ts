@@ -17,7 +17,11 @@
 // a opinião do navegador.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OfflineSessionStore, type AvisoDeDescarte } from "@/lib/offline/store";
+import {
+  OfflineSessionStore,
+  type AvisoDeDescarte,
+  type RascunhoLocal,
+} from "@/lib/offline/store";
 import { limparOutrosEscopos } from "@/lib/offline/limpeza";
 import {
   ordenada,
@@ -63,6 +67,12 @@ export interface OfflineBridge {
   marcas: ProjecaoMarcas;
   avisoDeDescarte: AvisoDeDescarte | null;
   reconhecerDescarte: () => void;
+  /**
+   * Quantas áreas de OUTROS pacientes ficaram no aparelho por terem intenção
+   * pendente. Elas não são legíveis daqui — a chave é escopada —, mas o
+   * cuidador precisa saber que existem.
+   */
+  pendenciasDeOutroPaciente: number;
 
   /** Uma requisição real falhou por rede. */
   registrarQueda: () => void;
@@ -78,6 +88,24 @@ export interface OfflineBridge {
 
   /** Guarda uma intenção e devolve o estado projetado depois dela. */
   registrar: (entrada: EntradaOffline) => Promise<RegistroOffline>;
+
+  // ——— Rascunhos: o terceiro estatuto ———
+  //
+  // Texto digitado e ainda NÃO submetido. Ele não entra na fila, não vira
+  // operação, não gera evento de auditoria e não chega perto do portão de
+  // autoria. Sobrevive a refresh e a fechar o navegador porque perder o que o
+  // cuidador acabou de escrever é uma forma pequena e diária de desrespeito.
+
+  /**
+   * Já carregou os rascunhos deste escopo. Vira `true` UMA vez, e é o sinal
+   * para a tela hidratar o campo dela.
+   */
+  rascunhosProntos: boolean;
+  /** O que estava guardado para esta chave. Leitura direta, sem estado. */
+  lerRascunho: (chave: string) => unknown;
+  definirRascunho: (chave: string, valor: unknown, sensivel?: boolean) => void;
+  /** Some com o rascunho: submissão concluída ou cancelamento explícito. */
+  descartarRascunho: (chave: string) => void;
 }
 
 const MARCAS_VAZIAS: ProjecaoMarcas = {
@@ -103,8 +131,30 @@ export function useOfflineSession(args: {
    * primeira renderização, antes de qualquer leitura de banco.
    */
   sementeSessao?: SessionDetailBase | null;
+  /**
+   * Chamado UMA vez, quando os rascunhos deste escopo terminam de ser lidos.
+   *
+   * É por aqui que a tela hidrata os campos dela. O caminho é este, e não um
+   * efeito olhando `rascunhosProntos`, porque atualizar estado dentro do corpo
+   * de um efeito dispara renderizações em cascata — a própria regra de lint do
+   * projeto recusa. Dentro de um retorno assíncrono, não há cascata.
+   */
+  aoCarregarRascunhos?: (valores: Record<string, unknown>) => void;
 }): OfflineBridge {
-  const { userId, patientId, sessionId, assistantName, sementeSessao } = args;
+  const {
+    userId,
+    patientId,
+    sessionId,
+    assistantName,
+    sementeSessao,
+    aoCarregarRascunhos,
+  } = args;
+
+  // Em ref para não entrar nas dependências do efeito de carga: a tela pode
+  // recriar a função a cada render, e recarregar o banco por causa disso seria
+  // ler o mesmo dado dezenas de vezes.
+  const aoCarregarRef = useRef(aoCarregarRascunhos);
+  aoCarregarRef.current = aoCarregarRascunhos;
 
   const disponivel =
     OfflineSessionStore.disponivel() &&
@@ -146,6 +196,29 @@ export function useOfflineSession(args: {
     setFilaEstado(nova);
   }, []);
   const [avisoDeDescarte, setAviso] = useState<AvisoDeDescarte | null>(null);
+
+  // Atrelado ao escopo, e não um objeto solto: trocar de paciente ou de
+  // sessão precisa esvaziar os rascunhos sem que ninguém lembre de zerar
+  // nada — e um rascunho que atravessasse a troca apareceria na conversa
+  // errada, que é o pior lugar possível para um texto aparecer.
+  //
+  // Os VALORES ficam num ref, e não em estado. A primeira versão os guardava
+  // em estado e a tela lia dali a cada tecla — o que fazia a árvore inteira
+  // renderizar por caractere digitado e transformava uma digitação comum numa
+  // rajada de renderizações. Pior: mover estado de digitação para um store
+  // assíncrono abriu espaço para atualizações concorrentes atropelarem o campo
+  // (foi assim que um campo do formulário de contexto sumiu).
+  //
+  // Agora o dono do texto continua sendo a tela, com `useState` local. Este
+  // módulo só GUARDA e DEVOLVE — e `rascunhosProntos`, que vira `true` uma vez,
+  // é o único sinal que atravessa o render.
+  const rascunhosRef = useRef<Record<string, unknown>>({});
+  const [escopoDosRascunhos, setEscopoDosRascunhos] = useState<string | null>(
+    null
+  );
+  const rascunhosProntos =
+    chaveDoEscopo != null && escopoDosRascunhos === chaveDoEscopo;
+  const temporizadores = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   // Palpite inicial do navegador, lido uma vez na montagem. Ele erra em portal
   // cativo e em Wi-Fi sem rota — quem corrige é a primeira requisição real.
   const [online, setOnline] = useState(
@@ -183,6 +256,11 @@ export function useOfflineSession(args: {
         if (cancelado) return;
         setFila(carga.fila);
         setAviso(carga.avisoDeDescarte);
+        rascunhosRef.current = Object.fromEntries(
+          (carga.rascunhos as RascunhoLocal[]).map((r) => [r.chave, r.valor])
+        );
+        setEscopoDosRascunhos(chaveDoEscopo);
+        aoCarregarRef.current?.(rascunhosRef.current);
         for (const s of carga.snapshots) {
           // A semente ganha do guardado: ela veio do servidor nesta abertura,
           // e o guardado pode ser de dias atrás.
@@ -212,9 +290,17 @@ export function useOfflineSession(args: {
 
   // ——— A área de outros pacientes sai do aparelho ———
 
+  const [pendenciasDeOutroPaciente, setPendenciasDeOutroPaciente] = useState(0);
+
   useEffect(() => {
     if (!userId) return;
-    void limparOutrosEscopos(userId, patientId);
+    let cancelado = false;
+    void limparOutrosEscopos(userId, patientId).then((r) => {
+      if (!cancelado) setPendenciasDeOutroPaciente(r.preservados);
+    });
+    return () => {
+      cancelado = true;
+    };
   }, [userId, patientId]);
 
   // ——— Conectividade ———
@@ -236,6 +322,16 @@ export function useOfflineSession(args: {
 
   // ——— Snapshot ———
 
+  /**
+   * Snapshot: memória na hora, disco na hora também.
+   *
+   * Houve uma versão com gravação adiada, para agrupar rajadas. Ela custou
+   * caro: entre a ação e a gravação existia uma janela em que um refresh sem
+   * rede recuperava o estado ANTERIOR — a pergunta recém-criada sumia. O
+   * problema de desempenho que ela tentava resolver era outro (a ponte sem
+   * memoização, que fazia o efeito rodar a cada render), e esse já está
+   * resolvido na origem.
+   */
   const guardarSessao = useCallback(
     (detail: SessionDetailBase) => {
       snapSessao.current = detail;
@@ -337,28 +433,114 @@ export function useOfflineSession(args: {
     [store, projetar, setFila]
   );
 
+  const lerRascunho = useCallback((chave: string) => rascunhosRef.current[chave], []);
+
+  const definirRascunho = useCallback(
+    (chave: string, valor: unknown, sensivel = false) => {
+      rascunhosRef.current = { ...rascunhosRef.current, [chave]: valor };
+      if (!store) return;
+      // A tela já respondeu — quem espera é o disco. Gravar a cada tecla
+      // escreveria dezenas de vezes por frase, e cifrar não é de graça.
+      const anterior = temporizadores.current.get(chave);
+      if (anterior) clearTimeout(anterior);
+      temporizadores.current.set(
+        chave,
+        setTimeout(() => {
+          temporizadores.current.delete(chave);
+          void store.salvarRascunho(chave, valor, sensivel).catch(() => {});
+        }, 300)
+      );
+    },
+    [store]
+  );
+
+  const descartarRascunho = useCallback(
+    (chave: string) => {
+      const pendente = temporizadores.current.get(chave);
+      if (pendente) {
+        clearTimeout(pendente);
+        temporizadores.current.delete(chave);
+      }
+      const { [chave]: _fora, ...resto } = rascunhosRef.current;
+      void _fora;
+      rascunhosRef.current = resto;
+      void store?.descartarRascunho(chave).catch(() => {});
+    },
+    [store]
+  );
+
+  useEffect(() => {
+    const mapa = temporizadores.current;
+    return () => {
+      for (const t of mapa.values()) clearTimeout(t);
+      mapa.clear();
+    };
+  }, [chaveDoEscopo]);
+
   const reconhecerDescarte = useCallback(() => {
     setAviso(null);
     void store?.reconhecerDescarte().catch(() => {});
   }, [store]);
 
   const status = useMemo(() => resumo(fila, online), [fila, online]);
+  const filaOrdenada = useMemo(() => ordenada(fila), [fila]);
 
-  return {
-    disponivel,
-    pronto,
-    online,
-    status,
-    fila: useMemo(() => ordenada(fila), [fila]),
-    marcas,
-    avisoDeDescarte,
-    reconhecerDescarte,
-    registrarQueda,
-    registrarSucesso,
-    guardarSessao,
-    guardarCaminhos,
-    sessaoLocal,
-    caminhosLocais,
-    registrar,
-  };
+  // ——— A ponte é MEMOIZADA, e isso não é micro-otimização ———
+  //
+  // Devolver um objeto novo a cada renderização parecia inofensivo e não era.
+  // Ele entra nas dependências de `useRtqPersistence` e dos efeitos de
+  // snapshot lá em cima; com identidade nova a cada quadro, o efeito de
+  // snapshot passava a rodar SEMPRE — ou seja, uma cifragem AES e uma escrita
+  // no IndexedDB por renderização —, e `persist` era reconstruído junto,
+  // derrubando a memoização de toda a árvore abaixo.
+  //
+  // O efeito não aparecia isolado: um teste sozinho passava. Aparecia sob
+  // carga, como timeouts itinerantes na suíte de interface, em testes que não
+  // tinham nada a ver com armazenamento local.
+  return useMemo(
+    () => ({
+      disponivel,
+      pronto,
+      online,
+      status,
+      fila: filaOrdenada,
+      marcas,
+      avisoDeDescarte,
+      reconhecerDescarte,
+      pendenciasDeOutroPaciente,
+      registrarQueda,
+      registrarSucesso,
+      guardarSessao,
+      guardarCaminhos,
+      sessaoLocal,
+      caminhosLocais,
+      registrar,
+      rascunhosProntos,
+      lerRascunho,
+      definirRascunho,
+      descartarRascunho,
+    }),
+    [
+      disponivel,
+      pronto,
+      online,
+      status,
+      filaOrdenada,
+      marcas,
+      avisoDeDescarte,
+      reconhecerDescarte,
+      pendenciasDeOutroPaciente,
+      registrarQueda,
+      registrarSucesso,
+      guardarSessao,
+      guardarCaminhos,
+      sessaoLocal,
+      caminhosLocais,
+      registrar,
+      rascunhosProntos,
+      lerRascunho,
+      definirRascunho,
+      descartarRascunho,
+    ]
+  );
 }

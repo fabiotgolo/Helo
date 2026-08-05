@@ -70,25 +70,62 @@ export async function limparArmazenamentoOffline(): Promise<void> {
   }
 }
 
+export interface ResultadoDaFaxina {
+  /** Escopos de outros pacientes que saíram do aparelho. */
+  removidos: number;
+  /**
+   * Escopos que NÃO foram removidos porque tinham intenção esperando o
+   * servidor. Continuam cifrados e inalcançáveis para o paciente ativo — mas
+   * continuam existindo, e o cuidador é avisado.
+   */
+  preservados: number;
+}
+
 /**
- * Mantém apenas o escopo do usuário e paciente ativos. Roda na troca de
- * paciente: a área do anterior sai do aparelho.
+ * Troca de paciente: a área do anterior sai do aparelho — MENOS quando ela
+ * ainda guarda intenção que ninguém enviou.
+ *
+ * Esta exceção é o ponto da função, e ela custou uma correção: a primeira
+ * versão apagava tudo o que não fosse o paciente ativo. Simples, e errada.
+ * Um cuidador que registrasse três respostas sem rede e trocasse de paciente
+ * para conferir uma dose perderia as três, sem aviso, sem log e sem chance de
+ * recuperar. É exatamente o apagamento silencioso que §8 proíbe.
+ *
+ * O que fica preservado não vaza para lugar nenhum: o escopo é `usuário ::
+ * paciente` e a chave AES é escopada por ele, então a sessão do paciente ativo
+ * não decifra uma linha do que sobrou. O que muda é que o cuidador passa a
+ * saber que há algo pendente em outro lugar.
  */
 export async function limparOutrosEscopos(
   userId: string,
   patientIdNumerico: number | null
-): Promise<void> {
-  if (!cifraDisponivel()) return;
+): Promise<ResultadoDaFaxina> {
+  const vazio = { removidos: 0, preservados: 0 };
+  if (!cifraDisponivel()) return vazio;
   try {
     const manter =
       patientIdNumerico == null
         ? null
         : scopeKey(userId, patientKey(patientIdNumerico));
-    const escopos = await listarEscopos();
-    await Promise.all(
-      escopos.filter((e) => e !== manter).map((e) => limparEscopo(e))
-    );
+    const escopos = (await listarEscopos()).filter((e) => e !== manter);
+
+    let removidos = 0;
+    let preservados = 0;
+    for (const escopo of escopos) {
+      const operacoes = await lerOperacoes<{ status?: string }>(escopo);
+      const pendentes = operacoes.filter(
+        (op) => op?.status && op.status !== "SYNCED"
+      ).length;
+      if (pendentes > 0) {
+        preservados++;
+        continue;
+      }
+      await limparEscopo(escopo);
+      removidos++;
+    }
+    return { removidos, preservados };
   } catch {
     /* banco indisponível — nada a limpar */
+    return vazio;
   }
 }

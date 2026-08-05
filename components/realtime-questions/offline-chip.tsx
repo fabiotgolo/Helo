@@ -95,18 +95,44 @@ function frase(status: OfflineStatusSummary): string {
   }
 }
 
+/**
+ * Diz, com todas as letras, o que aquele texto é.
+ *
+ * "Rascunho salvo neste aparelho" e não "salvo": o cuidador precisa saber que
+ * o texto está guardado E que ninguém mais o viu. Um "salvo" sozinho seria
+ * lido como "o Helo já tem isso", e não tem — nem o servidor, nem a fila, nem
+ * a auditoria. Só existe aqui, e só até ele submeter ou cancelar.
+ */
+export function RascunhoLocalAviso({ visivel }: { visivel: boolean }) {
+  if (!visivel) return null;
+  return (
+    <p
+      role="status"
+      aria-live="polite"
+      data-testid="rascunho-local"
+      className="flex items-center gap-2 self-start text-xs text-ink-mute"
+    >
+      <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-ink-mute" />
+      Rascunho salvo neste aparelho — ainda não enviado ao Helo.
+    </p>
+  );
+}
+
 export function OfflineChip({
   status,
   aviso,
   onReconhecerAviso,
+  pendenciasDeOutroPaciente = 0,
 }: {
   status: OfflineStatusSummary;
   /** Migração de schema descartou dados locais. §8: nunca em silêncio. */
   aviso?: AvisoDeDescarte | null;
   onReconhecerAviso?: () => void;
+  /** Áreas de outros pacientes que ficaram guardadas por terem pendência. */
+  pendenciasDeOutroPaciente?: number;
 }) {
   const aparencia = APARENCIA[status.state];
-  if (!aparencia && !aviso) return null;
+  if (!aparencia && !aviso && pendenciasDeOutroPaciente === 0) return null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -126,6 +152,22 @@ export function OfflineChip({
             className={`h-2 w-2 shrink-0 rounded-full ${aparencia.ponto}`}
           />
           <span>{frase(status)}</span>
+        </div>
+      )}
+
+      {pendenciasDeOutroPaciente > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="offline-outro-paciente"
+          className="self-start rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100"
+        >
+          Há registros de{" "}
+          {pendenciasDeOutroPaciente === 1
+            ? "outro paciente"
+            : `${pendenciasDeOutroPaciente} outros pacientes`}{" "}
+          guardados neste aparelho, aguardando conexão. Volte àquela conversa
+          para enviá-los.
         </div>
       )}
 

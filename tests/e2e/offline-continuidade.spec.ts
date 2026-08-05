@@ -83,15 +83,15 @@ test("a faixa nunca diz 'Sincronizado'", async ({ page, context }) => {
 /**
  * Servidor inalcançável, documento ainda servido.
  *
- * `context.setOffline(true)` derruba TUDO, inclusive o carregamento do HTML —
- * e sem Service Worker o navegador não tem de onde tirá-lo, então um reload
- * nessas condições morre antes de o Helo existir. O app shell é a peça que
- * falta (era a 4.9.1 na auditoria) e NÃO faz parte desta entrega.
+ * Esta é a metade da moeda que roda contra o `next dev`: a página carrega e o
+ * servidor não responde — API fora do ar, backend reiniciando, rede que deixa
+ * o CDN passar e o backend não.
  *
- * O que esta função simula é o outro lado da mesma moeda, e igualmente real:
- * a página carrega e o servidor não responde — API fora do ar, backend
- * reiniciando, rede que deixa o CDN passar e o backend não. É exatamente o
- * caminho que a recuperação local precisa cobrir, e é o que testamos.
+ * A outra metade — rede INTEIRA fora, com o app shell servindo o HTML — vive
+ * em offline-app-shell.spec.ts, que precisa de um build de produção porque o
+ * cliente de HMR do `next dev` recarrega a página em laço quando não alcança o
+ * servidor. Duas suítes, dois ambientes, pelo mesmo motivo: cada uma prova o
+ * que o ambiente dela consegue provar de verdade.
  */
 async function servidorInalcancavel(page: Page) {
   await page.route("**/api/**", (route) => route.abort("failed"));
@@ -104,6 +104,11 @@ test("atualizar a página com o servidor fora volta para a conversa", async ({
   await page.getByLabel("Pergunta para o paciente").fill("Quer descansar?");
   await page.getByRole("button", { name: "Continuar" }).click();
   await expect(page.getByRole("blockquote")).toHaveText("Quer descansar?");
+
+  // A tela reage na hora; o snapshot vai para o IndexedDB logo depois. Sem
+  // esta folga o teste derruba a rede no meio dessa gravação e recupera o
+  // estado ANTERIOR — sincronização do teste, não defeito do produto.
+  await page.waitForTimeout(1200);
 
   await servidorInalcancavel(page);
   await page.reload();
@@ -132,6 +137,11 @@ test("sair da página e voltar com o servidor fora preserva a conversa", async (
   await page.getByLabel("Pergunta para o paciente").fill("Está confortável?");
   await page.getByRole("button", { name: "Continuar" }).click();
   await expect(page.getByRole("blockquote")).toHaveText("Está confortável?");
+
+  // A tela reage na hora; o snapshot vai para o IndexedDB logo depois. Sem
+  // esta folga o teste derruba a rede no meio dessa gravação e recupera o
+  // estado ANTERIOR — sincronização do teste, não defeito do produto.
+  await page.waitForTimeout(1200);
 
   await servidorInalcancavel(page);
   // Sai da rota e volta — o IndexedDB é da origem, não da página, então isto

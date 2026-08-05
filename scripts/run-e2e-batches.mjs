@@ -84,6 +84,11 @@ const LOTES = [
   {
     nome: "offline",
     titulo: "Continuidade sem conexão e armazenamento local",
+    // `offline-app-shell.spec.ts` NÃO entra aqui, e não é esquecimento: ele
+    // recarrega a página com a rede inteira fora, e o HMR do `next dev`
+    // reage a isso recarregando em laço. É comportamento do servidor de
+    // desenvolvimento, não do produto — por isso aquela suíte roda contra um
+    // build de produção, por `npm run test:ui:shell`.
     arquivos: ["tests/e2e/offline-continuidade.spec.ts"],
   },
   {

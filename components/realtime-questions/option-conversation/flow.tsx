@@ -50,6 +50,7 @@ import {
   newRequestId,
   type RtqPersistence,
 } from "@/lib/realtime-question-client";
+import type { OfflineBridge } from "@/lib/offline/use-offline-session";
 import {
   activeTrail,
   isTerminalPathStatus,
@@ -80,12 +81,18 @@ export function OptionConversationFlow({
   onDetail,
   onLeave,
   onSwitchPath,
+  offline,
 }: {
   patientId: number;
   sessionId: string;
   detail: PathDetail;
   profile: PatientResponseProfile | null;
   persist: RtqPersistence;
+  /**
+   * Armazenamento local (Fase 4.9.2). Opcional: sem ele o editor volta ao
+   * comportamento de sempre — rascunho em memória, perdido no refresh.
+   */
+  offline?: OfflineBridge;
   /** Substitui o estado local pelo que o servidor devolveu. */
   onDetail: (detail: PathDetail) => void;
   /** Sai do modo e volta à sessão de perguntas. O caminho continua como está. */
@@ -165,16 +172,41 @@ export function OptionConversationFlow({
     key: string;
     draft: NodeDraft;
   } | null>(null);
+
+  /**
+   * O nível em construção também é rascunho: o texto e as opções existem na
+   * tela ANTES de qualquer registro nascer. Guardá-lo é o que faz um refresh
+   * no meio da montagem não custar a digitação inteira.
+   *
+   * A chave carrega o nível (ou "novo:pai"), então dois níveis em edição não
+   * se sobrescrevem — e a sessão já está no escopo do armazenamento.
+   */
+  const chaveDoRascunho = draftKey ? `nivel:${draftKey}` : "";
+  // Leitura direta do que ficou guardado — sem estado, sem renderizar de novo
+  // por causa disso. Quem manda enquanto o cuidador digita é `typedDraft`.
+  const rascunhoGuardado =
+    chaveDoRascunho && offline?.rascunhosProntos
+      ? (offline.lerRascunho(chaveDoRascunho) as NodeDraft | undefined)
+      : undefined;
+
   const draft =
-    typedDraft?.key === draftKey
-      ? typedDraft.draft
-      : editingNode
-        ? draftFromNode(editingNode)
-        : emptyDraft();
+    (typedDraft?.key === draftKey ? typedDraft.draft : undefined) ??
+    rascunhoGuardado ??
+    (editingNode ? draftFromNode(editingNode) : emptyDraft());
+
   // Função simples, sem memoização: o compilador do React cuida disso, e
   // tentar preservar memoização manual aqui o faz desistir do componente.
-  const setDraft = (next: NodeDraft) =>
+  const setDraft = (next: NodeDraft) => {
     setTypedDraft({ key: draftKey, draft: next });
+    if (chaveDoRascunho) {
+      offline?.definirRascunho(chaveDoRascunho, next, next.isSensitive);
+    }
+  };
+  /** Submetido ou cancelado: o rascunho sai da tela E do aparelho. */
+  const limparRascunho = () => {
+    setTypedDraft(null);
+    if (chaveDoRascunho) offline?.descartarRascunho(chaveDoRascunho);
+  };
 
   // Numa interpretação (Fase 4.2) o contêiner não tem árvore: o selo precisa
   // dizer que os sinais valem sobre o que o CUIDADOR entendeu, e não fingir
@@ -258,7 +290,7 @@ export function OptionConversationFlow({
         isSensitive: draft.isSensitive,
         sensitiveCategory: draft.sensitiveCategory,
       });
-      setTypedDraft(null);
+      limparRascunho();
       setScreen(null);
       await reload();
     } catch {
@@ -326,7 +358,7 @@ export function OptionConversationFlow({
    */
   const requestNodeEdit = async (node: OptionConversationNode) => {
     if (node.status === "DRAFT" || node.status === "REVIEWED") {
-      setTypedDraft(null);
+      limparRascunho();
       setScreen({
         kind: "EDIT_NODE",
         nodeId: node.id,
@@ -351,7 +383,7 @@ export function OptionConversationFlow({
         node.id,
         newRequestId("replace-node")
       );
-      setTypedDraft(null);
+      limparRascunho();
       setScreen({
         kind: "EDIT_NODE",
         nodeId: created.id,
@@ -407,7 +439,7 @@ export function OptionConversationFlow({
         path.id,
         newRequestId("restart")
       );
-      setTypedDraft(null);
+      limparRascunho();
       setScreen(null);
       // O caminho atual fica registrado como RESTARTED; a tela passa a ser a
       // do caminho novo, sem sair do modo.
@@ -620,7 +652,7 @@ export function OptionConversationFlow({
               : void createNode(current.parentNodeId)
           }
           onCancel={() => {
-            setTypedDraft(null);
+            limparRascunho();
             if (current.nodeId) void cancelNode(current.nodeId);
             else onLeave();
           }}

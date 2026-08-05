@@ -492,15 +492,51 @@ paciente, pela MESMA `pacienteEstaOlhando` que governa a barra de contexto.
   IndexedDB, com versionamento de schema.
 - `lib/offline/store.ts` · `use-offline-session.ts` · `retomada.ts` — fachada,
   ponte com a tela e recuperação após refresh.
+- `public/sw.js` · `lib/offline/app-shell.ts` — o app shell: recarregar, fechar
+  e reabrir o navegador **sem rede nenhuma**.
 
-**Limitações, ditas por inteiro.** Um *reload com a rede completamente fora* não
-carrega o app: falta o Service Worker do app shell, que não faz parte desta
-entrega. O que já funciona é o servidor inalcançável com a página carregada —
-API fora do ar, backend reiniciando —, e é esse o caminho testado. **O envio da
-fila ao servidor é a 4.9.3**: nada sai deste aparelho ainda. E a cifra local é
-**higiene, não confidencialidade**: ela não protege contra XSS, extensão do
-navegador, aparelho desbloqueado ou perícia com acesso ao disco. O escopo
-(`usuário::paciente`) fica legível; o conteúdo da conversa, não.
+**O app shell.** Um Service Worker guarda o necessário para a tela da sessão
+abrir sem rede: o HTML pré-renderizado da rota e os pedaços do aplicativo que
+ela usa. Ele **nunca** guarda `/api/**`, nada que não seja GET, nada de outra
+origem e nenhum payload RSC — uma resposta de API guardada seria dado clínico
+servido como se fosse atual. Tudo é **rede primeiro**: com servidor no ar o
+servidor sempre ganha, e o cache só aparece quando não há resposta nenhuma. Não
+é PWA: sem manifest, sem prompt de instalação, sem push, e registrado apenas
+pela tela de Perguntas em tempo real — quem nunca abriu o modo não tem Service
+Worker. O cache é nomeado pela versão do app (que viaja no `?v=` da URL do
+Worker) e o antigo morre na ativação. Uma versão nova **espera a aba fechar**
+em vez de trocar os pedaços do aplicativo no meio de uma conversa; a fila vive
+no IndexedDB, que o Worker nem lê, então a troca não perde intenção alguma.
+
+Ele só é registrado em **produção**. Em `next dev` seria inútil e caro ao mesmo
+tempo: os pedaços trocam de conteúdo a cada edição, e a precarga pede dezenas
+deles de uma vez a um servidor que compila sob demanda — o mesmo trabalho feito
+duas vezes, telas de dois segundos estourando dez. Para experimentar offline
+localmente, suba o build de produção (`helo-prod-shell` em
+`.claude/launch.json`).
+
+**Rascunhos.** Texto digitado e ainda não submetido — pergunta, interpretação,
+nível em construção — sobrevive a refresh e a fechar o navegador, marcado na
+tela como *"Rascunho salvo neste aparelho — ainda não enviado ao Helo"*. Ele é
+o terceiro estatuto: **não entra na fila, não vira operação, não gera evento de
+auditoria e não chega perto do portão de autoria**. Sai do aparelho na
+submissão, no cancelamento explícito, na troca de paciente, no logout ou por
+expiração.
+
+**Troca de paciente.** A área do paciente anterior sai do aparelho — **exceto**
+quando ela ainda guarda intenção que ninguém enviou. Nesse caso ela fica (o
+cuidador é avisado de que existe) e continua ilegível para a sessão atual, cuja
+chave é de outro escopo. Apagá-la seria o apagamento silencioso que a fase
+proíbe.
+
+**Limitações, ditas por inteiro.** **O envio da fila ao servidor é a 4.9.3**:
+nada sai deste aparelho ainda. A cifra local é **higiene, não
+confidencialidade** — não protege contra XSS, extensão do navegador, aparelho
+desbloqueado ou perícia com acesso ao disco; o escopo (`usuário::paciente`)
+fica legível, o conteúdo da conversa não. E a suíte do app shell
+(`npm run test:ui:shell`) exige um **build de produção**: contra o `next dev`,
+recarregar sem rede faz o cliente de HMR recarregar a página em laço — defeito
+do servidor de desenvolvimento, não do produto.
 
 ## Testes
 
@@ -508,6 +544,7 @@ Testes de integração rodam contra o **emulador** + dev server. Nunca contra
 produção — os scripts limpam o banco do emulador.
 
 ```bash
+npm run test:offline     # fila e projeção local (domínio puro, sem rede)
 npm run test:access      # autorização, vínculos e permissões
 npm run test:activities  # Atividades
 npm run test:feedback    # Feedback & Support (banco isolado, ex.: feedback-test)
