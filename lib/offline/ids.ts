@@ -71,7 +71,10 @@ export function newEntityId(prefixo: PrefixoEntidade): string {
  * (nada prova), mas recusa o que é claramente lixo antes de virar chave de
  * documento no Firestore — inclusive `/`, que quebraria o caminho da coleção.
  */
-export function isValidEntityId(v: unknown, prefixo?: PrefixoEntidade): boolean {
+export function isValidEntityId(
+  v: unknown,
+  prefixo?: PrefixoEntidade
+): v is string {
   if (typeof v !== "string") return false;
   if (v.length < 8 || v.length > 80) return false;
   if (!/^[a-z0-9]+$/.test(v)) return false;

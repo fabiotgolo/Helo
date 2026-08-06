@@ -197,6 +197,46 @@ export interface OfflineOperation {
    * identidade definitiva do registro.
    */
   createdEntityId: string | null;
+
+  // ——— Confirmação remota (Fase B) ———
+  //
+  // Preenchidos SOMENTE depois que o servidor responde com sucesso — nunca
+  // otimisticamente, nunca a partir de um palpite local.
+
+  /**
+   * O horário que o SERVIDOR devolveu como referência da confirmação (o
+   * `updatedAt`/`createdAt` da entidade na resposta). Não é o relógio deste
+   * aparelho — é o retrato de quando o servidor disse "aceito".
+   */
+  remoteConfirmedAt: string | null;
+  /**
+   * O identificador que o servidor confirmou para o registro afetado.
+   * Normalmente é IGUAL a `createdEntityId` — o cliente propõe, o servidor
+   * aceita (§3.3 revisto) — e diferir dos dois só aconteceria se o servidor
+   * tivesse recusado a proposta, o que já é um erro tratado antes de chegar
+   * aqui. Existe como campo próprio porque a confirmação é um FATO do
+   * servidor, não uma repetição do que o cliente já sabia.
+   */
+  remoteEntityId: string | null;
+}
+
+// ---------- Retry e backoff (Fase B, §9 da auditoria) ----------
+
+/** Depois disto, a operação para de tentar sozinha e vira FAILED. */
+export const MAX_RETRY = 8;
+
+/**
+ * Backoff exponencial com teto e um pouco de ruído — o ruído existe para que
+ * várias abas ou vários dispositivos do MESMO cuidador, se caírem juntos, não
+ * batam no servidor todos no mesmo milissegundo quando a rede volta.
+ *
+ * 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s (teto 300s) — a mesma progressão que
+ * o algoritmo da auditoria descreve, só com números concretos.
+ */
+export function backoffMs(retryCount: number): number {
+  const base = Math.min(2000 * 2 ** Math.max(0, retryCount - 1), 300_000);
+  const ruido = base * 0.2 * Math.random();
+  return Math.round(base + ruido);
 }
 
 // ---------- Snapshot ----------
@@ -230,25 +270,38 @@ export interface OfflineDraft {
 }
 
 // ---------- Estado visual ----------
-// "Sincronizado" NÃO existe nesta fase: nada foi confirmado remotamente
-// (§6). O dia em que existir, ele nasce da confirmação do servidor — nunca
-// da ausência de pendências locais.
+//
+// Até a Fase A, "Sincronizado" não existia: nada tinha sido confirmado
+// remotamente. A Fase B é o dia em que ele nasce — e nasce EXATAMENTE como
+// prometido, da confirmação do servidor (`status === "SYNCED"`), nunca da
+// ausência de pendências locais. Uma fila vazia porque nada foi digitado
+// ainda é "SEM_PENDENCIA"; uma fila vazia porque tudo foi enviado e
+// confirmado é "SINCRONIZADO" — são fatos diferentes, e a tela não pode
+// confundir um com o outro.
 
 export type OfflineVisualState =
   | "SEM_PENDENCIA"
   | "SALVO_LOCALMENTE"
   | "AGUARDANDO_CONEXAO"
   | "SINCRONIZACAO_PENDENTE"
+  /** Uma operação está em voo AGORA — não "vai enviar", está enviando. */
+  | "SINCRONIZANDO"
+  /** Havia pendência; o servidor confirmou tudo. Estado transitório. */
+  | "SINCRONIZADO"
   | "CONFLITO"
   | "FALHA"
   | "AUTENTICACAO_NECESSARIA";
 
 export interface OfflineStatusSummary {
   state: OfflineVisualState;
-  /** Operações que ainda esperam o servidor. */
+  /** Operações que ainda esperam o servidor (PENDING ou SYNCING). */
   pending: number;
+  /** Só as que estão EM VOO agora, dentro de `pending`. */
+  syncing: number;
   conflicts: number;
   failures: number;
+  /** Confirmadas pelo servidor e ainda presentes na fila (§ pruneSynced). */
+  synced: number;
   online: boolean;
 }
 

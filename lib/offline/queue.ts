@@ -173,6 +173,8 @@ function vazia(entrada: NovaOperacao): OfflineOperation {
     lastError: null,
     nextRetryAt: null,
     createdEntityId: entrada.createdEntityId ?? null,
+    remoteConfirmedAt: null,
+    remoteEntityId: null,
   };
 }
 
@@ -281,6 +283,8 @@ export function appendOperation(
     lastError: null,
     nextRetryAt: null,
     createdEntityId: entrada.createdEntityId ?? null,
+    remoteConfirmedAt: null,
+    remoteEntityId: null,
   };
 
   return { fila: [...fila, operacao], operacao, deduplicada: false };
@@ -306,6 +310,9 @@ export function markStatus(
     error?: OfflineOperationError | null;
     nextRetryAt?: string | null;
     incrementRetry?: boolean;
+    /** Só faz sentido junto de `status: "SYNCED"` — o fato que o servidor devolveu. */
+    remoteConfirmedAt?: string | null;
+    remoteEntityId?: string | null;
   } = {},
   agora: number = Date.now()
 ): OfflineOperation[] {
@@ -325,6 +332,12 @@ export function markStatus(
       lastError: extra.error === undefined ? op.lastError : extra.error,
       nextRetryAt:
         extra.nextRetryAt === undefined ? op.nextRetryAt : extra.nextRetryAt,
+      remoteConfirmedAt:
+        extra.remoteConfirmedAt === undefined
+          ? op.remoteConfirmedAt
+          : extra.remoteConfirmedAt,
+      remoteEntityId:
+        extra.remoteEntityId === undefined ? op.remoteEntityId : extra.remoteEntityId,
     };
   });
 }
@@ -415,26 +428,41 @@ export function temPendenciaIrrecuperavel(fila: readonly OfflineOperation[]): bo
 // ---------- Estado visual ----------
 
 /**
- * O que o cuidador vê. "Sincronizado" NÃO está aqui, e não é esquecimento:
- * nesta fase nada foi confirmado remotamente, e dizer que foi seria a única
- * mentira que este módulo teria como contar.
+ * O que o cuidador vê. "Sincronizado" só aparece quando `SYNCED` existe de
+ * verdade na fila — nunca da mera ausência de pendência (§6, e agora também
+ * a garantia inversa: ausência de pendência não vira "sincronizado" sozinha).
+ *
+ * A prioridade entre estados segue o que exige mais atenção primeiro:
+ * conflito e falha (decisão do cuidador) vêm antes de sincronizando, que vem
+ * antes de "aguardando" ou "pendente".
  */
 export function resumo(
   fila: readonly OfflineOperation[],
   online: boolean
 ): OfflineStatusSummary {
   const pending = fila.filter((op) => isPendingStatus(op.status)).length;
+  const syncing = fila.filter((op) => op.status === "SYNCING").length;
   const conflicts = fila.filter((op) => op.status === "CONFLICT").length;
   const failures = fila.filter((op) => op.status === "FAILED").length;
+  const synced = fila.filter((op) => op.status === "SYNCED").length;
+  // 401/403 (Fase B, §9): a fila fica FAILED, mas a decisão que resolve não
+  // é "tentar de novo" — é entrar de novo. O chip precisa dizer isso, não
+  // "não conseguimos enviar", que sugeriria um problema de rede.
+  const exigeAutenticacao = fila.some(
+    (op) => op.status === "FAILED" && op.lastError?.kind === "unauthorized"
+  );
 
   let state: OfflineVisualState;
   if (conflicts > 0) state = "CONFLITO";
+  else if (exigeAutenticacao) state = "AUTENTICACAO_NECESSARIA";
   else if (failures > 0) state = "FALHA";
+  else if (syncing > 0) state = "SINCRONIZANDO";
+  else if (pending === 0 && synced > 0) state = "SINCRONIZADO";
   else if (pending === 0) state = "SEM_PENDENCIA";
   else if (!online) state = "AGUARDANDO_CONEXAO";
   else state = "SINCRONIZACAO_PENDENTE";
 
-  return { state, pending, conflicts, failures, online };
+  return { state, pending, syncing, conflicts, failures, synced, online };
 }
 
 // ---------- Restauração ----------
@@ -495,5 +523,7 @@ export function restoreOperation(bruto: unknown): OfflineOperation | null {
     lastError: (v.lastError as OfflineOperationError | null) ?? null,
     nextRetryAt: texto("nextRetryAt"),
     createdEntityId: texto("createdEntityId"),
+    remoteConfirmedAt: texto("remoteConfirmedAt"),
+    remoteEntityId: texto("remoteEntityId"),
   };
 }

@@ -11,6 +11,7 @@ import {
   isNodeActionKind,
   type NodeAction,
 } from "@/lib/option-conversation-machine";
+import { statusForCreationError } from "@/lib/realtime-question-store";
 
 // Níveis de um caminho da conversa por opções.
 //
@@ -54,6 +55,8 @@ export async function POST(request: Request) {
     reuseFromNodeId?: unknown;
     /** "Criar versão corrigida" de um nível já apresentado (§28, §29). */
     replaceNodeId?: unknown;
+    /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). */
+    nodeId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId) {
@@ -105,12 +108,16 @@ export async function POST(request: Request) {
         isSensitive: body.isSensitive,
         sensitiveCategory: body.sensitiveCategory,
         clientRequestId: body.clientRequestId,
+        nodeId: body.nodeId,
       },
       assistant
     );
     return Response.json({ node });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return Response.json(
+      { error: (e as Error).message },
+      { status: statusForCreationError(e) }
+    );
   }
 }
 

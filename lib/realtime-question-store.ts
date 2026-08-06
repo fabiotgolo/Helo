@@ -71,6 +71,59 @@ export function newId(prefix: string): string {
     .slice(2, 8)}`;
 }
 
+// ---------- Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3) ----------
+//
+// A auditoria original propôs handles locais, trocados pelo id do servidor na
+// sincronização. A Fase 4.9.2 — já implementada, testada e em produção —
+// tomou outra decisão de produto: o CLIENTE cunha o id definitivo offline, no
+// MESMO formato de `newId`, e `lib/offline/projection.ts` e toda a interface
+// (openPathId, breadcrumb, dependências entre operações da fila) já tratam
+// esse id como identidade real desde então, não como correlação temporária.
+//
+// Reescrever para handles agora — na Fase B, depois de duas fases já
+// aprovadas sobre a outra base — significaria redesenhar `projection.ts`
+// inteiro e cada referência da interface que hoje é o id do cliente, com
+// risco real de regredir os testes offline já aprovados. A decisão registrada
+// aqui é aceitar o id do cliente no servidor, com a MESMA autoridade que o
+// resto do domínio sempre teve sobre tudo que não é identidade: autenticação,
+// autorização, estado, versão e horário continuam exclusivamente do servidor.
+// O cliente PROPÕE um nome; não propõe um fato.
+//
+// Isto substitui o §3.3 do documento de auditoria. O resto do documento —
+// ledger de idempotência (§3.4), algoritmo de sincronização (§9), matriz de
+// conflitos (§10) — continua valendo sem alteração: nenhum deles dependia de
+// handles, só da identidade ser estável, e ela é, com ou sem handle.
+import { isValidEntityId, PREFIXO, type PrefixoEntidade } from "@/lib/offline/ids";
+
+/**
+ * Resolve o id de um registro em criação.
+ *
+ * Se o cliente propôs um id válido (formato e prefixo do tipo certo), ele é
+ * usado — o cliente PROPÕE a identidade, dentro do formato que só o domínio
+ * define. Proposta ausente ou vazia: comportamento de sempre, o servidor
+ * cunha um novo. Proposta malformada: erro de domínio, ANTES de qualquer
+ * leitura ou escrita — nunca uma tentativa de "corrigir" um id ruim.
+ *
+ * A checagem de COLISÃO (o id já pertencer a outro registro) não está aqui:
+ * exigiria uma leitura, e esta função roda antes da transação abrir. É
+ * responsabilidade de quem chama, dentro da mesma transação que vai gravar —
+ * ver o comentário em `createTurn`.
+ */
+export function resolveEntityId(
+  prefixo: PrefixoEntidade,
+  proposto: unknown
+): string {
+  if (proposto === undefined || proposto === null || proposto === "") {
+    return newId(prefixo);
+  }
+  if (!isValidEntityId(proposto, prefixo)) {
+    throw new RtqDomainError(
+      `identificador proposto pelo cliente é inválido para ${prefixo}`
+    );
+  }
+  return proposto;
+}
+
 /** Apara os excessos e respeita o teto, preservando acentos e pontuação (§6). */
 export function cleanText(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
@@ -253,10 +306,66 @@ export interface LedgerEntry {
   resultRef: { kind: string; id: string } | null;
   assistantId: string;
   appliedAt: string;
+  /**
+   * Impressão do CONTEÚDO da intenção original (Fase 4.9.3). Opcional — só as
+   * quatro criações que aceitam id proposto pelo cliente a preenchem.
+   *
+   * Sem isto, a MESMA `clientRequestId` reaparecendo com um payload
+   * DIFERENTE seria tratada como replay e devolveria silenciosamente o
+   * resultado antigo — descartando uma intenção genuinamente distinta do
+   * cuidador. Com isto, essa situação vira um erro explícito: não é reenvio,
+   * é a mesma chave usada para duas coisas diferentes.
+   */
+  payloadFingerprint?: string;
 }
 
 const appliedRequestsCol = (sessionId: string) =>
   sessionDoc(sessionId).collection("appliedRequests");
+
+/**
+ * Serialização estável de um objeto — chaves ordenadas, para que a mesma
+ * intenção monte sempre a mesma impressão independente da ordem em que os
+ * campos foram inseridos. Mesma técnica de `lib/offline/queue.ts:fingerprint`
+ * (duplicada de propósito: aquele módulo é puro e não importa nada daqui).
+ */
+function conteudoEstavel(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  if (typeof v !== "object") return JSON.stringify(v) ?? "null";
+  if (Array.isArray(v)) return `[${v.map(conteudoEstavel).join(",")}]`;
+  const entradas = Object.entries(v as Record<string, unknown>)
+    .filter(([, valor]) => valor !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entradas
+    .map(([k, valor]) => `${JSON.stringify(k)}:${conteudoEstavel(valor)}`)
+    .join(",")}}`;
+}
+
+export function payloadFingerprint(conteudo: unknown): string {
+  return conteudoEstavel(conteudo);
+}
+
+/**
+ * Erro específico para "mesma chave, intenção diferente" — distinto de um
+ * `RtqDomainError` comum porque o cliente precisa reagir diferente: um erro
+ * de domínio comum é "sua ação foi recusada"; este é "isto não é um
+ * reenvio", e o motor de sincronização (Fase B) o marca CONFLICT, nunca
+ * FAILED — retentar não resolve, é a mesma colisão de novo.
+ */
+export class RtqIdempotencyConflictError extends RtqDomainError {
+  constructor(message = "mesma chave de idempotência usada para uma intenção diferente") {
+    super(message);
+    this.name = "RtqIdempotencyConflictError";
+  }
+}
+
+/**
+ * O código HTTP para um erro capturado numa rota de criação. Só as quatro
+ * rotas que aceitam id proposto pelo cliente (turns, paths, nodes,
+ * statements) usam isto — as demais continuam com 400 fixo, como sempre.
+ */
+export function statusForCreationError(e: unknown): number {
+  return e instanceof RtqIdempotencyConflictError ? 409 : 400;
+}
 
 /** Normaliza um `clientRequestId` recebido do corpo da requisição. */
 export function requestIdOf(v: unknown): string | null {
@@ -472,6 +581,8 @@ export interface TurnInput {
   reusedFromTurnId?: unknown;
   /** Chave de idempotência (Fase 4.9.3, §3.4a). Opcional — quem não manda não é deduplicado. */
   clientRequestId?: unknown;
+  /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). Opcional. */
+  turnId?: unknown;
 }
 
 function normalizeSource(v: unknown): QuestionSource {
@@ -522,12 +633,19 @@ export async function createTurn(
       : null;
 
   const now = new Date().toISOString();
-  const id = newId("cqt");
+  // O cliente PROPÕE a identidade (Fase 4.9.3); o formato é a única coisa
+  // verificada aqui. `resolveEntityId` lança ANTES de qualquer leitura se a
+  // proposta for malformada — nunca tenta "corrigir" um id ruim.
+  const id = resolveEntityId(PREFIXO.turn, input.turnId);
   const clientRequestId = requestIdOf(input.clientRequestId);
 
   return firestore.runTransaction(async (transaction) => {
     const ref = sessionDoc(sessionId);
-    const doc = await transaction.get(ref);
+    const tRef = turnsCol(sessionId).doc(id);
+    const [doc, jaExiste] = await Promise.all([
+      transaction.get(ref),
+      transaction.get(tRef),
+    ]);
     if (!doc.exists) throw new RtqDomainError("sessão não encontrada");
     const session = toSession(doc.id, doc.data()!);
     if (session.patientId !== patientId) {
@@ -537,14 +655,42 @@ export async function createTurn(
     // G2 fechado para criação: um reenvio da mesma intenção (mesma
     // `clientRequestId`) devolve o turno já criado em vez de tentar criar um
     // segundo. Antes disto, a dedup só existia no cliente.
+    const fingerprint = payloadFingerprint({
+      text,
+      questionSource,
+      isSensitive,
+      sensitiveCategory,
+      reusedFromTurnId,
+    });
     const jaAplicada = await lerLedger(transaction, sessionId, clientRequestId);
     if (jaAplicada?.resultRef) {
       const existente = await transaction.get(
         turnsCol(sessionId).doc(jaAplicada.resultRef.id)
       );
-      if (existente.exists) return toTurn(existente.id, existente.data()!);
+      if (existente.exists) {
+        // Mesma chave, conteúdo DIFERENTE: não é reenvio, é colisão de
+        // intenções — nunca devolve o resultado da outra em silêncio.
+        if (
+          jaAplicada.payloadFingerprint &&
+          jaAplicada.payloadFingerprint !== fingerprint
+        ) {
+          throw new RtqIdempotencyConflictError();
+        }
+        return toTurn(existente.id, existente.data()!);
+      }
       // Ledger aponta para algo que sumiu — segue como se não houvesse
       // registro; é mais seguro tentar de novo do que travar o cuidador.
+    }
+
+    // Chegou até aqui sem ter sido reconhecida pelo ledger: se o id proposto
+    // já pertence a um registro, é uma COLISÃO de verdade — não um replay —
+    // e nunca vira sobrescrita silenciosa. Só é alcançável quando o cliente
+    // propôs um id (id gerado no servidor nunca colide: `newId` inclui o
+    // relógio e aleatoriedade próprios).
+    if (jaExiste.exists) {
+      throw new RtqDomainError(
+        "identificador já pertence a outro registro; não é possível reutilizá-lo"
+      );
     }
 
     assertSessionAcceptsNewTurn(session.status);
@@ -635,7 +781,12 @@ export async function createTurn(
         transaction,
         sessionId,
         clientRequestId,
-        { op: "createTurn", resultRef: { kind: "turn", id }, assistantId: assistant.id },
+        {
+          op: "createTurn",
+          resultRef: { kind: "turn", id },
+          assistantId: assistant.id,
+          payloadFingerprint: fingerprint,
+        },
         now
       );
     }

@@ -3,6 +3,7 @@ import {
   createTurn,
   listTurns,
   runTurnAction,
+  statusForCreationError,
 } from "@/lib/realtime-question-store";
 import {
   isTurnActionKind,
@@ -48,6 +49,8 @@ export async function POST(request: Request) {
     reusedFromTurnId?: unknown;
     /** Chave de idempotência (Fase 4.9.3). */
     clientRequestId?: unknown;
+    /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). */
+    turnId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId) {
@@ -69,12 +72,16 @@ export async function POST(request: Request) {
         sensitiveCategory: body.sensitiveCategory,
         reusedFromTurnId: body.reusedFromTurnId,
         clientRequestId: body.clientRequestId,
+        turnId: body.turnId,
       },
       { id: auth.user.id, name: auth.user.name }
     );
     return Response.json({ turn });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return Response.json(
+      { error: (e as Error).message },
+      { status: statusForCreationError(e) }
+    );
   }
 }
 

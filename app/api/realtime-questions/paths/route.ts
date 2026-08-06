@@ -14,6 +14,7 @@ import {
   isPathActionKind,
   type PathAction,
 } from "@/lib/option-conversation-machine";
+import { statusForCreationError } from "@/lib/realtime-question-store";
 
 // Caminhos da conversa por opções, dentro de uma sessão de Perguntas em tempo
 // real. Criar/operar exige createSession; consultar exige viewSessions.
@@ -66,6 +67,8 @@ export async function POST(request: Request) {
     clientRequestId?: unknown;
     /** "REUSE" copia um caminho concluído para um caminho NOVO (§25). */
     reuseFromPathId?: unknown;
+    /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). */
+    pathId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId) {
@@ -92,12 +95,15 @@ export async function POST(request: Request) {
     const path = await createPath(
       patientId,
       body.sessionId,
-      { clientRequestId: body.clientRequestId },
+      { clientRequestId: body.clientRequestId, pathId: body.pathId },
       assistant
     );
     return Response.json({ path });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return Response.json(
+      { error: (e as Error).message },
+      { status: statusForCreationError(e) }
+    );
   }
 }
 

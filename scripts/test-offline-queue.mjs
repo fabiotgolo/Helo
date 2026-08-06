@@ -602,9 +602,10 @@ console.log("\nO que o cuidador vê:");
   const comFalha = markStatus(fila, fila[0].id, "FAILED");
   check("falha aparece como falha", resumo(comFalha, true).state === "FALHA");
 
-  // O estado "SINCRONIZADO" não existe nesta fase, e o teste garante que
-  // ninguém o introduza por engano: nada foi confirmado remotamente ainda.
-  const estados = new Set(
+  // Até aqui, nenhum caminho testado passou pelo servidor — e nenhum produz
+  // "Sincronizado". A partir da Fase B isso deixa de ser universal: existe
+  // um caminho real que leva lá, e é ele que os testes abaixo percorrem.
+  const semServidorAinda = new Set(
     [
       resumo([], true),
       resumo([], false),
@@ -615,8 +616,33 @@ console.log("\nO que o cuidador vê:");
     ].map((r) => r.state)
   );
   check(
-    "nenhum caminho produz 'Sincronizado' — nada foi confirmado remotamente",
-    ![...estados].some((e) => String(e).includes("SINCRONIZADO"))
+    "nenhum destes caminhos produz 'Sincronizado' — nenhum passou por confirmação",
+    ![...semServidorAinda].some((e) => String(e).includes("SINCRONIZADO"))
+  );
+
+  // Fase B: "Sincronizado" nasce EXATAMENTE da confirmação — SYNCED de
+  // verdade na fila — nunca da ausência de pendência sozinha.
+  const emVoo = markStatus(fila, fila[0].id, "SYNCING");
+  check(
+    "uma operação em voo mostra 'Sincronizando', não 'pendente'",
+    resumo(emVoo, true).state === "SINCRONIZANDO"
+  );
+  const confirmada = markStatus(emVoo, fila[0].id, "SYNCED");
+  check(
+    "confirmada pelo servidor: 'Sincronizado', com a contagem exata",
+    resumo(confirmada, true).state === "SINCRONIZADO" &&
+      resumo(confirmada, true).synced === 1 &&
+      resumo(confirmada, true).pending === 0
+  );
+
+  // 401/403 (Fase B, §9): a fila fica FAILED, mas o texto certo é "entre de
+  // novo" — não "não conseguimos enviar", que sugere um problema de rede.
+  const semAutorizacao = markStatus(fila, fila[0].id, "FAILED", {
+    error: { kind: "unauthorized", message: "sessão expirada", at: new Date().toISOString() },
+  });
+  check(
+    "401/403 mostra 'Autenticação necessária', não 'Falha' genérica",
+    resumo(semAutorizacao, true).state === "AUTENTICACAO_NECESSARIA"
   );
 }
 

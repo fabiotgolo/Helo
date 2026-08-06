@@ -16,6 +16,7 @@ import {
   isSensitiveCategory,
 } from "@/lib/realtime-question-types";
 import { isStatementOrigin } from "@/lib/option-conversation-types";
+import { statusForCreationError } from "@/lib/realtime-question-store";
 
 // Mensagem em construção e frase final de um caminho.
 //
@@ -61,6 +62,15 @@ export async function POST(request: Request) {
     reuseFromStatementId?: unknown;
     /** "Criar versão corrigida" de uma frase já apresentada (§30). */
     replaceStatementId?: unknown;
+    /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). */
+    statementId?: unknown;
+    /**
+     * Id proposto para o CAMINHO que a interpretação cria — campo próprio, e
+     * não `pathId`: aquele já decide, pela ausência, qual ramo desta rota
+     * roda (linha abaixo, `!body.pathId`). Reaproveitá-lo faria uma
+     * interpretação com id proposto cair no ramo errado.
+     */
+    interpretationPathId?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId) {
@@ -100,6 +110,8 @@ export async function POST(request: Request) {
           isSensitive: body.isSensitive,
           sensitiveCategory: body.sensitiveCategory,
           clientRequestId: body.clientRequestId,
+          pathId: body.interpretationPathId,
+          statementId: body.statementId,
         },
         assistant
       );
@@ -136,12 +148,16 @@ export async function POST(request: Request) {
         isSensitive: body.isSensitive,
         sensitiveCategory: body.sensitiveCategory,
         clientRequestId: body.clientRequestId,
+        statementId: body.statementId,
       },
       assistant
     );
     return Response.json({ statement });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return Response.json(
+      { error: (e as Error).message },
+      { status: statusForCreationError(e) }
+    );
   }
 }
 

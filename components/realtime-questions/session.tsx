@@ -1066,6 +1066,7 @@ export function RealtimeQuestionSession({
               aviso={offline.avisoDeDescarte}
               onReconhecerAviso={offline.reconhecerDescarte}
               pendenciasDeOutroPaciente={offline.pendenciasDeOutroPaciente}
+              onSincronizarAgora={offline.tentarNovamente}
             />
           )}
 

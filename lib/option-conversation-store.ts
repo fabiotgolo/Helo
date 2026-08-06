@@ -69,10 +69,14 @@ import {
   gravarLedger,
   lerLedger,
   newId,
+  payloadFingerprint,
+  resolveEntityId,
+  RtqIdempotencyConflictError,
   sessionDoc,
   writeAudit,
   type Assistant,
 } from "@/lib/realtime-question-store";
+import { PREFIXO } from "@/lib/offline/ids";
 import {
   isSensitiveCategory,
   type RtqSessionStatus,
@@ -372,6 +376,8 @@ export interface CreatePathInput {
   restartedFromPathId?: unknown;
   /** O que o caminho hospeda. Ausente = árvore de opções (Fase 4.2). */
   kind?: PathKind;
+  /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). Opcional. */
+  pathId?: unknown;
 }
 
 function requestIdOf(v: unknown): string | null {
@@ -393,7 +399,7 @@ export async function createPath(
 ): Promise<OptionConversationPath> {
   const clientRequestId = requestIdOf(input.clientRequestId);
   const now = new Date().toISOString();
-  const id = newId("ocp");
+  const id = resolveEntityId(PREFIXO.path, input.pathId);
 
   return firestore.runTransaction(async (transaction) => {
     const sRef = sessionDoc(sessionId);
@@ -410,9 +416,34 @@ export async function createPath(
     const existing = await transaction.get(pathsCol(sessionId));
     const all = existing.docs.map((d) => toPath(d.id, d.data()));
 
+    const kind = isPathKind(input.kind) ? input.kind : "OPTION_TREE";
+    const fingerprint = payloadFingerprint({
+      kind,
+      reusedFromPathId: requestIdOf(input.reusedFromPathId),
+      restartedFromPathId: requestIdOf(input.restartedFromPathId),
+    });
     if (clientRequestId) {
       const already = all.find((p) => p.clientRequestId === clientRequestId);
-      if (already) return already;
+      if (already) {
+        const fingerprintDoCaminho = payloadFingerprint({
+          kind: already.kind,
+          reusedFromPathId: already.reusedFromPathId,
+          restartedFromPathId: already.restartedFromPathId,
+        });
+        // Mesma chave, conteúdo DIFERENTE: colisão de intenções, não reenvio.
+        if (fingerprintDoCaminho !== fingerprint) {
+          throw new RtqIdempotencyConflictError();
+        }
+        return already;
+      }
+    }
+    // Sem replay reconhecido: um id proposto que já pertence a outro caminho
+    // é colisão de verdade, não sobrescrita silenciosa. `all` já tem a
+    // coleção inteira lida acima — não precisa de leitura extra.
+    if (all.some((p) => p.id === id)) {
+      throw new RtqDomainError(
+        "identificador já pertence a outro registro; não é possível reutilizá-lo"
+      );
     }
 
     const path: OptionConversationPath = {
@@ -641,6 +672,8 @@ export interface CreateNodeInput {
   sensitiveCategory?: unknown;
   clientRequestId?: unknown;
   reusedFromNodeId?: unknown;
+  /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). Opcional. */
+  nodeId?: unknown;
 }
 
 function normalizeSensitivity(
@@ -761,18 +794,66 @@ export async function createNode(
   const reusedFromNodeId = requestIdOf(input.reusedFromNodeId);
 
   const now = new Date().toISOString();
-  const id = newId("ocn");
+  const id = resolveEntityId(PREFIXO.node, input.nodeId);
 
   return firestore.runTransaction(async (transaction) => {
     const session = await requireSessionInTx(transaction, patientId, sessionId);
     const path = await readPath(transaction, patientId, sessionId, pathId);
     assertAcceptsNodeAction(session.status, path.status, "REVIEW");
 
-    const nodes = await readPathNodes(transaction, sessionId, pathId);
+    const [nodes, colisao] = await Promise.all([
+      readPathNodes(transaction, sessionId, pathId),
+      transaction.get(nodesCol(sessionId).doc(id)),
+    ]);
 
+    // O `id` gerado para cada opção (`normalizeOptions` acima) NÃO entra na
+    // impressão: ele é aleatório a cada chamada, mesmo para o mesmo pedido
+    // lógico — incluí-lo faria todo reenvio legítimo parecer conteúdo novo.
+    const conteudoDasOpcoes = options.map((o) => ({
+      label: o.label,
+      isTerminal: o.isTerminal,
+      finalStatementDraft: o.finalStatementDraft,
+      isSensitive: o.isSensitive,
+      sensitiveCategory: o.sensitiveCategory,
+    }));
+    const fingerprint = payloadFingerprint({
+      promptText,
+      options: conteudoDasOpcoes,
+      isSensitive,
+      sensitiveCategory,
+      parentNodeId,
+      reusedFromNodeId,
+    });
     if (clientRequestId) {
       const already = nodes.find((n) => n.clientRequestId === clientRequestId);
-      if (already) return already;
+      if (already) {
+        const fingerprintDoNivel = payloadFingerprint({
+          promptText: already.promptText,
+          options: already.options.map((o) => ({
+            label: o.label,
+            isTerminal: o.isTerminal,
+            finalStatementDraft: o.finalStatementDraft,
+            isSensitive: o.isSensitive,
+            sensitiveCategory: o.sensitiveCategory,
+          })),
+          isSensitive: already.isSensitive,
+          sensitiveCategory: already.sensitiveCategory,
+          parentNodeId: already.parentNodeId,
+          reusedFromNodeId: already.reusedFromNodeId,
+        });
+        if (fingerprintDoNivel !== fingerprint) {
+          throw new RtqIdempotencyConflictError();
+        }
+        return already;
+      }
+    }
+    // A checagem de colisão é contra a coleção INTEIRA da sessão, não só os
+    // níveis deste caminho: o espaço de ids de `nodes` é compartilhado por
+    // todos os caminhos da sessão (`nodesCol(sessionId)` é único).
+    if (colisao.exists) {
+      throw new RtqDomainError(
+        "identificador já pertence a outro registro; não é possível reutilizá-lo"
+      );
     }
 
     let parent: OptionConversationNode | null = null;
@@ -1541,6 +1622,8 @@ export interface CreateStatementInput {
   clientRequestId?: unknown;
   reusedFromStatementId?: unknown;
   replacesStatementId?: unknown;
+  /** Id proposto pelo cliente (Fase 4.9.3, revisão do §3.3). Opcional. */
+  statementId?: unknown;
 }
 
 function buildStatement(args: {
@@ -1631,22 +1714,51 @@ export async function createStatement(
   const declared = normalizeSensitivity(input.isSensitive, input.sensitiveCategory);
 
   const now = new Date().toISOString();
-  const id = newId("ocs");
+  const id = resolveEntityId(PREFIXO.statement, input.statementId);
 
   return firestore.runTransaction(async (transaction) => {
     const session = await requireSessionInTx(transaction, patientId, sessionId);
     const path = await readPath(transaction, patientId, sessionId, pathId);
     assertAcceptsStatementAction(session.status, path.status, "EDIT");
 
-    const nodes = await readPathNodes(transaction, sessionId, pathId);
-    const existingSnap = await transaction.get(
-      statementsCol(sessionId).where("pathId", "==", pathId)
-    );
+    const [nodes, existingSnap, colisao] = await Promise.all([
+      readPathNodes(transaction, sessionId, pathId),
+      transaction.get(statementsCol(sessionId).where("pathId", "==", pathId)),
+      transaction.get(statementsCol(sessionId).doc(id)),
+    ]);
     const existing = existingSnap.docs.map((d) => toStatement(d.id, d.data()));
 
+    // Só o núcleo controlado pelo cliente entra na impressão: sensibilidade
+    // final pode herdar do trilho da conversa (trailSensitivity, abaixo) e
+    // legitimamente divergir entre duas leituras do mesmo pedido sem que
+    // isso signifique uma intenção diferente.
+    const fingerprint = payloadFingerprint({
+      text,
+      originNodeId,
+      origin,
+      reusedFromStatementId,
+    });
     if (clientRequestId) {
       const already = existing.find((s) => s.clientRequestId === clientRequestId);
-      if (already) return already;
+      if (already) {
+        const fingerprintDaFrase = payloadFingerprint({
+          text: already.originalDraft,
+          originNodeId: already.originNodeId,
+          origin: already.origin,
+          reusedFromStatementId: already.reusedFromStatementId,
+        });
+        if (fingerprintDaFrase !== fingerprint) {
+          throw new RtqIdempotencyConflictError();
+        }
+        return already;
+      }
+    }
+    // Contra a coleção INTEIRA da sessão — o espaço de ids de `statements` é
+    // compartilhado por todos os caminhos, igual a `nodes`.
+    if (colisao.exists) {
+      throw new RtqDomainError(
+        "identificador já pertence a outro registro; não é possível reutilizá-lo"
+      );
     }
 
     const trail = activeTrail(nodes, path.activeNodeId);
@@ -1746,6 +1858,9 @@ export async function createCaregiverInterpretation(
     sensitiveCategory?: unknown;
     clientRequestId?: unknown;
     reusedFromStatementId?: unknown;
+    /** Ids propostos pelo cliente (Fase 4.9.3, revisão do §3.3). */
+    pathId?: unknown;
+    statementId?: unknown;
   },
   assistant: Assistant
 ): Promise<{
@@ -1759,6 +1874,7 @@ export async function createCaregiverInterpretation(
     {
       kind: "CAREGIVER_INTERPRETATION",
       clientRequestId: clientRequestId ? `${clientRequestId}:path` : undefined,
+      pathId: input.pathId,
     },
     assistant
   );
@@ -1773,6 +1889,7 @@ export async function createCaregiverInterpretation(
       sensitiveCategory: input.sensitiveCategory,
       clientRequestId,
       reusedFromStatementId: input.reusedFromStatementId,
+      statementId: input.statementId,
     },
     assistant
   );

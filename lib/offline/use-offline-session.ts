@@ -1,20 +1,20 @@
 "use client";
 
-// ——— A ponte entre a sessão na tela e o armazenamento local (Fase 4.9.2) ———
+// ——— A ponte entre a sessão na tela e o armazenamento local (Fase 4.9.2 + B) ———
 //
 // Um hook, com escopo fixo em (usuário, paciente, sessão). Ele guarda o que o
-// servidor disse, guarda o que o cuidador pediu, e devolve os dois somados —
-// já projetados — para a tela consumir.
-//
-// O que ele NÃO faz, nesta fase: enviar. Nada sai daqui para o servidor. A
-// fila enche, sobrevive a refresh, e espera a 4.9.3.
+// servidor disse, guarda o que o cuidador pediu, projeta os dois somados para
+// a tela consumir — e, desde a Fase B, ENVIA: `sincronizar()` drena a fila
+// para o servidor de verdade, sozinho quando a conexão volta ou o backoff
+// vence, e sob comando quando o cuidador pede.
 //
 // CONECTIVIDADE. `navigator.onLine` responde "estou conectado" em portal
 // cativo, em Wi-Fi sem rota e em VPN caída. Ele serve para saber que a conexão
 // VOLTOU (o evento `online`), não para afirmar que ela existe. Quem afirma é a
 // requisição real: uma falha de rede em `useRtqPersistence` marca offline aqui,
-// e uma resposta do servidor marca online. O estado visual segue os fatos, não
-// a opinião do navegador.
+// e uma resposta do servidor marca online. O gatilho de sincronização por
+// `online` verifica de verdade (`servidorEstaAlcancavel`) antes de tentar —
+// requisito explícito da Fase B, não seria satisfeito só pelo evento.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -28,6 +28,7 @@ import {
   resumo,
   type NovaOperacao,
 } from "@/lib/offline/queue";
+import { servidorEstaAlcancavel, sincronizarFila } from "@/lib/offline/sync-engine";
 import {
   motivoParaRecusarOffline,
   projetarCaminhos,
@@ -88,6 +89,17 @@ export interface OfflineBridge {
 
   /** Guarda uma intenção e devolve o estado projetado depois dela. */
   registrar: (entrada: EntradaOffline) => Promise<RegistroOffline>;
+
+  /**
+   * Drena a fila para o servidor agora (Fase B). Dispara sozinho ao recuperar
+   * conexão de verdade e ao vencer o backoff de uma operação pendente — isto
+   * é o gatilho MANUAL, para o botão "Sincronizar agora" e para qualquer tela
+   * que precise pedir explicitamente. Nunca lança: um problema de rede, de
+   * domínio ou de autenticação fica registrado NA OPERAÇÃO, não aqui.
+   */
+  sincronizar: () => Promise<void>;
+  /** "Sincronizar agora" do cuidador — também reenfileira o que estava FAILED. */
+  tentarNovamente: () => Promise<void>;
 
   // ——— Rascunhos: o terceiro estatuto ———
   //
@@ -320,6 +332,102 @@ export function useOfflineSession(args: {
   const registrarQueda = useCallback(() => setOnline(false), []);
   const registrarSucesso = useCallback(() => setOnline(true), []);
 
+  // ——— Sincronização (Fase B) ———
+  //
+  // `sincronizar` drena o que já pode ir — é o que os três gatilhos
+  // automáticos chamam, e nunca reenfileira nada sozinha: um FAILED continua
+  // parado até alguém decidir (requisito 6, "não repetir automaticamente
+  // erros que exigem decisão humana"). Nunca lança: o resultado de cada
+  // operação fica registrado NELA (SYNCED, PENDING com novo backoff,
+  // CONFLICT ou FAILED).
+
+  const sincronizar = useCallback(async () => {
+    if (!store) return;
+    await sincronizarFila({
+      store,
+      obterFila: () => filaRef.current,
+      aplicarFila: setFila,
+    });
+  }, [store, setFila]);
+
+  /**
+   * "Sincronizar agora", clicado pelo cuidador: ISTO É a decisão humana que
+   * o requisito 6 exige antes de repetir uma operação FAILED — inclusive as
+   * que falharam por 401/403 (§7: a fila fica preservada e ilegível para
+   * outro usuário; entrar de novo e clicar aqui é como ela volta a andar).
+   * CONFLICT fica de fora de propósito: aquela decisão é da Fase C, com o
+   * conteúdo dos dois lados na tela — nunca um reenvio às cegas.
+   */
+  const tentarNovamente = useCallback(async () => {
+    if (!store) return;
+    const comFalha = filaRef.current.filter((op) => op.status === "FAILED");
+    if (comFalha.length > 0) {
+      let atual = filaRef.current;
+      for (const op of comFalha) {
+        atual = await store.marcar(atual, op.id, "PENDING", {
+          error: null,
+          nextRetryAt: null,
+        });
+      }
+      setFila(atual);
+    }
+    await sincronizarFila({
+      store,
+      obterFila: () => filaRef.current,
+      aplicarFila: setFila,
+    });
+  }, [store, setFila]);
+
+  // Gatilho 1 — conexão recuperada, DE VERDADE (requisito 1). O evento
+  // `online` só prova que o navegador mudou de ideia; antes de gastar uma
+  // tentativa de envio, confirma com o servidor.
+  useEffect(() => {
+    if (typeof window === "undefined" || !store) return;
+    let cancelado = false;
+    const aoVoltar = () => {
+      void servidorEstaAlcancavel().then((alcancavel) => {
+        if (cancelado) return;
+        setOnline(alcancavel);
+        if (alcancavel) void sincronizar();
+      });
+    };
+    window.addEventListener("online", aoVoltar);
+    return () => {
+      cancelado = true;
+      window.removeEventListener("online", aoVoltar);
+    };
+  }, [store, sincronizar]);
+
+  // Gatilho 2 — retomada automática do backoff (requisito 6). Reagenda
+  // sempre que a fila muda, para a PRÓXIMA `nextRetryAt` mais cedo entre as
+  // operações PENDING — nunca um intervalo fixo agressivo.
+  useEffect(() => {
+    if (!store) return;
+    const proximas = fila
+      .filter((op) => op.status === "PENDING" && op.nextRetryAt)
+      .map((op) => Date.parse(op.nextRetryAt as string))
+      .filter((t) => Number.isFinite(t));
+    if (proximas.length === 0) return;
+    const espera = Math.max(0, Math.min(...proximas) - Date.now());
+    const id = setTimeout(() => void sincronizar(), espera);
+    return () => clearTimeout(id);
+  }, [store, fila, sincronizar]);
+
+  // Gatilho 3 — ao abrir a tela já com pendência e o navegador dizendo que há
+  // rede, tenta uma vez. Sem isto, uma pendência sem `nextRetryAt` (nunca
+  // tentada, ou reaberta depois de um refresh — `restoreOperation` sempre
+  // devolve PENDING) só sincronizaria no próximo evento `online`, que pode
+  // não vir se a conexão nunca caiu de verdade.
+  const jaTentouAoAbrir = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pronto || !online || !chaveDoEscopo) return;
+    if (jaTentouAoAbrir.current === chaveDoEscopo) return;
+    jaTentouAoAbrir.current = chaveDoEscopo;
+    if (filaRef.current.some((op) => op.status === "PENDING" && !op.nextRetryAt)) {
+      void sincronizar();
+    }
+  }, [pronto, online, chaveDoEscopo, sincronizar]);
+
   // ——— Snapshot ———
 
   /**
@@ -515,6 +623,8 @@ export function useOfflineSession(args: {
       sessaoLocal,
       caminhosLocais,
       registrar,
+      sincronizar,
+      tentarNovamente,
       rascunhosProntos,
       lerRascunho,
       definirRascunho,
@@ -537,6 +647,8 @@ export function useOfflineSession(args: {
       sessaoLocal,
       caminhosLocais,
       registrar,
+      sincronizar,
+      tentarNovamente,
       rascunhosProntos,
       lerRascunho,
       definirRascunho,

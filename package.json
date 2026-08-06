@@ -26,11 +26,13 @@
     "test:offline:queue": "node scripts/test-offline-queue.mjs",
     "test:offline:projection": "node scripts/test-offline-projection.mjs",
     "test:offline:idempotency": "node scripts/test-offline-idempotency.mjs",
-    "test:offline": "npm run test:offline:queue && npm run test:offline:projection",
+    "test:offline:sync-endpoints": "node scripts/test-offline-sync-endpoints.mjs",
+    "test:offline": "npm run test:offline:queue && npm run test:offline:projection && npm run test:offline:sync-endpoints",
     "test:ui": "playwright test",
     "test:ui:oc": "playwright test tests/e2e/option-conversation-",
     "test:ui:lotes": "node scripts/run-e2e-batches.mjs",
-    "test:ui:shell": "playwright test tests/e2e/offline-app-shell.spec.ts"
+    "test:ui:shell": "playwright test tests/e2e/offline-app-shell.spec.ts",
+    "test:ui:sync": "playwright test tests/e2e/offline-sync.spec.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

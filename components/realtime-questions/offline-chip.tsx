@@ -1,23 +1,21 @@
 "use client";
 
-// ——— O que este aparelho guardou (Fase 4.9.2) ———
+// ——— O que este aparelho guardou (Fase 4.9.2) e o que já foi enviado (Fase B) ———
 //
-// Uma faixa discreta, EXCLUSIVA do cuidador. Ela diz três coisas e não diz uma
-// quarta.
+// Uma faixa discreta, EXCLUSIVA do cuidador. Estados possíveis:
 //
-// O que ela diz:
 //   • Salvo neste aparelho — a intenção está guardada, cifrada, e sobrevive a
 //     um refresh e ao navegador fechado;
 //   • Aguardando conexão — está guardada E não há rede;
-//   • Sincronização pendente — há rede, e o envio ainda não existe (4.9.3).
+//   • Sincronização pendente — há rede, o motor ainda não tentou este ciclo;
+//   • Sincronizando — uma operação está EM VOO agora, de verdade;
+//   • Sincronizado — o servidor confirmou tudo que estava pendente;
+//   • Conflito / Falha — exige decisão do cuidador;
+//   • Autenticação necessária — 401/403 durante o envio; a fila continua aqui.
 //
-// O que ela NUNCA diz: "Sincronizado".
-//
-// Nesta fase nada foi confirmado remotamente. Um selo de "tudo certo" seria a
-// única mentira que esta faixa teria como contar, e seria a pior: o cuidador
-// pararia de se preocupar com registros que ainda podem se perder. Quando a
-// 4.9.3 existir, esse selo nascerá da CONFIRMAÇÃO do servidor — nunca da
-// ausência de pendências locais.
+// "Sincronizado" só aparece quando `status.synced > 0` — nasce da CONFIRMAÇÃO
+// do servidor (Fase B), nunca da ausência de pendências locais. Uma fila vazia
+// porque nada foi digitado ainda continua sendo "SEM_PENDENCIA", silenciosa.
 //
 // Onde ela não aparece: no palco do paciente. Quem responde por essa fronteira
 // é `pacienteEstaOlhando`, no ponto de montagem — a mesma função que decide a
@@ -55,6 +53,18 @@ const APARENCIA: Record<
     texto: "text-sky-800 dark:text-sky-200",
     ponto: "bg-sky-500",
   },
+  SINCRONIZANDO: {
+    fundo: "bg-sky-500/10",
+    borda: "border-sky-500/30",
+    texto: "text-sky-800 dark:text-sky-200",
+    ponto: "bg-sky-500 animate-pulse",
+  },
+  SINCRONIZADO: {
+    fundo: "bg-emerald-500/10",
+    borda: "border-emerald-500/30",
+    texto: "text-emerald-800 dark:text-emerald-200",
+    ponto: "bg-emerald-500",
+  },
   CONFLITO: {
     fundo: "bg-rose-500/10",
     borda: "border-rose-500/30",
@@ -82,6 +92,10 @@ function frase(status: OfflineStatusSummary): string {
       return `Aguardando conexão · ${n} ${plural(n, "registro salvo", "registros salvos")} neste aparelho`;
     case "SINCRONIZACAO_PENDENTE":
       return `Sincronização pendente · ${n} ${plural(n, "registro", "registros")} ${plural(n, "aguarda", "aguardam")} envio`;
+    case "SINCRONIZANDO":
+      return `Sincronizando · ${n} ${plural(n, "registro", "registros")} em envio`;
+    case "SINCRONIZADO":
+      return `Sincronizado · ${status.synced} ${plural(status.synced, "registro confirmado", "registros confirmados")} pelo Helo`;
     case "SALVO_LOCALMENTE":
       return `Salvo neste aparelho · ${n} ${plural(n, "registro", "registros")}`;
     case "CONFLITO":
@@ -118,11 +132,28 @@ export function RascunhoLocalAviso({ visivel }: { visivel: boolean }) {
   );
 }
 
+/**
+ * Estados em que reenviar manualmente faz sentido. CONFLITO fica de fora de
+ * propósito — aquilo exige uma decisão com o conteúdo dos dois lados na tela
+ * (Fase C), nunca um reenvio às cegas. AUTENTICACAO_NECESSARIA fica DENTRO:
+ * o cuidador entra de novo (em outra aba ou depois de recarregar) e volta
+ * aqui para retomar — é exatamente o que `tentarNovamente` faz (reenfileira
+ * o que estava FAILED, inclusive por 401/403, antes de tentar de novo).
+ */
+const ESTADOS_COM_BOTAO_MANUAL = new Set<OfflineStatusSummary["state"]>([
+  "SALVO_LOCALMENTE",
+  "AGUARDANDO_CONEXAO",
+  "SINCRONIZACAO_PENDENTE",
+  "FALHA",
+  "AUTENTICACAO_NECESSARIA",
+]);
+
 export function OfflineChip({
   status,
   aviso,
   onReconhecerAviso,
   pendenciasDeOutroPaciente = 0,
+  onSincronizarAgora,
 }: {
   status: OfflineStatusSummary;
   /** Migração de schema descartou dados locais. §8: nunca em silêncio. */
@@ -130,9 +161,14 @@ export function OfflineChip({
   onReconhecerAviso?: () => void;
   /** Áreas de outros pacientes que ficaram guardadas por terem pendência. */
   pendenciasDeOutroPaciente?: number;
+  /** Disparo manual do cuidador (Fase B). Omitido: o botão não aparece. */
+  onSincronizarAgora?: () => void;
 }) {
   const aparencia = APARENCIA[status.state];
   if (!aparencia && !aviso && pendenciasDeOutroPaciente === 0) return null;
+
+  const mostrarBotao =
+    Boolean(onSincronizarAgora) && ESTADOS_COM_BOTAO_MANUAL.has(status.state);
 
   return (
     <div className="flex flex-col gap-2">
@@ -145,13 +181,23 @@ export function OfflineChip({
           aria-live="polite"
           data-testid="offline-chip"
           data-estado={status.state}
-          className={`flex items-center gap-2 self-start rounded-full border px-3 py-1.5 text-xs font-medium ${aparencia.fundo} ${aparencia.borda} ${aparencia.texto}`}
+          className={`flex flex-wrap items-center gap-2 self-start rounded-full border px-3 py-1.5 text-xs font-medium ${aparencia.fundo} ${aparencia.borda} ${aparencia.texto}`}
         >
           <span
             aria-hidden
             className={`h-2 w-2 shrink-0 rounded-full ${aparencia.ponto}`}
           />
           <span>{frase(status)}</span>
+          {mostrarBotao && (
+            <button
+              type="button"
+              onClick={onSincronizarAgora}
+              data-testid="sincronizar-agora"
+              className="ml-1 rounded-full border border-current/30 px-2 py-0.5 font-semibold underline-offset-2 hover:underline"
+            >
+              Sincronizar agora
+            </button>
+          )}
         </div>
       )}
 

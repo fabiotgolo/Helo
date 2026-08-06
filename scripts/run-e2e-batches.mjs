@@ -92,6 +92,7 @@ const LOTES = [
     arquivos: [
       "tests/e2e/offline-continuidade.spec.ts",
       "tests/e2e/offline-logout-expiracao.spec.ts",
+      "tests/e2e/offline-sync.spec.ts",
     ],
   },
   {

@@ -211,6 +211,8 @@ export class OfflineSessionStore {
       error?: OfflineOperationError | null;
       nextRetryAt?: string | null;
       incrementRetry?: boolean;
+      remoteConfirmedAt?: string | null;
+      remoteEntityId?: string | null;
     } = {}
   ): Promise<OfflineOperation[]> {
     const nova = markStatus(fila, operationId, status, extra);

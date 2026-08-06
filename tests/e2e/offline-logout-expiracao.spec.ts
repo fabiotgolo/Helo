@@ -178,6 +178,13 @@ test("logout com fila pendente: recusar preserva rascunho e fila; confirmar apag
   await expect(chip(page)).toBeVisible();
   await expect.poll(() => operacoesGuardadas(page)).toBeGreaterThan(0);
   const operacoesAntes = await operacoesGuardadas(page);
+  // A rota de envio fica bloqueada: desde a Fase B a conexão voltando
+  // dispara sincronização de verdade (§9), e sem isto a pausa seria
+  // confirmada ANTES do clique em "Sair" — o teste provaria outra coisa, não
+  // o aviso do §8.
+  await page.route("**/api/realtime-questions/sessions", (route) =>
+    route.abort("connectionreset")
+  );
   await context.setOffline(false);
 
   // §8: recusar preserva TUDO — nada foi apagado, o logout inteiro aborta.

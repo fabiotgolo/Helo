@@ -296,6 +296,13 @@ test("sair com registros pendentes avisa antes de descartar", async ({
     void d.dismiss();
   });
 
+  // A rede volta, mas a rota de envio fica bloqueada: desde a Fase B a
+  // conexão voltando dispara sincronização de verdade (§9), e sem isto a
+  // pendência seria confirmada ANTES do clique em "Sair" — o teste provaria
+  // outra coisa, não o aviso do §8.
+  await page.route("**/api/realtime-questions/turns", (route) =>
+    route.abort("connectionreset")
+  );
   await context.setOffline(false);
   await page.getByRole("button", { name: "Sair" }).click();
 
