@@ -65,6 +65,8 @@ export interface NovaOperacao {
   sessionId: string;
   /** Chave do paciente, em string. */
   patientId: string;
+  /** Quem formulou a intenção (R6). Vem do escopo, nunca do payload. */
+  userId?: string | null;
   payload: unknown;
   /** Id do registro que esta operação cria, quando ela cria algum. */
   createdEntityId?: string | null;
@@ -161,6 +163,7 @@ function vazia(entrada: NovaOperacao): OfflineOperation {
     idempotencyKey: "",
     sessionId: entrada.sessionId,
     patientId: entrada.patientId,
+    userId: entrada.userId ?? null,
     operationType: entrada.operationType,
     payload: entrada.payload,
     status: "PENDING",
@@ -272,6 +275,7 @@ export function appendOperation(
       entrada.idempotencyKey ?? newIdempotencyKey(entrada.operationType),
     sessionId: entrada.sessionId,
     patientId: entrada.patientId,
+    userId: entrada.userId ?? null,
     operationType: entrada.operationType,
     payload: entrada.payload,
     status: "PENDING",
@@ -512,6 +516,7 @@ export function restoreOperation(bruto: unknown): OfflineOperation | null {
     idempotencyKey,
     sessionId,
     patientId,
+    userId: texto("userId"),
     operationType: operationType as OfflineOperationType,
     payload: v.payload,
     // SYNCING não sobrevive a um refresh: ninguém está mais em voo. Volta a

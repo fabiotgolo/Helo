@@ -193,6 +193,10 @@ export class OfflineSessionStore {
       ...entrada,
       sessionId: this.sessionId,
       patientId: this.patientId,
+      // Do ESCOPO, nunca de quem chamou: é o mesmo cuidado que mantém
+      // sessionId e patientId fora da entrada. Quem enfileira não escolhe em
+      // nome de quem está agindo.
+      userId: this.userId,
     });
     if (!resultado.deduplicada) {
       await gravarOperacao(this.escopo, resultado.operacao.id, resultado.operacao);

@@ -240,7 +240,13 @@ export function classificarRecusa(r: RespostaRecusada): ConflictCase {
   // dizer "você não tem mais acesso", e depender de um código aqui deixaria
   // um 403 sem corpo cair no DESCONHECIDO — perdendo a única situação da
   // matriz em que a fila precisa ficar ilegível para outro usuário.
-  if (r.status === 403 || r.code === "ACCESS_REVOKED") {
+  //
+  // A exceção é R6, que TAMBÉM chega como 403 e precisa ser lida ANTES: os
+  // dois têm o mesmo status e significados opostos. Confundi-los diria ao
+  // cuidador "você perdeu o acesso a esta conversa" quando o que houve foi
+  // ele estar logado como outra pessoa — e ofereceria descartar a intenção
+  // clínica de um colega como se fosse dele.
+  if (r.status === 403 && r.code !== "IDENTITY_MISMATCH") {
     return {
       caso: 9,
       code: "ACCESS_REVOKED",
@@ -254,6 +260,9 @@ export function classificarRecusa(r: RespostaRecusada): ConflictCase {
       opcoes: [DESCARTAR],
     };
   }
+  // Um 403 SEM status 403 não existe; mas `ACCESS_REVOKED` explícito num
+  // outro status, sim — o servidor pode nomeá-lo em qualquer recusa.
+  if (r.code === "ACCESS_REVOKED") return classificarRecusa({ ...r, status: 403 });
 
   if (!isRtqConflictCode(r.code)) {
     return {
@@ -408,6 +417,26 @@ export function classificarRecusa(r: RespostaRecusada): ConflictCase {
         titulo: "Este registro foi enviado antes com um conteúdo diferente.",
         fatos,
         opcoes: [DESCARTAR],
+      };
+
+    // R6 — a fila é de OUTRO cuidador. Chega como 403, mas é o oposto do caso
+    // 9: ali o acesso acabou e não há o que fazer; aqui a fila continua
+    // perfeitamente válida — só não é desta pessoa. A saída não é "entrar de
+    // novo" (a sessão atual é legítima) nem "descartar" como primeira opção:
+    // é o dono voltar. Por isso este caso NÃO oferece descarte de saída, e
+    // sim a informação de quem precisa entrar.
+    case "IDENTITY_MISMATCH":
+      return {
+        caso: 14,
+        code: r.code,
+        nome: "identidade-diferente",
+        resolucao: "ESPERA",
+        titulo:
+          "Estes registros são de outro cuidador. Entre com a conta de quem os criou para enviá-los.",
+        fatos,
+        // Sem opções: nem descartar. Jogar fora a intenção clínica de outra
+        // pessoa não é decisão de quem está logado agora.
+        opcoes: [],
       };
 
     // Já tratado lá em cima, pelo status 403 — que é como ele chega na prática,

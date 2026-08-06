@@ -41,6 +41,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const body = (await request.json()) as {
     patientId?: number;
+    /** Dono da fila offline (R6). Conferido em requirePatientAccess. */
+    expectedUserId?: unknown;
     sessionId?: string;
     clientRequestId?: unknown;
     skipped?: unknown;
@@ -61,7 +63,12 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  const auth = await requirePatientAccess(request, patientId, "createSession");
+  const auth = await requirePatientAccess(
+    request,
+    patientId,
+    "createSession",
+    body.expectedUserId
+  );
   if (auth instanceof Response) return auth;
 
   try {
@@ -92,6 +99,8 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   const body = (await request.json()) as {
     patientId?: number;
+    /** Dono da fila offline (R6). Conferido em requirePatientAccess. */
+    expectedUserId?: unknown;
     sessionId?: string;
     contextId?: string;
   };

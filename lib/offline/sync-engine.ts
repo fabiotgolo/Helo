@@ -68,7 +68,23 @@ export interface SyncContext {
  * rota de saúde dedicada não diria nada que esta já não diz.
  */
 export async function servidorEstaAlcancavel(timeoutMs = 5000): Promise<boolean> {
-  if (typeof fetch === "undefined") return false;
+  return (await consultarServidor(timeoutMs)).alcancavel;
+}
+
+/**
+ * Uma ida só, duas respostas: o servidor está de pé, e QUEM ele acha que
+ * somos.
+ *
+ * A identidade sai de graça — `/api/auth/me` já devolve o usuário, e esta
+ * chamada já acontecia antes de cada ciclo. Verificar antes de enviar evita
+ * gastar a requisição de escrita para levar 403; a defesa que vale, porém, é
+ * a do servidor (`requirePatientAccess`), porque uma checagem só de cliente é
+ * uma checagem que uma aba velha pode pular.
+ */
+export async function consultarServidor(
+  timeoutMs = 5000
+): Promise<{ alcancavel: boolean; userId: string | null }> {
+  if (typeof fetch === "undefined") return { alcancavel: false, userId: null };
   try {
     const controlador =
       typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -84,9 +100,17 @@ export async function servidorEstaAlcancavel(timeoutMs = 5000): Promise<boolean>
     // Qualquer resposta HTTP prova que o servidor está de pé — inclusive um
     // erro do servidor (5xx): a REDE está boa, é o servidor que está mal, e
     // as duas coisas pedem tratamento diferente mais adiante.
-    return resposta.status < 600;
+    const alcancavel = resposta.status < 600;
+    let userId: string | null = null;
+    if (resposta.ok) {
+      const corpo = (await resposta.json().catch(() => null)) as
+        | { user?: { id?: unknown } | null }
+        | null;
+      if (typeof corpo?.user?.id === "string") userId = corpo.user.id;
+    }
+    return { alcancavel, userId };
   } catch {
-    return false;
+    return { alcancavel: false, userId: null };
   }
 }
 
@@ -208,6 +232,39 @@ export async function sincronizarFila(ctx: SyncContext): Promise<void> {
   emVooPorEscopo.add(escopo);
 
   try {
+    // R6 — antes de qualquer envio, confirma que quem está autenticado AGORA
+    // é o dono desta fila. O cookie é ambiente e pode ter mudado numa outra
+    // aba desde que o cuidador escreveu.
+    //
+    // Uma consulta por CICLO, não por operação: a janela que sobra (o cookie
+    // mudar no meio de um dreno) é fechada pelo servidor, que confere a cada
+    // requisição. Consultar aqui poupa a requisição de escrita inútil; é o
+    // servidor que garante.
+    const identidade = await consultarServidor();
+    if (
+      identidade.alcancavel &&
+      identidade.userId &&
+      ctx.store.userId &&
+      identidade.userId !== ctx.store.userId
+    ) {
+      const fila = ctx.obterFila();
+      const proxima = nextSendable(fila);
+      if (proxima.kind === "ENVIAR") {
+        const conflito = classificarRecusa({
+          status: 403,
+          code: "IDENTITY_MISMATCH",
+          mensagem:
+            "estes registros são de outro cuidador; entre com a conta de quem os criou para enviá-los",
+        });
+        const marcada = await ctx.store.marcar(fila, proxima.operacao.id, "CONFLICT", {
+          error: erro("unauthorized", conflito.titulo),
+          conflict: conflito,
+        });
+        ctx.aplicarFila(marcada);
+      }
+      return;
+    }
+
     for (;;) {
       const fila = ctx.obterFila();
       const proxima = nextSendable(fila);

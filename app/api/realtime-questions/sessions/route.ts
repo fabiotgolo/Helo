@@ -57,9 +57,18 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as { patientId?: number };
+  const body = (await request.json()) as {
+    patientId?: number;
+    /** Dono da fila offline (R6). Conferido em requirePatientAccess. */
+    expectedUserId?: unknown;
+  };
   const patientId = Number(body.patientId);
-  const auth = await requirePatientAccess(request, patientId, "createSession");
+  const auth = await requirePatientAccess(
+    request,
+    patientId,
+    "createSession",
+    body.expectedUserId
+  );
   if (auth instanceof Response) return auth;
   try {
     const session = await createRtqSession(patientId, {
@@ -83,6 +92,8 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const body = (await request.json()) as {
     patientId?: number;
+    /** Dono da fila offline (R6). Conferido em requirePatientAccess. */
+    expectedUserId?: unknown;
     sessionId?: string;
     action?: string;
     /** Chave de idempotência (Fase 4.9.3). */
@@ -95,7 +106,12 @@ export async function PATCH(request: Request) {
       { status: 400 }
     );
   }
-  const auth = await requirePatientAccess(request, patientId, "createSession");
+  const auth = await requirePatientAccess(
+    request,
+    patientId,
+    "createSession",
+    body.expectedUserId
+  );
   if (auth instanceof Response) return auth;
   try {
     const session = await runSessionAction(

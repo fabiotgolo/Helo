@@ -45,12 +45,27 @@ function payloadOf(op: OfflineOperation): Payload {
  *
  * Não valida se a operação PODE ser enviada agora (ordem, dependências,
  * backoff) — isso é `nextSendable`, em `queue.ts`. Esta função só traduz.
+ *
+ * O `expectedUserId` (R6) entra aqui, uma vez, para os catorze tipos: o
+ * servidor o confere em `requirePatientAccess` e recusa quando o cookie que
+ * chegou é de outro cuidador. Operações gravadas antes desta fase não têm
+ * `userId` e seguem sem o campo — para elas vale a defesa do escopo.
  */
 export function buildSyncRequest(op: OfflineOperation): SyncRequest {
+  const req = montarRequisicao(op);
+  return op.userId
+    ? { ...req, body: { ...req.body, expectedUserId: op.userId } }
+    : req;
+}
+
+function montarRequisicao(op: OfflineOperation): SyncRequest {
   const patientId = Number(op.patientId);
   const p = payloadOf(op);
   const clientRequestId = op.idempotencyKey;
 
+  // R6 — acrescentado a TODO corpo depois do switch, e não caso a caso:
+  // são catorze tipos de operação, e um que esquecesse o campo seria
+  // justamente o que passaria despercebido. Ver `comIdentidade`.
   switch (op.operationType) {
     case "createTurn":
       return {

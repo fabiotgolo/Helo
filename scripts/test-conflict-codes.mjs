@@ -328,6 +328,69 @@ async function main() {
     );
   }
 
+  // ════ R6 — a fila é de outro cuidador ════
+  //
+  // O cenário real: máquina de plantão, duas abas. Claudia tem fila pendente;
+  // Marcos entra na outra aba. A partir daí a fila da Claudia sairia com o
+  // cookie do Marcos — e o servidor grava `assistantId` de quem está
+  // autenticado. Sem esta guarda, a pergunta da Claudia entraria no prontuário
+  // assinada pelo Marcos, e nada no registro denunciaria a troca.
+  console.log("\nR6 — IDENTITY_MISMATCH (autoria trocada):");
+  {
+    // Marcos PRECISA ter acesso ao paciente: é isso que torna o cenário
+    // perigoso. Sem vínculo daria 403 comum e a autoria nunca correria risco.
+    const rMarcos = (await admin.get("/api/admin/users")).json.users.find(
+      (u) => u.email === "marcos@helo.test"
+    );
+    await admin.post("/api/admin/access", {
+      userId: rMarcos.id,
+      patientId: pFabio,
+      permissions: ["viewSessions", "createSession"],
+    });
+    const s = (await marcos.post(`${RTQ}/sessions`, { patientId: pFabio })).json.session;
+
+    // Marcos autenticado, enviando uma operação que diz ser da Claudia.
+    const r = await marcos.post(`${RTQ}/turns`, {
+      patientId: pFabio,
+      sessionId: s.id,
+      text: "pergunta que a Claudia escreveu sem conexão",
+      expectedUserId: rClaudia.json.user.id,
+    });
+    check("recusa com 403", r.status === 403, `veio ${r.status}: ${JSON.stringify(r.json)}`);
+    check("code = IDENTITY_MISMATCH", r.json?.code === "IDENTITY_MISMATCH", JSON.stringify(r.json));
+    check(
+      "a mensagem diz o que fazer: entrar com a conta de quem criou",
+      typeof r.json?.error === "string" && /outro cuidador/i.test(r.json.error),
+      r.json?.error
+    );
+
+    // E o turno NÃO foi criado: a recusa acontece antes de qualquer escrita.
+    const turnos = (
+      await marcos.get(`${RTQ}/turns?patientId=${pFabio}&sessionId=${s.id}`)
+    ).json.turns;
+    check("nada foi gravado", turnos.length === 0, JSON.stringify(turnos));
+
+    // O MESMO envio, com a identidade certa, passa.
+    const certo = await marcos.post(`${RTQ}/turns`, {
+      patientId: pFabio,
+      sessionId: s.id,
+      text: "pergunta do próprio Marcos",
+      expectedUserId: rMarcos.id,
+    });
+    check("com a identidade certa, grava normalmente", certo.status === 200, JSON.stringify(certo.json));
+    check(
+      "e a autoria é de quem está autenticado",
+      certo.json?.turn?.assistantId === rMarcos.id,
+      JSON.stringify(certo.json?.turn?.assistantId)
+    );
+
+    // Sem o campo, tudo segue como sempre — é o caso de todo cliente online.
+    const semCampo = await marcos.post(`${RTQ}/turns`, {
+      patientId: pFabio, sessionId: s.id, text: "sem expectedUserId",
+    });
+    check("sem expectedUserId, nada muda", semCampo.status === 200, JSON.stringify(semCampo.json));
+  }
+
   // ════ O que NÃO mudou ════
   console.log("\nO que NÃO mudou — recusas comuns seguem sem código:");
   {

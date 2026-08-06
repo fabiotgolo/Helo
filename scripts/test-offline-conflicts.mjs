@@ -164,6 +164,35 @@ secao("9. Caso 9 — acesso revogado");
   eq(comCodigo.caso, 9, "e com o código explícito dá no mesmo");
 }
 
+secao("9b. R6 — a fila é de OUTRO cuidador (403, mas não é o caso 9)");
+{
+  const c = classificarRecusa({
+    status: 403,
+    code: "IDENTITY_MISMATCH",
+    mensagem: "estes registros são de outro cuidador",
+  });
+  eq(c.caso, 14, "tem linha própria");
+  eq(c.code, "IDENTITY_MISMATCH", "com o código do servidor");
+  // Os dois chegam como 403 e significam o OPOSTO: no caso 9 o acesso acabou;
+  // aqui a fila é válida, só não é desta pessoa. Confundi-los diria ao
+  // cuidador que ele perdeu acesso a uma conversa que talvez nem seja dele.
+  ok(c.caso !== 9, "NÃO é confundido com acesso revogado, apesar do mesmo 403");
+  eq(c.resolucao, "ESPERA", "não é decisão de quem está logado agora");
+  eq(
+    c.opcoes.length,
+    0,
+    "e não oferece NEM descartar — jogar fora a intenção clínica de um colega não é escolha desta pessoa"
+  );
+  ok(/outro cuidador/i.test(c.titulo), "o texto diz de quem são os registros");
+
+  // Um 403 comum continua sendo o caso 9.
+  eq(
+    classificarRecusa({ status: 403, code: undefined, mensagem: "sem acesso" }).caso,
+    9,
+    "403 sem código continua sendo acesso revogado"
+  );
+}
+
 secao("10 e 12. Não é conflito — o ledger respondeu");
 {
   // A matriz é explícita: "Não é conflito: APPLIED, segue em frente, sem tela
@@ -261,7 +290,7 @@ secao("C. Cobertura: todo código do servidor tem uma linha da matriz");
     const c = recusa(code);
     ok(c.caso > 0 && c.code !== "DESCONHECIDO", `${code} tem linha própria (caso ${c.caso})`);
   }
-  eq(RTQ_CONFLICT_CODES.length, 9, "são nove códigos emitidos pelo servidor");
+  eq(RTQ_CONFLICT_CODES.length, 10, "são dez códigos emitidos pelo servidor");
   ok(isRtqConflictCode("SESSION_COMPLETED"), "reconhece um código válido");
   ok(!isRtqConflictCode("INVENTADO"), "recusa um código que não existe");
 }
@@ -280,7 +309,7 @@ secao("D. Casos distintos produzem resultados distintos");
     }
   }
   ok(true, "nenhum par de códigos colapsa na mesma linha da matriz");
-  eq(vistos.size, 9, "nove códigos, nove linhas distintas");
+  eq(vistos.size, 10, "dez códigos, dez linhas distintas");
 }
 
 secao("E. exigeDecisao — o que faz o chip parar de sumir sozinho");

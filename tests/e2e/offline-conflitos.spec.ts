@@ -16,7 +16,14 @@
 //     operação, não estado da aba.
 
 import { expect, test, type Page, type BrowserContext } from "@playwright/test";
-import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
+import {
+  abrirModo,
+  entrarComo,
+  pularContexto,
+  semear,
+  SENHA,
+  type Semente,
+} from "./helpers";
 
 let dados: Semente;
 
@@ -404,6 +411,62 @@ test.describe("Decisão sobre conflitos", () => {
       `${RTQ}/turns?patientId=${dados.pacienteId}&sessionId=${sessionId}`
     );
     expect((await depois.json()).turns[0].provisionalResponse).toBe("YES");
+  });
+
+  test("9. R6: a fila de um cuidador NUNCA sai sob a credencial de outro", async ({
+    page,
+    context,
+    request,
+  }) => {
+    // O Marcos precisa ter acesso a ESTE paciente — é justamente isso que
+    // torna o cenário perigoso. Sem vínculo, um 403 comum já barraria e a
+    // autoria nunca correria risco; o teste provaria a proteção errada.
+    const vinculo = await request.post("/api/admin/access", {
+      data: {
+        userId: dados.outroAssistente.id,
+        patientId: dados.pacienteId,
+        permissions: ["viewSessions", "createSession"],
+      },
+    });
+    expect(vinculo.ok(), "o outro cuidador precisa ter acesso ao paciente").toBeTruthy();
+
+    // O cenário é o da máquina de plantão: a Claudia registra sem conexão, e
+    // o Marcos entra no mesmo navegador antes de a rede voltar. Sem a guarda,
+    // a pergunta dela iria ao prontuário assinada por ele — e nada no
+    // registro denunciaria a troca.
+    await sessaoCarregada(page);
+    const sessionId = await sessaoAtivaNoServidor(page);
+
+    await context.setOffline(true);
+    await campoDaPergunta(page).fill("Pergunta escrita pela Claudia");
+    await page.getByRole("button", { name: "Continuar" }).click();
+    await expect(chip(page)).toBeVisible();
+    await expect.poll(() => operacoesGuardadas(page)).toBeGreaterThan(0);
+
+    // O Marcos entra — no MESMO navegador, trocando o cookie por baixo. Ele
+    // tem acesso a este paciente: é isso que torna o cenário perigoso.
+    await context.setOffline(false);
+    const trocou = await page.request.post("/api/auth/login", {
+      data: { email: dados.outroAssistente.email, password: SENHA },
+    });
+    expect(trocou.ok(), "o outro cuidador precisa conseguir entrar").toBeTruthy();
+
+    // A fila tenta sair — e o servidor recusa, porque a operação diz de quem
+    // é. Nenhum turno da Claudia aparece sob a autoria do Marcos.
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await page.waitForTimeout(4000);
+
+    const turnos = await page.request.get(
+      `${RTQ}/turns?patientId=${dados.pacienteId}&sessionId=${sessionId}`
+    );
+    const lista = (await turnos.json()).turns as Array<{ reviewedText: string }>;
+    expect(
+      lista.some((t) => t.reviewedText?.includes("Claudia")),
+      "a pergunta da Claudia NÃO pode ter sido gravada sob a sessão do Marcos"
+    ).toBe(false);
+
+    // E a intenção dela continua guardada — recusar não é descartar.
+    expect(await operacoesGuardadas(page)).toBeGreaterThan(0);
   });
 
   test("7. a tela de conflito nunca aparece sobre o palco do paciente", async ({

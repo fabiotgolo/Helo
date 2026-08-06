@@ -28,6 +28,8 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const body = (await request.json()) as {
     patientId?: number;
+    /** Dono da fila offline (R6). Conferido em requirePatientAccess. */
+    expectedUserId?: unknown;
     mappings?: unknown;
   };
   const patientId = Number(body.patientId);

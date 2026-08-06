@@ -1236,3 +1236,50 @@ servidor real, **e** as duas asserções de fronteira: mesmo conteúdo com
 (a troca para `CHANGE_RESPONSE`, `baseVersion` limpo, chave nova) e
 `tests/e2e/offline-conflitos.spec.ts` (a tela mostrando as duas respostas,
 com nenhuma aplicada sozinha).
+
+## Decisão 5 — a fila diz de quem é, e o servidor confere (R6)
+
+**Fecha o R6 da §13, gravidade crítica.** Decidida em 6 de agosto de 2026.
+
+O R6 previa a mitigação em três partes: *"`userId` gravado na operação;
+identidade conferida antes de cada envio; fila descartada em login de outro
+usuário"*. **A primeira não existia** — `OfflineOperation` guardava
+`sessionId` e `patientId`, nunca quem formulou a intenção.
+
+**Por que isso é explorável sem nada de exótico.** O escopo do armazenamento
+(`usuário::paciente`, com AAD) impede outro usuário de LER a fila. O que ele
+não cobre é o ENVIO: o cookie de sessão é ambiente, e `fetch` manda o que
+estiver valendo naquele instante. Máquina de plantão, duas abas: a cuidadora A
+tem fila pendente, B entra na outra aba, e a partir dali a fila de A sai com a
+credencial de B. Como o servidor grava `assistantId` do usuário autenticado, a
+pergunta de A entra no prontuário **assinada por B** — e nada no registro
+denuncia a troca.
+
+Note que a terceira parte da mitigação prevista ("fila descartada em login de
+outro usuário") **contraria a §8**, que proíbe descartar intenção pendente em
+silêncio. `limparOutrosEscopos` preserva, de propósito, escopos com pendência
+— inclusive de outros usuários. A defesa correta não é apagar o trabalho de
+quem não está na frente da tela; é recusar enviá-lo sob a identidade errada.
+
+**Duas camadas, e por que as duas:**
+
+| Onde | O que faz | Por que não basta sozinha |
+| --- | --- | --- |
+| Cliente (`sincronizarFila`) | consulta `/api/auth/me` — a mesma chamada que já verificava conectividade — e para antes de gastar a requisição | uma checagem só de cliente é uma checagem que uma aba velha, um bug de estado ou um script podem pular |
+| Servidor (`requirePatientAccess`) | compara `expectedUserId` do corpo com o usuário autenticado; 403 com `IDENTITY_MISMATCH` | roda por requisição, no caminho por onde TODA rota de paciente passa — é a que vale |
+
+`IDENTITY_MISMATCH` chega como 403 e é o **oposto** do caso 9: ali o acesso
+acabou; aqui a fila é válida, só não é desta pessoa. Por isso ganhou linha
+própria (14) e **não oferece nem descartar** — jogar fora a intenção clínica
+de um colega não é escolha de quem está logado agora.
+
+Sem `expectedUserId` nada muda: é o caso de todo cliente online e das
+operações enfileiradas antes desta fase (subir a versão do schema apagaria
+filas pendentes, e §8 proíbe).
+
+**Provado por:** `scripts/test-conflict-codes.mjs` (o servidor recusando com
+Marcos autenticado e com acesso ao paciente — o cenário perigoso, não o
+trivial —, nada gravado, e a autoria correta quando a identidade bate) e
+`tests/e2e/offline-conflitos.spec.ts` cenário 9 (o navegador de verdade, com
+troca de cookie no meio). O cenário 9 foi verificado por **mutação**: com as
+duas guardas desligadas ele falha; com qualquer uma delas ativa, passa.

@@ -460,7 +460,9 @@ export type RtqConflictCode =
   | "STATEMENT_REPLACED"
   | "CONTEXT_VERSION"
   | "ACCESS_REVOKED"
-  | "IDEMPOTENCY_MISMATCH";
+  | "IDEMPOTENCY_MISMATCH"
+  /** A fila é de outro cuidador (R6). Ver `assertIdentidadeEsperada`. */
+  | "IDENTITY_MISMATCH";
 
 export const RTQ_CONFLICT_CODES: readonly RtqConflictCode[] = [
   "SESSION_COMPLETED",
@@ -472,6 +474,7 @@ export const RTQ_CONFLICT_CODES: readonly RtqConflictCode[] = [
   "CONTEXT_VERSION",
   "ACCESS_REVOKED",
   "IDEMPOTENCY_MISMATCH",
+  "IDENTITY_MISMATCH",
 ] as const;
 
 export function isRtqConflictCode(v: unknown): v is RtqConflictCode {

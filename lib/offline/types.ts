@@ -165,6 +165,25 @@ export interface OfflineOperation {
   sessionId: string;
   /** Chave do paciente, em string. Ver a nota acima. */
   patientId: string;
+  /**
+   * QUEM formulou esta intenção (R6 da auditoria, gravidade **crítica**).
+   *
+   * O escopo do armazenamento já é `usuário::paciente`, então outro usuário
+   * não LÊ esta fila. O que o escopo não protege é o envio: o cookie de
+   * sessão é ambiente, e `fetch` manda o que estiver valendo AGORA. Numa
+   * máquina de plantão, com duas abas, o cuidador A pode ter fila pendente
+   * enquanto B entra na outra aba — e a partir daí a fila de A sairia com a
+   * credencial de B. O servidor grava `assistantId` do usuário autenticado:
+   * a pergunta de A entraria no prontuário assinada por B.
+   *
+   * Gravar aqui é o que permite ao servidor recusar isso, em vez de aceitar
+   * uma autoria trocada que ninguém teria como detectar depois.
+   *
+   * Nulo em operações gravadas antes desta fase: subir a versão do schema
+   * apagaria filas pendentes, e §8 proíbe. Para elas vale a defesa do escopo,
+   * que sempre existiu.
+   */
+  userId: string | null;
 
   operationType: OfflineOperationType;
   payload: unknown;

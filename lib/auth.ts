@@ -73,13 +73,53 @@ export async function requireAdmin(
  * (admin passa sem vínculo). Se `permission` for informada, o vínculo
  * precisa concedê-la. Retorna Response (401/403) quando negado.
  */
+/**
+ * A fila offline diz de QUEM ela é; o servidor confere (R6 da auditoria,
+ * gravidade **crítica**).
+ *
+ * O cookie de sessão é ambiente: `fetch` manda o que estiver valendo no
+ * navegador AGORA, não o que valia quando o cuidador escreveu. Numa máquina
+ * de plantão, com duas abas, isso é alcançável sem nada de exótico — o
+ * cuidador A tem fila pendente, B entra na outra aba, e a fila de A passa a
+ * sair com a credencial de B. Como o servidor grava `assistantId` do usuário
+ * autenticado, a pergunta de A entraria no prontuário assinada por B. Uma
+ * autoria trocada não tem como ser detectada depois: não existe nada no
+ * registro que denuncie a troca.
+ *
+ * Por que aqui, e não no cliente: o cliente também confere (é o que evita
+ * gastar a requisição), mas uma checagem que só existe no cliente é uma
+ * checagem que uma aba velha, um bug de estado ou um script podem pular. Esta
+ * fica no caminho por onde TODA rota de paciente passa.
+ *
+ * Sem `expectedUserId` nada muda — é o caso de todo cliente online, e das
+ * operações enfileiradas antes desta fase.
+ */
+function identidadeConfere(user: AppUser, expectedUserId: unknown): boolean {
+  if (typeof expectedUserId !== "string" || !expectedUserId) return true;
+  return expectedUserId === user.id;
+}
+
 export async function requirePatientAccess(
   request: Request,
   patientId: number,
-  permission?: Permission
+  permission?: Permission,
+  expectedUserId?: unknown
 ): Promise<{ user: AppUser; link: AccessLink | null } | Response> {
   const user = await getSessionUser(request);
   if (!user) return unauthorized();
+  if (!identidadeConfere(user, expectedUserId)) {
+    // 403 e não 401: a sessão é válida: ela é de OUTRA pessoa. Mandar entrar
+    // de novo não resolveria, e o cliente precisa distinguir os dois — um
+    // pede reautenticação, o outro pede que o dono da fila volte.
+    return Response.json(
+      {
+        error:
+          "estes registros são de outro cuidador; entre com a conta de quem os criou para enviá-los",
+        code: "IDENTITY_MISMATCH",
+      },
+      { status: 403 }
+    );
+  }
   if (!patientId || Number.isNaN(patientId)) {
     return Response.json({ error: "patientId obrigatório" }, { status: 400 });
   }
