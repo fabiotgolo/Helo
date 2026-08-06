@@ -37,6 +37,8 @@
 import { buildSyncRequest, extractConfirmation } from "@/lib/offline/sync-endpoints";
 import {
   classificarRecusa,
+  comValorLocal,
+  valorLocalDe,
   type ConflictCase,
   type ConflictFacts,
 } from "@/lib/offline/conflicts";
@@ -135,12 +137,18 @@ async function enviarOperacao(op: OfflineOperation): Promise<ResultadoEnvio> {
       | { error?: string; code?: unknown; facts?: ConflictFacts }
       | null;
     const mensagem = detalhe?.error ?? "O servidor recusou esta ação.";
-    const conflito = classificarRecusa({
-      status: resposta.status,
-      code: detalhe?.code,
-      mensagem,
-      fatos: detalhe?.facts,
-    });
+    // O servidor manda o lado DELE; o lado do cuidador só existe aqui, na
+    // operação que nunca chegou lá. Os casos 4 e 7 mostram os dois — e uma
+    // tela com metade da comparação não permite decidir nada.
+    const conflito = comValorLocal(
+      classificarRecusa({
+        status: resposta.status,
+        code: detalhe?.code,
+        mensagem,
+        fatos: detalhe?.facts,
+      }),
+      valorLocalDe(op)
+    );
 
     // 401 continua sendo "entre de novo" — sessão expirada não é conflito de
     // domínio, e o retorno separado é o que faz o chip pedir reautenticação

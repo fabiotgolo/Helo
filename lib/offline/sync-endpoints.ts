@@ -79,6 +79,11 @@ export function buildSyncRequest(op: OfflineOperation): SyncRequest {
           turnId: p.turnId,
           action: p.action,
           clientRequestId,
+          // §10, caso 4 — o `updatedAt` que o turno tinha quando o cuidador
+          // agiu. É com ele que o servidor sabe que mexeram na resposta no
+          // meio do caminho. Sem isto, o campo existia na fila desde a 4.9.2
+          // e nunca chegava a lugar nenhum.
+          baseVersion: op.baseVersion,
         },
       };
 
@@ -229,6 +234,8 @@ export function buildSyncRequest(op: OfflineOperation): SyncRequest {
           initialTopic: p.initialTopic,
           notes: p.notes,
           clientRequestId,
+          // §10, caso 7 — a versão vigente de onde este texto partiu.
+          baseVersion: op.baseVersion,
         },
       };
 

@@ -95,6 +95,27 @@ console.log("\n2. turnAction:");
       r.body.turnId === "cqt123" &&
       r.body.action.kind === "PRESENT"
   );
+
+  // §10, caso 4 — sem `baseVersion` no corpo, o servidor não tem como saber
+  // que mexeram na resposta enquanto esta ação esperava na fila. O campo
+  // existia na operação desde a 4.9.2 e não chegava a lugar nenhum.
+  const comBase = buildSyncRequest(
+    op({
+      operationType: "turnAction",
+      payload: { sessionId: "cqs1", turnId: "cqt123", action: { kind: "SELECT_RESPONSE", response: "SIM" } },
+      baseVersion: "2026-08-06T14:32:00.000Z",
+    })
+  );
+  check(
+    "baseVersion vai no corpo",
+    comBase.body.baseVersion === "2026-08-06T14:32:00.000Z",
+    JSON.stringify(comBase.body)
+  );
+  check(
+    "sem baseVersion, o campo vai nulo — e o servidor segue como sempre",
+    r.body.baseVersion === null,
+    JSON.stringify(r.body)
+  );
 }
 
 console.log("\n3. createPath / pathAction:");
@@ -228,6 +249,19 @@ console.log("\n8. saveSessionContext / openPatientControl / patientControlAction
     "saveSessionContext não manda contextId (rota não aceita id proposto)",
     r1.path === "/session-context" && !("contextId" in r1.body),
     JSON.stringify(r1.body)
+  );
+  // §10, caso 7 — a versão de onde o texto partiu.
+  const r1b = buildSyncRequest(
+    op({
+      operationType: "saveSessionContext",
+      payload: { sessionId: "cqs1", contextId: "ctx1", intention: "conversar" },
+      baseVersion: "2026-08-06T14:00:00.000Z",
+    })
+  );
+  check(
+    "saveSessionContext manda baseVersion",
+    r1b.body.baseVersion === "2026-08-06T14:00:00.000Z",
+    JSON.stringify(r1b.body)
   );
 
   const r2 = buildSyncRequest(

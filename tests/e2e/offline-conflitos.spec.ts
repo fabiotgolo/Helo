@@ -335,6 +335,77 @@ test.describe("Decisão sobre conflitos", () => {
     await expect(chip(page)).toBeHidden();
   });
 
+  test("8. caso 4: a tela mostra AS DUAS respostas, e nenhuma vence sozinha", async ({
+    page,
+    context,
+  }) => {
+    // Este é o cenário que a §10 descreve por extenso: "Você registrou TALVEZ
+    // às 14:32 (sem conexão). O servidor tem SIM, registrado às 14:35."
+    await sessaoCarregada(page);
+    const sessionId = await sessaoAtivaNoServidor(page);
+
+    await campoDaPergunta(page).fill("O senhor está com dor?");
+    await page.getByRole("button", { name: "Continuar" }).click();
+    await expect(page.getByText("Revisar antes de apresentar")).toBeVisible();
+    await page.getByRole("button", { name: "Apresentar ao paciente" }).click();
+    await expect(
+      page.getByRole("group", { name: "Respostas possíveis do paciente" })
+    ).toBeVisible();
+
+    // Sem conexão, o cuidador lê TALVEZ no gesto do paciente.
+    await context.setOffline(true);
+    await page.getByRole("button", { name: "TALVEZ" }).click();
+    await page.getByRole("button", { name: "Confirmar", exact: true }).click();
+    await expect(chip(page)).toBeVisible();
+
+    // Enquanto isso, no "outro aparelho", alguém registrou SIM.
+    const turnos = await page.request.get(
+      `${RTQ}/turns?patientId=${dados.pacienteId}&sessionId=${sessionId}`
+    );
+    const turnoId = (await turnos.json()).turns[0].id;
+    const outro = await page.request.patch(`${RTQ}/turns`, {
+      data: {
+        patientId: dados.pacienteId,
+        sessionId,
+        turnId: turnoId,
+        action: { kind: "SELECT_RESPONSE", response: "YES" },
+      },
+    });
+    expect(outro.ok(), "o outro aparelho precisa ter registrado SIM").toBeTruthy();
+
+    await context.setOffline(false);
+    await expect
+      .poll(() => conflitosGuardados(page), { timeout: 20_000 })
+      .toBe(1);
+    expect((await conflitosGuardados(page, true))[0]).toBe(4);
+
+    await botaoDecidir(page).click();
+    await expect(tela(page)).toHaveAttribute("data-caso", "4");
+
+    // AS DUAS respostas, lado a lado, e na língua do cuidador: `YES`/`MAYBE`
+    // são identificadores internos, e o retrato desta tela pegou os dois
+    // vazando para uma decisão clínica.
+    await expect(page.getByTestId("conflito-meu-texto")).toContainText("TALVEZ");
+    await expect(page.getByTestId("conflito-meu-texto")).toContainText(
+      /você registrou, sem conexão/i
+    );
+    await expect(page.getByTestId("conflito-texto-do-servidor")).toContainText("SIM");
+    await expect(page.getByTestId("conflito-meu-texto")).not.toContainText("MAYBE");
+    await expect(page.getByTestId("conflito-texto-do-servidor")).not.toContainText("YES");
+
+    // As duas saídas do caso 4 — e nenhuma aplicada sozinha.
+    await expect(page.getByTestId("conflito-opcao-MANTER_DO_SERVIDOR")).toBeVisible();
+    await expect(page.getByTestId("conflito-opcao-APLICAR_A_MINHA")).toBeVisible();
+    await page.getByTestId("conflito-decidir-depois").click();
+
+    // A resposta do servidor NÃO foi aplicada por cima da do cuidador, nem o
+    // contrário: nada foi decidido sem ele.
+    const depois = await page.request.get(
+      `${RTQ}/turns?patientId=${dados.pacienteId}&sessionId=${sessionId}`
+    );
+    expect((await depois.json()).turns[0].provisionalResponse).toBe("YES");
+  });
+
   test("7. a tela de conflito nunca aparece sobre o palco do paciente", async ({
     page,
   }) => {

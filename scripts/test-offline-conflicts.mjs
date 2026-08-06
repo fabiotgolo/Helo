@@ -25,9 +25,11 @@ const {
   classificarVersaoServidor,
   conflitoDependenciaAusente,
   conflitoPacienteDiferente,
+  comValorLocal,
   exigeDecisao,
   isRtqConflictCode,
   restoreConflict,
+  valorLocalDe,
 } = await import("../lib/offline/conflicts.ts");
 const { RTQ_CONFLICT_CODES } = await import("../lib/realtime-question-types.ts");
 
@@ -303,6 +305,53 @@ secao("F. Restauração — o conflito sobrevive a um refresh");
   eq(restoreConflict({ caso: 1 }), null, "objeto incompleto é descartado, nunca adivinhado");
   eq(restoreConflict({ caso: 1, nome: "x", titulo: "y", resolucao: "INVENTADA" }), null,
     "resolução desconhecida é descartada");
+}
+
+secao("G0. O outro lado da tela — o valor do CUIDADOR");
+{
+  // O servidor manda o lado dele; o lado do cuidador só existe na operação
+  // que nunca chegou lá. Sem isto, a tela do caso 4 diria "o servidor tem
+  // SIM" sem dizer o que ELE tinha registrado — a metade que falta é
+  // justamente a que torna a decisão possível.
+  const resposta = valorLocalDe({
+    operationType: "turnAction",
+    payload: { action: { kind: "SELECT_RESPONSE", response: "TALVEZ" } },
+  });
+  eq(resposta, "TALVEZ", "caso 4: lê a resposta que a ação queria registrar");
+
+  eq(
+    valorLocalDe({ operationType: "turnAction", payload: { action: { kind: "PRESENT" } } }),
+    null,
+    "uma ação que não fala de resposta não tem valor local a mostrar"
+  );
+
+  const contexto = valorLocalDe({
+    operationType: "saveSessionContext",
+    payload: { intention: "consulta de rotina", environment: "quarto" },
+  });
+  ok(
+    /Intenção: consulta de rotina/.test(contexto) && /Ambiente: quarto/.test(contexto),
+    `caso 7: resume o que o cuidador escreveu — veio: "${contexto}"`
+  );
+  eq(
+    valorLocalDe({ operationType: "saveSessionContext", payload: { skipped: true } }),
+    "Sem contexto registrado.",
+    "contexto pulado se descreve, em vez de aparecer vazio"
+  );
+  eq(
+    valorLocalDe({ operationType: "createTurn", payload: { text: "oi" } }),
+    null,
+    "tipos fora dos casos 4 e 7 não inventam valor local"
+  );
+
+  // comValorLocal é puro e não perde nada do que o servidor mandou.
+  const base = recusa("RESPONSE_CHANGED", { serverValue: "SIM", serverAt: "2026-08-06T14:35:00Z" });
+  const cheio = comValorLocal(base, "TALVEZ");
+  eq(cheio.fatos.localValue, "TALVEZ", "o lado do cuidador entra");
+  eq(cheio.fatos.serverValue, "SIM", "e o do servidor continua lá");
+  eq(cheio.fatos.serverAt, "2026-08-06T14:35:00Z", "com o horário preservado");
+  eq(cheio.caso, 4, "e o caso não muda");
+  eq(comValorLocal(base, null).fatos.localValue, undefined, "sem valor local, nada é inventado");
 }
 
 secao("G. A operação inteira sobrevive ao refresh, com o conflito junto");

@@ -827,16 +827,73 @@ export async function createTurn(
  * transição na máquina de estados, checa as invariantes e grava turno +
  * evento de auditoria no MESMO commit.
  */
+/**
+ * A resposta que ESTA ação quer registrar. Só três ações carregam uma; as
+ * demais (apresentar, cancelar, registrar ausência) não falam de resposta
+ * nenhuma e por isso não podem divergir de uma.
+ */
+function respostaPretendida(action: TurnAction): SemanticResponse | null {
+  return action.kind === "SELECT_RESPONSE" || action.kind === "CHANGE_RESPONSE"
+    ? action.response
+    : null;
+}
+
+/**
+ * §10, caso 4 — "resposta alterada".
+ *
+ * A fronteira com o caso 11 é o que esta função existe para respeitar, e é
+ * sutil: o servidor ter mudado NÃO é conflito por si só. O cuidador pode ter
+ * reapresentado a pergunta noutro aparelho sem tocar em resposta alguma —
+ * tratar isso como conflito encheria a tela de decisões vazias, e o cuidador
+ * aprenderia a clicar sem ler, que é pior do que não ter tela.
+ *
+ * Conflito é quando o CONTEÚDO diverge: o servidor já tem uma resposta, e ela
+ * não é a que esta ação quer registrar. Aí, e só aí, alguém precisa decidir —
+ * porque uma das duas vai valer como o que o paciente comunicou.
+ *
+ * Sem `baseVersion` não há o que comparar: quem não manda segue com o
+ * comportamento de sempre. É o que mantém compatível todo cliente online, que
+ * está lendo o estado atual da tela e não precisa disto.
+ */
+function assertRespostaNaoMudou(
+  turn: ConversationQuestionTurn,
+  action: TurnAction,
+  baseVersion: string | null
+): void {
+  if (!baseVersion || baseVersion === turn.updatedAt) return;
+
+  const pretendida = respostaPretendida(action);
+  if (!pretendida) return;
+
+  // A confirmada pesa mais que a provisória: se o paciente já confirmou, é
+  // ela que o cuidador precisa ver do outro lado da tela.
+  const noServidor = turn.confirmedResponse ?? turn.provisionalResponse;
+  if (!noServidor || noServidor === pretendida) return;
+
+  throw new RtqConflictError(
+    "RESPONSE_CHANGED",
+    "a resposta registrada nesta pergunta mudou desde que você agiu",
+    {
+      serverStatus: turn.status,
+      serverAt: turn.updatedAt,
+      serverValue: noServidor,
+    }
+  );
+}
+
 export async function runTurnAction(
   patientId: number,
   sessionId: string,
   turnId: string,
   action: TurnAction,
   assistant: Assistant,
-  clientRequestIdRaw?: unknown
+  clientRequestIdRaw?: unknown,
+  baseVersionRaw?: unknown
 ): Promise<ConversationQuestionTurn> {
   const now = new Date().toISOString();
   const clientRequestId = requestIdOf(clientRequestIdRaw);
+  const baseVersion =
+    typeof baseVersionRaw === "string" && baseVersionRaw ? baseVersionRaw : null;
   return firestore.runTransaction(async (transaction) => {
     const sRef = sessionDoc(sessionId);
     const tRef = turnsCol(sessionId).doc(turnId);
@@ -860,6 +917,12 @@ export async function runTurnAction(
     // ou, no caso de REMOVE_RESPONSE sobre frase, seria aceita de novo e
     // incrementaria `correctionCount` uma segunda vez.
     if (jaAplicada) return turn;
+
+    // §10, caso 4 — a resposta mudou no servidor enquanto esta ação esperava
+    // na fila. Vem DEPOIS do ledger de propósito: um reenvio da mesma
+    // intenção não é conflito nenhum, e checar antes transformaria toda
+    // retentativa numa tela de decisão.
+    assertRespostaNaoMudou(turn, action, baseVersion);
 
     assertSessionAcceptsTurnAction(session.status, action.kind);
     const change = applyTurnAction(turn, action, now);

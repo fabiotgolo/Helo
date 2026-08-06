@@ -1183,8 +1183,56 @@ não vira sucesso: vira `DESCONHECIDO`, que **também** para a fila e **também*
 pede decisão do cuidador. Errar para o lado de perguntar é barato; errar para o
 lado de aplicar sozinho, num prontuário, é irreversível.
 
-**Provado por:** `scripts/test-offline-conflicts.mjs` (86 asserções, as treze
-linhas, incluindo a prova de que uma frase que *parece* o caso 1 não é
-promovida a caso 1 sem o código) e `scripts/test-conflict-codes.mjs` (22
-asserções contra o servidor de verdade, provando que os códigos saem de lá e
-que a mensagem original foi preservada).
+**Provado por:** `scripts/test-offline-conflicts.mjs` (as treze linhas,
+incluindo a prova de que uma frase que *parece* o caso 1 não é promovida a
+caso 1 sem o código) e `scripts/test-conflict-codes.mjs` (contra o servidor de
+verdade, provando que os códigos saem de lá e que a mensagem original foi
+preservada).
+
+## Decisão 4 — a fronteira entre o caso 4/7 e o caso 11 é o CONTEÚDO
+
+**Detalha a §10, linhas 4, 7 e 11.** Decidida em 6 de agosto de 2026.
+
+Os casos 4 (resposta alterada) e 7 (contexto alterado) dependem de detectar
+que o servidor mudou embaixo. O mecanismo é o `baseVersion`: o `updatedAt` que
+a entidade tinha quando o cuidador agiu. O campo existia na fila desde a
+4.9.2 — **e nunca era enviado a lugar nenhum.** Agora vai no corpo de
+`PATCH /turns` e `POST /session-context`.
+
+**O que quase deu errado, e a regra que ficou.** A leitura ingênua seria
+"`baseVersion` diferente ⇒ conflito". Ela está errada, e a §10 já dizia por
+quê na linha 11: o servidor ter uma versão mais nova **não é conflito por si
+só**. O cuidador pode ter reapresentado a pergunta noutro aparelho sem tocar
+em resposta alguma; o contexto pode ter sido regravado igual.
+
+Conflito é quando o **conteúdo** diverge:
+
+| | Caso 4 | Caso 7 |
+| --- | --- | --- |
+| Compara | a resposta que a ação quer registrar × a que o servidor tem | os campos escritos pelo cuidador × os da versão vigente |
+| Não é conflito se | o servidor não tem resposta, ou tem a mesma | o conteúdo é igual ao vigente |
+| Sem `baseVersion` | segue como sempre | segue como sempre |
+
+Tratar "mais novo" como conflito encheria a tela de decisões vazias — e o
+cuidador aprenderia a clicar sem ler, que é pior do que não ter tela.
+
+**Duas saídas, e o que elas fazem de verdade.** Ambas reenviam com
+`baseVersion` limpo (senão a mesma recusa voltaria em laço) e chave de
+idempotência nova (senão o servidor devolveria o resultado da tentativa
+recusada).
+
+- **Caso 4, "aplicar a minha":** `SELECT_RESPONSE` vira **`CHANGE_RESPONSE`**.
+  Não é detalhe de implementação — é o que faz o servidor auditar isto como
+  *correção* de uma resposta que já existia, e não como se fosse a primeira
+  leitura do gesto. Correção declarada é auditável; sobrescrita silenciosa
+  não.
+- **Caso 7, "gravar como nova versão":** é o comportamento normal do 4.8.
+  Gravar contexto sempre cria versão nova e nunca apaga a anterior; o que
+  muda é qual passa a ser a vigente. Não há nada a conceder aqui.
+
+**Provado por:** `scripts/test-conflict-codes.mjs` (os dois códigos saindo do
+servidor real, **e** as duas asserções de fronteira: mesmo conteúdo com
+`baseVersion` velho NÃO vira conflito), `scripts/test-offline-decisions.mjs`
+(a troca para `CHANGE_RESPONSE`, `baseVersion` limpo, chave nova) e
+`tests/e2e/offline-conflitos.spec.ts` (a tela mostrando as duas respostas,
+com nenhuma aplicada sozinha).

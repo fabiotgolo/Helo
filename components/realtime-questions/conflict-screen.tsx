@@ -75,6 +75,37 @@ function horario(iso: string | undefined): string | null {
  * perder — e perdê-la é o risco central da Fase 4.6. Por isso a autoria é
  * rótulo fixo da caixa, não uma observação no rodapé que o olho pula.
  */
+/**
+ * As respostas semânticas na língua do cuidador.
+ *
+ * `SemanticResponse` é YES/MAYBE/NO por dentro — e o retrato desta tela
+ * mostrou esses valores crus aparecendo numa decisão clínica, enquanto o
+ * resto do produto inteiro diz SIM/TALVEZ/NÃO. Deixar o identificador interno
+ * vazar bem aqui, onde o cuidador compara duas leituras do gesto do paciente,
+ * é pedir para ele decidir sobre algo que não está escrito na língua dele.
+ */
+const RESPOSTA_EM_PORTUGUES: Record<string, string> = {
+  YES: "SIM",
+  MAYBE: "TALVEZ",
+  NO: "NÃO",
+};
+
+function emPortugues(valor: string): string {
+  return RESPOSTA_EM_PORTUGUES[valor] ?? valor;
+}
+
+/**
+ * Como o lado do cuidador se apresenta, por caso.
+ *
+ * O caso 4 diz "registrou", não "escreveu": aquilo não é um texto dele — é a
+ * leitura que ele fez do gesto do paciente. Chamar de "escreveu" empurraria
+ * para o lado errado da fronteira que a Fase 4.6 protege, numa tela que já
+ * mostra dois valores lado a lado e onde confundir autoria é o risco central.
+ */
+function autoriaLocal(caso: number): string {
+  return caso === 4 ? "Você registrou, sem conexão" : "Você escreveu, sem conexão";
+}
+
 function Autoria({ children }: { children: string }) {
   return (
     <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-mute">
@@ -124,7 +155,7 @@ export function ConflictScreen({
 }) {
   const [verCadeia, setVerCadeia] = useState(false);
   const cadeia = cadeiaDependente(fila, operacao.id);
-  const meuTexto = textoDe(operacao);
+  const meuLado = conflito.fatos.localValue ?? textoDe(operacao);
   const quando = horario(conflito.fatos.serverAt);
 
   // Só as saídas que têm para onde apontar nesta operação — um botão que não
@@ -168,22 +199,32 @@ export function ConflictScreen({
           </p>
         </header>
 
-        {/* Os dois lados. Só aparece quando há um texto do cuidador para
-            mostrar: inventar uma caixa vazia para "manter a simetria" faria a
-            tela parecer que perdeu algo. */}
-        {meuTexto && (
+        {/* Os dois lados.
+
+            `localValue` vem antes de `textoDe` de propósito: nos casos 4 e 7 o
+            que o cuidador registrou NÃO é um texto do payload — é a resposta
+            que ele leu no gesto do paciente, ou o resumo do contexto que
+            escreveu. A primeira versão desta tela só olhava `textoDe`, e por
+            isso o caso 4 (uma ação sem campo de texto) teria mostrado a
+            comparação pela metade: o lado do servidor sem o lado dele.
+
+            Cada caixa aparece por conta própria. Inventar uma vazia para
+            "manter a simetria" faria a tela parecer que perdeu algo. */}
+        {(meuLado || conflito.fatos.serverValue) && (
           <section className="flex flex-col gap-2">
-            <Caixa
-              testid="conflito-meu-texto"
-              autoria="Você escreveu, sem conexão"
-              texto={meuTexto}
-              destaque
-            />
+            {meuLado && (
+              <Caixa
+                testid="conflito-meu-texto"
+                autoria={autoriaLocal(conflito.caso)}
+                texto={emPortugues(meuLado)}
+                destaque
+              />
+            )}
             {conflito.fatos.serverValue && (
               <Caixa
                 testid="conflito-texto-do-servidor"
                 autoria="O Helo tem registrado"
-                texto={conflito.fatos.serverValue}
+                texto={emPortugues(conflito.fatos.serverValue)}
               />
             )}
           </section>

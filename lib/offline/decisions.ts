@@ -312,19 +312,77 @@ export function aplicarDecisao(
     case "DECIDIR_A_CADEIA":
       return { fila: [...fila], removidas: [], rascunho: null, descricao: "" };
 
-    // Casos 4 e 7. A DETECÇÃO deles ainda não existe (depende de enviar
-    // baseVersion e comparar no servidor), então nenhum caminho do produto
-    // chega aqui hoje. Ficam explícitos, e não num `default` silencioso, para
-    // que o dia em que a detecção entrar seja um erro de compilação em quem
-    // esqueceu de implementá-los — não um clique que não faz nada.
-    case "APLICAR_A_MINHA":
-    case "GRAVAR_COMO_NOVA_VERSAO":
+    // ——— Casos 4 e 7 ———
+    //
+    // As duas reenviam a intenção do cuidador, e as duas precisam das MESMAS
+    // duas coisas, pelas mesmas razões:
+    //
+    //   baseVersion LIMPO — a operação foi recusada justamente por citar uma
+    //   versão que não é mais a vigente. Reenviar com ela seria pedir a mesma
+    //   recusa de novo, num laço em que o cuidador decide e nada acontece.
+    //   Limpar é o registro de que ele VIU o outro lado e decidiu assim
+    //   mesmo: a checagem de concorrência já cumpriu o papel dela.
+    //
+    //   chave NOVA — o servidor guardou a primeira tentativa no ledger. Com a
+    //   mesma chave ele reconheceria um reenvio e devolveria o resultado
+    //   daquela, que foi recusa. Esta é outra intenção: a de sobrepor-se ao
+    //   que o servidor tem, tomada com a informação à vista.
+    case "APLICAR_A_MINHA": {
+      // §10, caso 4: "vira CHANGE_RESPONSE, contabilizada como correção, com
+      // trilha". A troca de SELECT para CHANGE não é detalhe de implementação
+      // — é o que faz o servidor registrar isto como CORREÇÃO de uma resposta
+      // que já existia, e não como se fosse a primeira leitura do gesto. Uma
+      // correção declarada é auditável; uma sobrescrita silenciosa não.
+      const { fila: sem, removidas } = descartarTudo();
+      const p = { ...((alvo.payload ?? {}) as Record<string, unknown>) };
+      const acao = { ...((p.action ?? {}) as Record<string, unknown>) };
+      if (acao.kind === "SELECT_RESPONSE") acao.kind = "CHANGE_RESPONSE";
+      p.action = acao;
+      const { fila: nova } = appendOperation(
+        sem,
+        {
+          operationType: alvo.operationType,
+          sessionId: alvo.sessionId,
+          patientId: alvo.patientId,
+          payload: p,
+          createdEntityId: null,
+          baseVersion: null,
+        },
+        agora
+      );
       return {
-        fila: [...fila],
-        removidas: [],
+        fila: nova,
+        removidas,
         rascunho: null,
-        descricao: "",
+        descricao: "Sua resposta vai ser registrada como correção.",
       };
+    }
+
+    case "GRAVAR_COMO_NOVA_VERSAO": {
+      // §10, caso 7. E aqui não há nada de perigoso: gravar contexto SEMPRE
+      // cria versão nova e nunca apaga a anterior (§4.8). O que muda é qual
+      // passa a ser a vigente — por isso esta saída é o comportamento normal
+      // do produto, e não uma concessão.
+      const { fila: sem, removidas } = descartarTudo();
+      const { fila: nova } = appendOperation(
+        sem,
+        {
+          operationType: alvo.operationType,
+          sessionId: alvo.sessionId,
+          patientId: alvo.patientId,
+          payload: alvo.payload,
+          createdEntityId: alvo.createdEntityId,
+          baseVersion: null,
+        },
+        agora
+      );
+      return {
+        fila: nova,
+        removidas,
+        rascunho: null,
+        descricao: "Seu contexto vai ser gravado como uma versão nova.",
+      };
+    }
   }
 }
 

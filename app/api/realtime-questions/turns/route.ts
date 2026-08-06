@@ -130,6 +130,8 @@ export async function PATCH(request: Request) {
     action?: unknown;
     /** Chave de idempotência (Fase 4.9.3). */
     clientRequestId?: unknown;
+    /** `updatedAt` do turno quando o cuidador agiu (Fase 4.9.3-C, §10 caso 4). */
+    baseVersion?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId || !body.turnId) {
@@ -151,7 +153,8 @@ export async function PATCH(request: Request) {
       body.turnId,
       action,
       { id: auth.user.id, name: auth.user.name },
-      body.clientRequestId
+      body.clientRequestId,
+      body.baseVersion
     );
     return Response.json({ turn });
   } catch (e) {

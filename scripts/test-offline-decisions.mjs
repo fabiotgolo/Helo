@@ -314,6 +314,65 @@ secao("11. Informativas não mexem na fila");
   }
 }
 
+secao("11b. Caso 4 — APLICAR_A_MINHA vira CORREÇÃO, não sobrescrita");
+{
+  let fila = [];
+  const r1 = appendOperation(fila, {
+    operationType: "turnAction",
+    sessionId: "s1",
+    patientId: "7",
+    payload: { sessionId: "s1", turnId: "cqt_1", action: { kind: "SELECT_RESPONSE", response: "TALVEZ" } },
+    baseVersion: "2026-08-06T14:32:00Z",
+  });
+  fila = r1.fila;
+
+  const r = aplicarDecisao(
+    fila,
+    r1.operacao.id,
+    "APLICAR_A_MINHA",
+    conflitoDe("RESPONSE_CHANGED", { serverValue: "SIM" })
+  );
+  eq(r.fila.length, 1, "a antiga sai, a nova entra");
+  const nova = r.fila[0];
+  // §10 caso 4: "vira CHANGE_RESPONSE, contabilizada como correção, com
+  // trilha". É isso que faz o servidor auditar como correção de uma resposta
+  // que já existia, em vez de tratar como primeira leitura do gesto.
+  eq(nova.payload.action.kind, "CHANGE_RESPONSE", "SELECT vira CHANGE — correção declarada");
+  eq(nova.payload.action.response, "TALVEZ", "e a resposta do cuidador é preservada");
+  eq(nova.baseVersion, null, "baseVersion limpo — senão a mesma recusa voltaria, em laço");
+  ok(
+    nova.idempotencyKey !== r1.operacao.idempotencyKey,
+    "chave NOVA — com a antiga o servidor devolveria o resultado da recusa"
+  );
+  eq(nova.status, "PENDING", "e ela nasce pronta para ir");
+}
+
+secao("11c. Caso 7 — GRAVAR_COMO_NOVA_VERSAO não sobrescreve nada");
+{
+  let fila = [];
+  const r1 = appendOperation(fila, {
+    operationType: "saveSessionContext",
+    sessionId: "s1",
+    patientId: "7",
+    payload: { sessionId: "s1", contextId: "ctx_meu", intention: "consulta de rotina" },
+    createdEntityId: "ctx_meu",
+    baseVersion: "2026-08-06T14:00:00Z",
+  });
+  fila = r1.fila;
+
+  const r = aplicarDecisao(
+    fila,
+    r1.operacao.id,
+    "GRAVAR_COMO_NOVA_VERSAO",
+    conflitoDe("CONTEXT_VERSION", { serverValue: "Intenção: outra coisa" })
+  );
+  const nova = r.fila[0];
+  eq(nova.payload.intention, "consulta de rotina", "o texto do cuidador é preservado");
+  eq(nova.baseVersion, null, "baseVersion limpo");
+  ok(nova.idempotencyKey !== r1.operacao.idempotencyKey, "chave nova");
+  ok(/versão nova/i.test(r.descricao), "e a frase diz que vira versão NOVA, não substituição");
+}
+
 secao("12. comAlvo — cada tipo tem seu campo");
 {
   const alvo = (tipo, payload) =>

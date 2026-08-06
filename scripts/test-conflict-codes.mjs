@@ -228,6 +228,106 @@ async function main() {
     check("code = IDEMPOTENCY_MISMATCH", r2.json?.code === "IDEMPOTENCY_MISMATCH", JSON.stringify(r2.json));
   }
 
+  // ════ Caso 4 — resposta alterada ════
+  //
+  // A fronteira com o caso 11 é o que estas asserções guardam: o servidor ter
+  // mudado NÃO é conflito; conflito é o CONTEÚDO divergir.
+  console.log("\nCaso 4 — RESPONSE_CHANGED:");
+  {
+    const s = await novaSessao();
+    const turno = (
+      await claudia.post(`${RTQ}/turns`, {
+        patientId: pFabio, sessionId: s.id, text: "O senhor está com dor?",
+      })
+    ).json.turn;
+    const acao = async (action, extra = {}) =>
+      claudia.patch(`${RTQ}/turns`, {
+        patientId: pFabio, sessionId: s.id, turnId: turno.id, action, ...extra,
+      });
+
+    await acao({ kind: "REVIEW", reviewedText: "O senhor está com dor?" });
+    await acao({ kind: "PRESENT" });
+    await acao({ kind: "AWAIT_RESPONSE" });
+
+    // O cuidador leu a tela AQUI: é este updatedAt que a fila guardaria.
+    const antes = (await acao({ kind: "SELECT_RESPONSE", response: "YES" })).json.turn;
+    check("resposta registrada no servidor", antes.provisionalResponse === "YES");
+
+    // Um aparelho offline volta com TALVEZ, partindo de uma versão anterior.
+    const base = "2020-01-01T00:00:00.000Z";
+    const r = await acao({ kind: "CHANGE_RESPONSE", response: "MAYBE" }, { baseVersion: base });
+    check("recusa com 400", r.status === 400, JSON.stringify(r.json));
+    check("code = RESPONSE_CHANGED", r.json?.code === "RESPONSE_CHANGED", JSON.stringify(r.json));
+    check(
+      "facts trazem a resposta DO SERVIDOR, para a tela mostrar ao lado",
+      r.json?.facts?.serverValue === "YES",
+      JSON.stringify(r.json?.facts)
+    );
+    check(
+      "e o horário em que ela foi registrada",
+      typeof r.json?.facts?.serverAt === "string",
+      JSON.stringify(r.json?.facts)
+    );
+
+    // A MESMA resposta, mesmo com baseVersion velho, NÃO é conflito: nada
+    // divergiu. Isto é o caso 11 — e tratá-lo como conflito encheria a tela
+    // de decisões vazias.
+    const igual = await acao({ kind: "CHANGE_RESPONSE", response: "YES" }, { baseVersion: base });
+    check(
+      "mesma resposta com baseVersion velho NÃO é conflito (caso 11)",
+      igual.json?.code !== "RESPONSE_CHANGED",
+      JSON.stringify(igual.json)
+    );
+  }
+
+  // ════ Caso 7 — contexto alterado ════
+  console.log("\nCaso 7 — CONTEXT_VERSION:");
+  {
+    const s = await novaSessao();
+    const salvar = (body) =>
+      claudia.post(`${RTQ}/session-context`, {
+        patientId: pFabio, sessionId: s.id, ...body,
+      });
+
+    const v1 = (await salvar({ intention: "consulta de rotina" })).json.context;
+    check("primeira versão gravada", v1?.version === 1, JSON.stringify(v1));
+
+    // Outro aparelho grava por cima — v1 deixa de ser a vigente.
+    const v2 = (await salvar({ intention: "conversa sobre alta" })).json.context;
+    check("segunda versão gravada", v2?.version === 2);
+
+    // O aparelho offline volta partindo da v1, com texto DIFERENTE.
+    const r = await salvar({ intention: "dor no peito", baseVersion: v1.updatedAt });
+    check("recusa com 400", r.status === 400, JSON.stringify(r.json));
+    check("code = CONTEXT_VERSION", r.json?.code === "CONTEXT_VERSION", JSON.stringify(r.json));
+    check(
+      "facts resumem a versão do servidor, sem mandar o documento inteiro",
+      typeof r.json?.facts?.serverValue === "string" &&
+        r.json.facts.serverValue.includes("conversa sobre alta") &&
+        r.json.facts.notes === undefined,
+      JSON.stringify(r.json?.facts)
+    );
+
+    // Conteúdo IGUAL ao vigente, com baseVersion velho: não é conflito.
+    const igual = await salvar({
+      intention: "conversa sobre alta",
+      baseVersion: v1.updatedAt,
+    });
+    check(
+      "conteúdo igual ao vigente NÃO é conflito (caso 11)",
+      igual.json?.code !== "CONTEXT_VERSION",
+      JSON.stringify(igual.json)
+    );
+
+    // E sem baseVersion nenhum, tudo segue como sempre foi.
+    const semBase = await salvar({ intention: "mais uma mudança" });
+    check(
+      "sem baseVersion, grava normalmente — cliente online não é afetado",
+      semBase.status === 200,
+      JSON.stringify(semBase.json)
+    );
+  }
+
   // ════ O que NÃO mudou ════
   console.log("\nO que NÃO mudou — recusas comuns seguem sem código:");
   {

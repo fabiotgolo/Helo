@@ -32,7 +32,10 @@ import {
   type ContextInterlocutorSource,
   type SessionContextVersion,
 } from "@/lib/session-context-types";
-import type { RtqSessionStatus } from "@/lib/realtime-question-types";
+import {
+  RtqConflictError,
+  type RtqSessionStatus,
+} from "@/lib/realtime-question-types";
 
 const contextsCol = (sessionId: string) =>
   sessionDoc(sessionId).collection("contexts");
@@ -90,6 +93,61 @@ export interface SaveSessionContextInput {
   environment?: unknown;
   initialTopic?: unknown;
   notes?: unknown;
+  /**
+   * `updatedAt` da versão vigente quando o cuidador começou a escrever
+   * (Fase 4.9.3-C, §10 caso 7). Opcional: quem não manda segue com o
+   * comportamento de sempre.
+   */
+  baseVersion?: unknown;
+}
+
+/**
+ * O conteúdo de uma versão de contexto, para comparação. Só os campos que o
+ * cuidador escreve — nem id, nem versão, nem horários, que mudam a cada
+ * gravação sem que ninguém tenha mudado de ideia sobre nada.
+ */
+function conteudoDoContexto(c: {
+  interlocutorName: string | null;
+  interlocutorRelation: string | null;
+  intention: string | null;
+  environment: string | null;
+  initialTopic: string | null;
+  notes: string | null;
+  skipped: boolean;
+}): string {
+  return JSON.stringify([
+    c.interlocutorName ?? "",
+    c.interlocutorRelation ?? "",
+    c.intention ?? "",
+    c.environment ?? "",
+    c.initialTopic ?? "",
+    c.notes ?? "",
+    c.skipped,
+  ]);
+}
+
+/**
+ * Um resumo legível da versão do servidor, para a tela de decisão mostrar ao
+ * lado da do cuidador. Não é o documento inteiro: numa resposta de ERRO só vai
+ * o que a decisão exige ver.
+ */
+function resumoDoContexto(c: {
+  intention: string | null;
+  environment: string | null;
+  initialTopic: string | null;
+  notes: string | null;
+  interlocutorName: string | null;
+  skipped: boolean;
+}): string {
+  if (c.skipped) return "Sem contexto registrado.";
+  const partes = [
+    c.interlocutorName && `Com: ${c.interlocutorName}`,
+    c.intention && `Intenção: ${c.intention}`,
+    c.environment && `Ambiente: ${c.environment}`,
+    c.initialTopic && `Assunto: ${c.initialTopic}`,
+    c.notes && `Notas: ${c.notes}`,
+  ].filter(Boolean);
+  return partes.length > 0 ? partes.join(" · ") : "Sem contexto registrado.";
 }
 
 export async function getActiveSessionContext(
@@ -188,6 +246,46 @@ export async function saveSessionContext(
     }
 
     const vigente = todos.find((c) => c.status === "ACTIVE") ?? null;
+
+    // §10, caso 7 — o contexto mudou no servidor enquanto esta gravação
+    // esperava na fila.
+    //
+    // A fronteira com o caso 11 é a mesma do caso 4: o servidor ter uma
+    // versão mais nova NÃO é conflito por si. Só é quando o CONTEÚDO diverge
+    // — senão o cuidador seria interrompido para decidir entre dois textos
+    // idênticos.
+    //
+    // E note o que este conflito NÃO é: uma disputa sobre sobrescrever.
+    // Gravar contexto SEMPRE cria versão nova (§4.8) e nunca apaga a
+    // anterior. O que está em jogo é qual passa a ser a VIGENTE — por isso a
+    // saída "gravar a minha como nova versão" é o comportamento normal, e não
+    // uma concessão perigosa.
+    const baseVersion =
+      typeof input.baseVersion === "string" && input.baseVersion
+        ? input.baseVersion
+        : null;
+    if (baseVersion && vigente && baseVersion !== vigente.updatedAt) {
+      const meu = conteudoDoContexto({
+        interlocutorName: skipped ? null : interlocutorName,
+        interlocutorRelation: skipped ? null : interlocutorRelation,
+        intention: skipped ? null : campo(input.intention),
+        environment: skipped ? null : campo(input.environment),
+        initialTopic: skipped ? null : campo(input.initialTopic),
+        notes: skipped ? null : campo(input.notes, MAX_CONTEXT_NOTES_LEN),
+        skipped,
+      });
+      if (meu !== conteudoDoContexto(vigente)) {
+        throw new RtqConflictError(
+          "CONTEXT_VERSION",
+          "o contexto desta conversa mudou desde que você começou a escrever",
+          {
+            serverAt: vigente.updatedAt,
+            serverValue: resumoDoContexto(vigente),
+          }
+        );
+      }
+    }
+
     const version = todos.length + 1;
 
     const context: SessionContextVersion = {

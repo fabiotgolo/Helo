@@ -1116,9 +1116,15 @@ export function useRtqPersistence(offline?: OfflineBridge): RtqPersistence {
               () => api.saveSessionContext(patientId, sessionId, input),
               async () => {
                 const contextId = newEntityId(PREFIXO.context);
+                // §10, caso 7: de qual versão este texto partiu. Sem isto o
+                // servidor não teria como saber que o contexto mudou embaixo
+                // — e a versão do cuidador viraria a vigente por cima da de
+                // outro aparelho, em silêncio.
+                const vigente = offline!.sessaoLocal()?.context;
                 const { sessao } = await offline!.registrar({
                   operationType: "saveSessionContext",
                   createdEntityId: contextId,
+                  baseVersion: vigente?.updatedAt ?? null,
                   // A chave de idempotência REAPROVEITA o clientRequestId que a
                   // tela já gerou para este gesto. Duas chaves para a mesma
                   // intenção dariam ao servidor duas intenções.

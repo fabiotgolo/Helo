@@ -51,6 +51,8 @@ export async function POST(request: Request) {
     environment?: unknown;
     initialTopic?: unknown;
     notes?: unknown;
+    /** `updatedAt` da versão vigente quando o cuidador escreveu (§10 caso 7). */
+    baseVersion?: unknown;
   };
   const patientId = Number(body.patientId);
   if (!body.sessionId) {
@@ -76,6 +78,7 @@ export async function POST(request: Request) {
         environment: body.environment,
         initialTopic: body.initialTopic,
         notes: body.notes,
+        baseVersion: body.baseVersion,
       },
       { id: auth.user.id, name: auth.user.name }
     );

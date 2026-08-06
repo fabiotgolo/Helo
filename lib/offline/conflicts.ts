@@ -452,6 +452,60 @@ export function classificarVersaoServidor(
     : "DIVERGE";
 }
 
+// ---------- O outro lado da tela ----------
+
+/**
+ * O valor que o CUIDADOR registrou aqui, para os casos que mostram os dois
+ * lados (4 e 7).
+ *
+ * O servidor manda o lado dele (`serverValue`) e não tem como mandar este: a
+ * intenção local nunca chegou lá. Sem esta função a tela do caso 4 diria "o
+ * servidor tem SIM" sem dizer o que o cuidador tinha registrado — que é
+ * exatamente a metade que faz a decisão ser possível.
+ *
+ * Lê o payload de forma deliberadamente rasa: só os campos que estas duas
+ * linhas da matriz precisam. Um leitor genérico de payload aqui viraria, com o
+ * tempo, uma segunda definição de "o que a operação significa".
+ */
+export function valorLocalDe(op: {
+  operationType: string;
+  payload: unknown;
+}): string | null {
+  const p = (op.payload ?? {}) as Record<string, unknown>;
+
+  if (op.operationType === "turnAction") {
+    const acao = (p.action ?? {}) as Record<string, unknown>;
+    return typeof acao.response === "string" ? acao.response : null;
+  }
+
+  if (op.operationType === "saveSessionContext") {
+    if (p.skipped === true) return "Sem contexto registrado.";
+    const texto = (chave: string, rotulo: string) =>
+      typeof p[chave] === "string" && (p[chave] as string).trim()
+        ? `${rotulo}: ${(p[chave] as string).trim()}`
+        : null;
+    const partes = [
+      texto("interlocutorName", "Com"),
+      texto("intention", "Intenção"),
+      texto("environment", "Ambiente"),
+      texto("initialTopic", "Assunto"),
+      texto("notes", "Notas"),
+    ].filter(Boolean);
+    return partes.length > 0 ? partes.join(" · ") : "Sem contexto registrado.";
+  }
+
+  return null;
+}
+
+/** O mesmo conflito, com o lado do cuidador preenchido. Puro. */
+export function comValorLocal(
+  conflito: ConflictCase,
+  valorLocal: string | null
+): ConflictCase {
+  if (!valorLocal) return conflito;
+  return { ...conflito, fatos: { ...conflito.fatos, localValue: valorLocal } };
+}
+
 // ---------- Leitura ----------
 
 /** Um conflito que exige o cuidador — o que faz o chip parar de sumir sozinho. */
