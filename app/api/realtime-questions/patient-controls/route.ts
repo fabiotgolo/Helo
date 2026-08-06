@@ -10,6 +10,7 @@ import {
   type PatientControlAction,
 } from "@/lib/patient-control-machine";
 import { isPatientCommand } from "@/lib/patient-control-types";
+import { respostaDeErro } from "@/lib/realtime-question-store";
 import { isSemanticResponse } from "@/lib/realtime-question-types";
 
 // Controles diretos do paciente (Fase 4.7), dentro de uma sessão de Perguntas
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
     );
     return Response.json({ request: result });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }
 
@@ -136,6 +137,6 @@ export async function PATCH(request: Request) {
     );
     return Response.json(result);
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }

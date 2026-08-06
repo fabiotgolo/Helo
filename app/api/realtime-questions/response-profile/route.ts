@@ -2,6 +2,7 @@ import { requirePatientAccess } from "@/lib/auth";
 import { logAudit } from "@/lib/access";
 import {
   getResponseProfile,
+  respostaDeErro,
   setResponseProfile,
 } from "@/lib/realtime-question-store";
 
@@ -46,6 +47,6 @@ export async function PUT(request: Request) {
     });
     return Response.json({ profile });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }

@@ -14,7 +14,10 @@ import {
   isPathActionKind,
   type PathAction,
 } from "@/lib/option-conversation-machine";
-import { statusForCreationError } from "@/lib/realtime-question-store";
+import {
+  respostaDeErro,
+  statusForCreationError,
+} from "@/lib/realtime-question-store";
 
 // Caminhos da conversa por opções, dentro de uma sessão de Perguntas em tempo
 // real. Criar/operar exige createSession; consultar exige viewSessions.
@@ -100,10 +103,7 @@ export async function POST(request: Request) {
     );
     return Response.json({ path });
   } catch (e) {
-    return Response.json(
-      { error: (e as Error).message },
-      { status: statusForCreationError(e) }
-    );
+    return respostaDeErro(e, statusForCreationError(e));
   }
 }
 
@@ -193,7 +193,7 @@ export async function PATCH(request: Request) {
     );
     return Response.json({ path });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }
 
@@ -237,6 +237,6 @@ export async function PUT(request: Request) {
     );
     return Response.json({ ok: true });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }

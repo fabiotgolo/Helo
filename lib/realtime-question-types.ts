@@ -436,6 +436,80 @@ export class RtqDomainError extends Error {
   }
 }
 
+// ---------- Conflitos nomeados (Fase 4.9.3-C, §10) ----------
+//
+// O servidor sempre soube distinguir estas recusas; ele só nunca precisou
+// DIZER qual era, porque quem chamava era uma tela online que já estava
+// olhando o estado atual. Uma fila offline não está: ela precisa saber que
+// foi "a sessão foi concluída em outro aparelho" e não "a pergunta foi
+// substituída", para poder oferecer ao cuidador a decisão certa.
+//
+// Por que um CÓDIGO e não a mensagem: classificar lendo o texto em português
+// acoplaria a decisão clínica à redação de um erro — bastaria alguém melhorar
+// a frase para o produto voltar, em silêncio, a tratar tudo como recusa
+// genérica. O código é contrato entre servidor e cliente; a frase é para o
+// humano, e pode ser reescrita à vontade.
+
+/** Ver `lib/offline/conflicts.ts` para o significado de cada linha da matriz. */
+export type RtqConflictCode =
+  | "SESSION_COMPLETED"
+  | "SESSION_PAUSED"
+  | "TURN_REPLACED"
+  | "RESPONSE_CHANGED"
+  | "PATH_ENDED"
+  | "STATEMENT_REPLACED"
+  | "CONTEXT_VERSION"
+  | "ACCESS_REVOKED"
+  | "IDEMPOTENCY_MISMATCH";
+
+export const RTQ_CONFLICT_CODES: readonly RtqConflictCode[] = [
+  "SESSION_COMPLETED",
+  "SESSION_PAUSED",
+  "TURN_REPLACED",
+  "RESPONSE_CHANGED",
+  "PATH_ENDED",
+  "STATEMENT_REPLACED",
+  "CONTEXT_VERSION",
+  "ACCESS_REVOKED",
+  "IDEMPOTENCY_MISMATCH",
+] as const;
+
+export function isRtqConflictCode(v: unknown): v is RtqConflictCode {
+  return (
+    typeof v === "string" && (RTQ_CONFLICT_CODES as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * Fatos que acompanham a recusa. Só o que a TELA DE DECISÃO precisa mostrar —
+ * nunca o documento inteiro. Mandar o registro completo numa resposta de erro
+ * vazaria, para um cliente que já foi recusado, dado clínico que ele talvez
+ * não devesse mais ver (caso 9 é exatamente isso).
+ */
+export interface RtqConflictFacts {
+  serverStatus?: string;
+  serverAt?: string;
+  serverValue?: string;
+  replacedById?: string;
+}
+
+/**
+ * Recusa de domínio que o cliente consegue CLASSIFICAR. Continua sendo um
+ * `RtqDomainError` — as rotas que ainda não distinguem nada seguem
+ * traduzindo para 400 sem mudança nenhuma.
+ */
+export class RtqConflictError extends RtqDomainError {
+  readonly code: RtqConflictCode;
+  readonly facts: RtqConflictFacts;
+
+  constructor(code: RtqConflictCode, message: string, facts: RtqConflictFacts = {}) {
+    super(message);
+    this.name = "RtqConflictError";
+    this.code = code;
+    this.facts = facts;
+  }
+}
+
 /** Pergunta sensível nunca vai de provisória direto a confirmada. */
 export function requiresReconfirmation(
   turn: Pick<ConversationQuestionTurn, "isSensitive">

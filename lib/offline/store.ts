@@ -25,6 +25,7 @@ import {
   META_DESCARTE,
 } from "@/lib/offline/db";
 import { cifraDisponivel } from "@/lib/offline/crypto";
+import type { ConflictCase } from "@/lib/offline/conflicts";
 import {
   appendOperation,
   markStatus,
@@ -213,6 +214,7 @@ export class OfflineSessionStore {
       incrementRetry?: boolean;
       remoteConfirmedAt?: string | null;
       remoteEntityId?: string | null;
+      conflict?: ConflictCase | null;
     } = {}
   ): Promise<OfflineOperation[]> {
     const nova = markStatus(fila, operationId, status, extra);

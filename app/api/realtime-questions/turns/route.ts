@@ -2,6 +2,7 @@ import { requirePatientAccess } from "@/lib/auth";
 import {
   createTurn,
   listTurns,
+  respostaDeErro,
   runTurnAction,
   statusForCreationError,
 } from "@/lib/realtime-question-store";
@@ -78,10 +79,7 @@ export async function POST(request: Request) {
     );
     return Response.json({ turn });
   } catch (e) {
-    return Response.json(
-      { error: (e as Error).message },
-      { status: statusForCreationError(e) }
-    );
+    return respostaDeErro(e, statusForCreationError(e));
   }
 }
 
@@ -157,6 +155,6 @@ export async function PATCH(request: Request) {
     );
     return Response.json({ turn });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }

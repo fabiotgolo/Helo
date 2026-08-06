@@ -39,6 +39,7 @@ import {
   type OfflineVisualState,
 } from "@/lib/offline/types";
 import { newIdempotencyKey, newOperationId } from "@/lib/offline/ids";
+import { restoreConflict, type ConflictCase } from "@/lib/offline/conflicts";
 
 export class OfflineQueueError extends Error {
   constructor(message: string) {
@@ -175,6 +176,7 @@ function vazia(entrada: NovaOperacao): OfflineOperation {
     createdEntityId: entrada.createdEntityId ?? null,
     remoteConfirmedAt: null,
     remoteEntityId: null,
+    conflict: null,
   };
 }
 
@@ -285,6 +287,7 @@ export function appendOperation(
     createdEntityId: entrada.createdEntityId ?? null,
     remoteConfirmedAt: null,
     remoteEntityId: null,
+    conflict: null,
   };
 
   return { fila: [...fila, operacao], operacao, deduplicada: false };
@@ -313,6 +316,8 @@ export function markStatus(
     /** Só faz sentido junto de `status: "SYNCED"` — o fato que o servidor devolveu. */
     remoteConfirmedAt?: string | null;
     remoteEntityId?: string | null;
+    /** Só faz sentido junto de `status: "CONFLICT"` — qual linha da matriz (§10). */
+    conflict?: ConflictCase | null;
   } = {},
   agora: number = Date.now()
 ): OfflineOperation[] {
@@ -338,6 +343,7 @@ export function markStatus(
           : extra.remoteConfirmedAt,
       remoteEntityId:
         extra.remoteEntityId === undefined ? op.remoteEntityId : extra.remoteEntityId,
+      conflict: extra.conflict === undefined ? op.conflict : extra.conflict,
     };
   });
 }
@@ -525,5 +531,6 @@ export function restoreOperation(bruto: unknown): OfflineOperation | null {
     createdEntityId: texto("createdEntityId"),
     remoteConfirmedAt: texto("remoteConfirmedAt"),
     remoteEntityId: texto("remoteEntityId"),
+    conflict: restoreConflict(v.conflict),
   };
 }

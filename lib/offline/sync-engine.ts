@@ -35,6 +35,11 @@
 //      aconteceria na leitura, não na escrita.
 
 import { buildSyncRequest, extractConfirmation } from "@/lib/offline/sync-endpoints";
+import {
+  classificarRecusa,
+  type ConflictCase,
+  type ConflictFacts,
+} from "@/lib/offline/conflicts";
 import { nextSendable } from "@/lib/offline/queue";
 import {
   backoffMs,
@@ -90,8 +95,8 @@ type ResultadoEnvio =
   /** Falha de REDE — recuperável, entra no backoff. Inclui 5xx: o servidor
    *  passou mal, não é uma decisão de domínio sobre esta operação. */
   | { kind: "rede" }
-  | { kind: "naoAutorizado"; mensagem: string }
-  | { kind: "conflito"; mensagem: string }
+  | { kind: "naoAutorizado"; mensagem: string; conflito: ConflictCase }
+  | { kind: "conflito"; mensagem: string; conflito: ConflictCase }
   | { kind: "invalida"; mensagem: string };
 
 async function enviarOperacao(op: OfflineOperation): Promise<ResultadoEnvio> {
@@ -109,37 +114,50 @@ async function enviarOperacao(op: OfflineOperation): Promise<ResultadoEnvio> {
     return { kind: "rede" };
   }
 
-  if (resposta.status === 401) {
-    return {
-      kind: "naoAutorizado",
-      mensagem: "Sua sessão expirou. Entre novamente para enviar o que ficou guardado.",
-    };
-  }
-  if (resposta.status === 403) {
-    return {
-      kind: "naoAutorizado",
-      mensagem: "Você não tem mais autorização para registrar nesta conversa.",
-    };
+  // Só a faixa 4xx é decisão de DOMÍNIO sobre esta operação. 5xx é o servidor
+  // passando mal — tenta de novo com backoff, não marca conflito por um
+  // problema que pode não ser desta operação. E qualquer outro status
+  // não-ok (um 3xx que escapasse do `redirect: follow`, por exemplo) também
+  // cai aqui: preserva exatamente a faixa que a Fase B classificava, para que
+  // nomear os conflitos não mude, de lambuja, o destino de um status que
+  // ninguém analisou.
+  if (!resposta.ok && (resposta.status < 400 || resposta.status >= 500)) {
+    return { kind: "rede" };
   }
 
   if (!resposta.ok) {
+    // O corpo é lido para TODAS as recusas 4xx, inclusive 401 e 403: é dele
+    // que vem o `code` que diz QUAL das treze linhas da matriz aconteceu
+    // (§10). A Fase B descartava o corpo de 401/403 e, com ele, a única
+    // chance de distinguir "sua sessão expirou" de "seu acesso foi revogado"
+    // — que pedem coisas opostas do cuidador: entrar de novo, ou parar.
     const detalhe = (await resposta.json().catch(() => null)) as
-      | { error?: string }
+      | { error?: string; code?: unknown; facts?: ConflictFacts }
       | null;
-    // 400, 404, 409 (id proposto com payload diferente — Fase B) e qualquer
-    // outro erro de domínio: nesta fase, viram CONFLICT marcado. A Fase C
-    // decide como cada um se resolve; aqui só se garante que nenhum é
-    // aplicado silenciosamente nem tratado como sucesso.
-    if (resposta.status >= 400 && resposta.status < 500) {
+    const mensagem = detalhe?.error ?? "O servidor recusou esta ação.";
+    const conflito = classificarRecusa({
+      status: resposta.status,
+      code: detalhe?.code,
+      mensagem,
+      fatos: detalhe?.facts,
+    });
+
+    // 401 continua sendo "entre de novo" — sessão expirada não é conflito de
+    // domínio, e o retorno separado é o que faz o chip pedir reautenticação
+    // em vez de abrir uma tela de decisão que não teria decisão nenhuma.
+    if (resposta.status === 401) {
       return {
-        kind: "conflito",
-        mensagem: detalhe?.error ?? "O servidor recusou esta ação.",
+        kind: "naoAutorizado",
+        mensagem: "Sua sessão expirou. Entre novamente para enviar o que ficou guardado.",
+        conflito,
       };
     }
-    // 5xx: o servidor está de pé (senão o fetch teria rejeitado), mas algo aí
-    // deu errado. Trata como indisponibilidade — tenta de novo com backoff,
-    // não marca conflito por um problema que pode não ser desta operação.
-    return { kind: "rede" };
+    // 403 é o caso 9 — e é diferente do 401 justamente por NÃO ter saída de
+    // "tentar de novo": o acesso não volta por reautenticar.
+    if (resposta.status === 403) {
+      return { kind: "naoAutorizado", mensagem: conflito.titulo, conflito };
+    }
+    return { kind: "conflito", mensagem, conflito };
   }
 
   let json: unknown;
@@ -238,6 +256,7 @@ export async function sincronizarFila(ctx: SyncContext): Promise<void> {
           // sozinho (entrar de novo é decisão do cuidador, não um retry).
           const falhou = await ctx.store.marcar(antes, proxima.operacao.id, "FAILED", {
             error: erro("unauthorized", resultado.mensagem),
+            conflict: resultado.conflito,
           });
           ctx.aplicarFila(falhou);
           return;
@@ -247,6 +266,7 @@ export async function sincronizarFila(ctx: SyncContext): Promise<void> {
           const antes = ctx.obterFila();
           const emConflito = await ctx.store.marcar(antes, proxima.operacao.id, "CONFLICT", {
             error: erro("conflict", resultado.mensagem),
+            conflict: resultado.conflito,
           });
           ctx.aplicarFila(emConflito);
           return;

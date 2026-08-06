@@ -16,7 +16,10 @@ import {
   isSensitiveCategory,
 } from "@/lib/realtime-question-types";
 import { isStatementOrigin } from "@/lib/option-conversation-types";
-import { statusForCreationError } from "@/lib/realtime-question-store";
+import {
+  respostaDeErro,
+  statusForCreationError,
+} from "@/lib/realtime-question-store";
 
 // Mensagem em construção e frase final de um caminho.
 //
@@ -154,10 +157,7 @@ export async function POST(request: Request) {
     );
     return Response.json({ statement });
   } catch (e) {
-    return Response.json(
-      { error: (e as Error).message },
-      { status: statusForCreationError(e) }
-    );
+    return respostaDeErro(e, statusForCreationError(e));
   }
 }
 
@@ -235,6 +235,6 @@ export async function PATCH(request: Request) {
     );
     return Response.json(result);
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }

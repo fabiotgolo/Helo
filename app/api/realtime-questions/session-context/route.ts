@@ -5,6 +5,7 @@ import {
   recordSessionContextView,
   saveSessionContext,
 } from "@/lib/session-context-store";
+import { respostaDeErro } from "@/lib/realtime-question-store";
 
 // Contexto da conversa (Fase 4.8), dentro de uma sessão de Perguntas em tempo
 // real. Gravar exige createSession; consultar exige viewSessions.
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
     );
     return Response.json({ context });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }
 
@@ -110,6 +111,6 @@ export async function PUT(request: Request) {
     );
     return Response.json(result);
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }

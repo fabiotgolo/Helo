@@ -38,6 +38,7 @@ import {
   isSemanticResponse,
   isSensitiveCategory,
   isTerminalSessionStatus,
+  RtqConflictError,
   type InteractionEventType,
   type RtqSessionStatus,
   type SemanticResponse,
@@ -308,6 +309,18 @@ export function applyNodeAction(
 ): NodeStateChange {
   const from = node.status;
   if (!NODE_ACTION_ALLOWED_FROM[action.kind].includes(from)) {
+    // §10, caso 3 — o nível É a pergunta na conversa por opções, e REPLACED é
+    // como uma pergunta corrigida (§29) marca a versão que saiu de cena. A
+    // ação NUNCA é reaplicada sobre a substituta automaticamente: a tela
+    // mostra as duas e o cuidador escolhe. Por isso o id da substituta vai
+    // junto — sem ele não há o que mostrar ao lado.
+    if (from === "REPLACED") {
+      throw new RtqConflictError(
+        "TURN_REPLACED",
+        `ação ${action.kind} não é permitida no nível em ${from}`,
+        { serverStatus: from, replacedById: node.replacedByNodeId ?? undefined }
+      );
+    }
     throw new RtqDomainError(
       `ação ${action.kind} não é permitida no nível em ${from}`
     );
@@ -798,6 +811,20 @@ export function applyStatementAction(
 ): StatementStateChange {
   const from = statement.status;
   if (!STATEMENT_ACTION_ALLOWED_FROM[action.kind].includes(from)) {
+    // §10, caso 6 — como o caso 3, com um dever a mais na tela: dizer QUEM
+    // formulou cada texto. Uma interpretação do cuidador não é fala do
+    // paciente, e é justamente numa tela que mostra dois textos lado a lado
+    // que essa fronteira corre risco de se perder.
+    if (from === "REPLACED") {
+      throw new RtqConflictError(
+        "STATEMENT_REPLACED",
+        `ação ${action.kind} não é permitida na frase em ${from}`,
+        {
+          serverStatus: from,
+          replacedById: statement.replacedByStatementId ?? undefined,
+        }
+      );
+    }
     throw new RtqDomainError(
       `ação ${action.kind} não é permitida na frase em ${from}`
     );
@@ -1152,26 +1179,57 @@ export function assertSessionAcceptsNewPath(status: RtqSessionStatus): void {
  * Guarda combinada de sessão + caminho. Uma sessão pausada não aceita
  * apresentar nem registrar seleção; um caminho encerrado não aceita nada.
  */
+/**
+ * As três recusas que sessão e caminho impõem, com o nome de cada uma (§10).
+ *
+ * Nó e frase faziam esta mesma checagem em duas cópias literais. Nomear os
+ * casos em duas cópias seria pedir para elas divergirem — e a divergência
+ * apareceria como uma tela de decisão errada para o cuidador, num dos dois
+ * caminhos, sem erro de compilação em lugar nenhum.
+ *
+ * `pacienteVeria` é o que distingue as ações que a pausa bloqueia: pausar
+ * proíbe apresentar ao paciente e registrar o que ele respondeu, não proíbe o
+ * cuidador continuar preparando.
+ */
+function assertSessaoECaminhoAceitam(
+  sessionStatus: RtqSessionStatus,
+  pathStatus: PathStatus,
+  pacienteVeria: boolean,
+  aviso: string
+): void {
+  if (isTerminalSessionStatus(sessionStatus)) {
+    throw new RtqConflictError(
+      "SESSION_COMPLETED",
+      "sessão encerrada não aceita novas interações",
+      { serverStatus: sessionStatus }
+    );
+  }
+  if (isTerminalPathStatus(pathStatus)) {
+    // Um caminho concluído não volta a ser ativo: reutilizar cria outro (§25).
+    throw new RtqConflictError(
+      "PATH_ENDED",
+      "esta conversa por opções já foi encerrada; reutilize o conteúdo para iniciar outra",
+      { serverStatus: pathStatus }
+    );
+  }
+  if ((sessionStatus === "PAUSED" || pathStatus === "PAUSED") && pacienteVeria) {
+    throw new RtqConflictError("SESSION_PAUSED", aviso, {
+      serverStatus: sessionStatus === "PAUSED" ? sessionStatus : pathStatus,
+    });
+  }
+}
+
 export function assertAcceptsNodeAction(
   sessionStatus: RtqSessionStatus,
   pathStatus: PathStatus,
   kind: NodeActionKind
 ): void {
-  if (isTerminalSessionStatus(sessionStatus)) {
-    throw new RtqDomainError("sessão encerrada não aceita novas interações");
-  }
-  if (isTerminalPathStatus(pathStatus)) {
-    // Um caminho concluído não volta a ser ativo: reutilizar cria outro (§25).
-    throw new RtqDomainError(
-      "esta conversa por opções já foi encerrada; reutilize o conteúdo para iniciar outra"
-    );
-  }
-  const paused = sessionStatus === "PAUSED" || pathStatus === "PAUSED";
-  if (paused && PATIENT_FACING_NODE_ACTIONS.includes(kind)) {
-    throw new RtqDomainError(
-      "conversa pausada: retome antes de apresentar ou registrar seleções"
-    );
-  }
+  assertSessaoECaminhoAceitam(
+    sessionStatus,
+    pathStatus,
+    PATIENT_FACING_NODE_ACTIONS.includes(kind),
+    "conversa pausada: retome antes de apresentar ou registrar seleções"
+  );
 }
 
 export function assertAcceptsStatementAction(
@@ -1179,20 +1237,12 @@ export function assertAcceptsStatementAction(
   pathStatus: PathStatus,
   kind: StatementActionKind
 ): void {
-  if (isTerminalSessionStatus(sessionStatus)) {
-    throw new RtqDomainError("sessão encerrada não aceita novas interações");
-  }
-  if (isTerminalPathStatus(pathStatus)) {
-    throw new RtqDomainError(
-      "esta conversa por opções já foi encerrada; reutilize o conteúdo para iniciar outra"
-    );
-  }
-  const paused = sessionStatus === "PAUSED" || pathStatus === "PAUSED";
-  if (paused && PATIENT_FACING_STATEMENT_ACTIONS.includes(kind)) {
-    throw new RtqDomainError(
-      "conversa pausada: retome antes de apresentar ou registrar respostas"
-    );
-  }
+  assertSessaoECaminhoAceitam(
+    sessionStatus,
+    pathStatus,
+    PATIENT_FACING_STATEMENT_ACTIONS.includes(kind),
+    "conversa pausada: retome antes de apresentar ou registrar respostas"
+  );
 }
 
 /**

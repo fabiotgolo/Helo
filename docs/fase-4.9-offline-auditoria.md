@@ -405,6 +405,18 @@ interface. É isso que mantém a mudança contida.
 
 ### 3.3 IDs antes da sincronização
 
+> ### ⚠ SUPERADA na execução 2 — ver a Decisão 1, no fim deste documento
+>
+> O desenho de **handles** descrito abaixo **não foi implementado** e não deve
+> ser. A execução 2 (Fase 4.9.2) já havia entregue, testado e posto em produção
+> o desenho oposto — o cliente cunha o id definitivo — e a Fase 4.9.3-B o
+> formalizou no servidor. O texto original fica preservado abaixo, sem edição,
+> porque apagá-lo esconderia a razão de a Decisão 1 existir.
+>
+> Onde este documento ainda disser "handle" (§4, §5, §9, §10 linha 13, §15),
+> leia **"id definitivo cunhado pelo cliente"**. Não há tabela `handle → idReal`,
+> e não há reescrita da fila depois de uma criação.
+
 **A identidade do registro continua sendo a que o servidor cunha.** O offline não
 inventa `ocn…`/`ocp…`/`cqt…`.
 
@@ -823,7 +835,7 @@ termina numa tela em que o cuidador decide. O padrão nunca é "aplicar mesmo as
 | --- | --- | --- | --- |
 | 1 | **Sessão concluída em outro dispositivo** | 400 `"sessão concluída…"` ou snapshot com `status: COMPLETED` | Fila **parada**. Tela: *"Esta conversa foi encerrada em outro dispositivo às HH:MM. O que você registrou aqui não entrou."* Opções: **ver o que ficou pendente** · **descartar** · **iniciar nova conversa e reaproveitar os textos como rascunho** (nunca como confirmação) |
 | 2 | **Sessão pausada em outro dispositivo** | 400 `"sessão pausada"` | Tela: *"A conversa foi pausada em outro dispositivo."* Opções: **retomar e continuar a sincronizar** (enfileira `RESUME` antes do resto) · **descartar** |
-| 3 | **Pergunta substituída** | 400 sobre turno `REPLACED` | Tela mostra a pergunta original **e** a substituta. Opções: **descartar minha ação** · **repetir sobre a nova versão** (cria operação nova, `clientRequestId` novo). Nunca aplica automaticamente sobre a substituta |
+| 3 | **Pergunta substituída** | 400 sobre **nível** (`OptionConversationNode`) em `REPLACED` — ver a Decisão 2 | Tela mostra a pergunta original **e** a substituta. Opções: **descartar minha ação** · **repetir sobre a nova versão** (cria operação nova, `clientRequestId` novo). Nunca aplica automaticamente sobre a substituta |
 | 4 | **Resposta alterada** | `snapshotUpdatedAt` ≠ `updatedAt` do servidor **e** `provisionalResponse` divergente | Tela com **as duas**: *"Você registrou TALVEZ às 14:32 (sem conexão). O servidor tem SIM, registrado às 14:35."* Opções: **manter a do servidor** · **aplicar a minha** (vira `CHANGE_RESPONSE`, contabilizada como correção, com trilha). Nunca "a mais recente vence" |
 | 5 | **Caminho interrompido** | 400 sobre `path` em `INTERRUPTED`/`RESTARTED` | Tela: *"Este caminho foi encerrado."* Opções: **descartar** · **reutilizar o conteúdo num caminho novo** (§25, cria rascunho) |
 | 6 | **Interpretação substituída** | `statement` em `REPLACED` | Como o caso 3, com destaque para a **origem**: a tela diz explicitamente quem formulou cada texto |
@@ -833,7 +845,7 @@ termina numa tela em que o cuidador decide. O padrão nunca é "aplicar mesmo as
 | 10 | **Registro já existente** | ledger `appliedRequests` responde | **Não é conflito**: `APPLIED`, segue em frente, sem tela e sem duplicar |
 | 11 | **Versão do servidor mais recente** | `updatedAt` do servidor > `snapshotUpdatedAt` **sem** divergência de conteúdo | Snapshot é atualizado e a operação prossegue. Se houver divergência de conteúdo, cai no caso 4 |
 | 12 | **Operação duplicada** | mesmo `clientRequestId` | Ledger devolve o resultado anterior → `APPLIED`. Sem tela, sem segundo registro, sem segundo evento |
-| 13 | **Dependência ausente** | handle não resolvido, ou `dependsOn` não `APPLIED` | `BLOCKED`, fila parada. Se a dependência acabou em `FAILED`/`CONFLICT`, a tela explica **a cadeia inteira**: *"Não foi possível registrar o nível; por isso a opção escolhida também não foi."* O cuidador decide sobre o conjunto, não sobre uma peça solta |
+| 13 | **Dependência ausente** | `dependsOn` não `SYNCED` (o "handle não resolvido" original saiu com a Decisão 1) | `BLOCKED`, fila parada. Se a dependência acabou em `FAILED`/`CONFLICT`, a tela explica **a cadeia inteira**: *"Não foi possível registrar o nível; por isso a opção escolhida também não foi."* O cuidador decide sobre o conjunto, não sobre uma peça solta |
 
 ---
 
@@ -1073,3 +1085,106 @@ uma opção legítima, e provavelmente a mais prudente.
 
 *Auditoria encerrada. Nenhuma implementação foi feita. Aguardando aprovação formal
 da arquitetura antes da Execução 2.*
+
+---
+
+# Decisões posteriores à auditoria
+
+Registradas aqui, e não por edição do texto acima, porque o valor de um
+documento de auditoria está em ser possível ver **o que se pensou antes** e
+**o que a implementação ensinou depois**. Reescrever as seções originais
+apagaria a segunda metade.
+
+## Decisão 1 — o cliente cunha o id definitivo; handles não existem
+
+**Substitui a §3.3.** Decidida em 5 de agosto de 2026, durante a Fase 4.9.3-B,
+e autorizada explicitamente antes da implementação.
+
+**O que muda.** As quatro rotas de criação (`turns`, `paths`, `nodes`,
+`statements`) aceitam um id proposto pelo cliente. Quando ele vem, o servidor
+valida formato, prefixo e tipo de recurso; valida que pertence ao
+paciente/sessão/usuário autenticado; recusa reuso entre pacientes, sessões ou
+usuários; recusa sobrescrever registro existente; e trata colisão real como
+conflito explícito — nunca como atualização silenciosa. Quando não vem, o
+comportamento anterior é preservado na íntegra: o servidor cunha o id.
+
+**Por que o desenho original caiu.** A §3.3 foi escrita antes da execução 2.
+Quando a Fase 4.9.3-B começou, a 4.9.2 já havia entregue — testada, em uso — a
+fila que grava `createdEntityId` no momento do gesto do cuidador, e as
+referências entre caminho, nível e frase criados sem conexão já apontavam para
+esses ids. Introduzir handles naquele ponto significaria: (a) desfazer código
+provado, (b) acrescentar uma tabela de correlação e um passo de reescrita da
+fila — dois lugares novos onde uma referência clínica pode se perder — para
+(c) chegar ao mesmo resultado observável. O ganho seria conceitual; o risco,
+real.
+
+**O que NÃO muda, e é o ponto central.** Autoridade continua sendo do servidor.
+O cliente propõe a **identidade** do registro; autenticação, autorização,
+versão, timestamps, estado da sessão e todas as validações de domínio seguem
+exclusivamente no servidor. E a proteção contra duplicação continua sendo o
+`clientRequestId` — não o id. Repetir a mesma chave devolve o mesmo resultado
+lógico; repetir a mesma chave com payload diferente devolve conflito (409);
+resposta perdida depois da persistência nunca gera um segundo registro.
+
+**Provado por:** `scripts/test-offline-idempotency.mjs` (34 asserções, §7
+cobre id aceito, retry com o mesmo id, payload divergente, colisão, prefixo
+inválido, isolamento entre sessões/pacientes/usuários e referências entre
+registros criados sem conexão) e `tests/e2e/offline-sync.spec.ts`.
+
+## Decisão 2 — a linha 3 da matriz é sobre o **nível**, não sobre o turno
+
+**Corrige a §10, linha 3.** Constatada em 6 de agosto de 2026, ao implementar
+a matriz.
+
+A linha 3 dizia "400 sobre turno `REPLACED`". **`RtqTurnStatus` não tem
+`REPLACED`** — nunca teve. Os dez estados de um turno são `DRAFT`, `REVIEWED`,
+`PRESENTED`, `AWAITING_RESPONSE`, `PROVISIONAL_RESPONSE`,
+`RECONFIRMATION_PENDING`, `CONFIRMED`, `UNCERTAIN_GESTURE`, `NO_RESPONSE` e
+`CANCELED`. Uma pergunta fechada não é substituída: ela é cancelada, ou
+reapresentada no mesmo turno.
+
+Quem tem `REPLACED` é o **nível** (`replacedByNodeId`) e a **frase**
+(`replacedByStatementId`), pelo mecanismo de correção do §29. E é ali que a
+situação descrita pela linha 3 realmente acontece: na conversa por opções, o
+nível **é** a pergunta apresentada ao paciente.
+
+O código foi implementado contra o produto, não contra o texto: o caso 3 é
+detectado em `applyNodeAction`, o caso 6 em `applyStatementAction`. O nome do
+código emitido continua `TURN_REPLACED` para não divergir da numeração da
+matriz — mas ele nasce de um nó.
+
+## Decisão 3 — o servidor NOMEIA o conflito; o cliente nunca lê a mensagem
+
+**Acrescenta à §10.** Decidida em 6 de agosto de 2026, na Fase 4.9.3-C.
+
+A matriz exige distinguir treze situações. Até a Fase B, toda recusa 4xx
+virava um único `CONFLICT` com a frase *"O servidor recusou esta ação."* — o
+que torna impossível oferecer decisão alguma: não dá para dizer *"esta
+conversa foi encerrada em outro aparelho às 14:35"* sem saber que foi o caso 1,
+nem sem ter o horário.
+
+Três caminhos foram considerados:
+
+| | Caminho | Por que não / por que sim |
+| --- | --- | --- |
+| a | Cliente classifica lendo a mensagem em português | **Recusado.** Acoplaria decisão clínica à redação de um erro: melhorar uma frase devolveria o produto, em silêncio, ao conflito genérico. Sem erro de compilação, sem teste vermelho — só um cuidador vendo a tela errada |
+| b | Cliente relê o estado do servidor e compara | **Recusado.** Uma ida a mais à rede para descobrir o que a resposta que ele já tem em mãos poderia ter dito, e uma janela nova entre a recusa e a releitura |
+| c | Servidor devolve um código legível por máquina | **Adotado** |
+
+**Como ficou.** `RtqConflictError` carrega um `code` de vocabulário fechado
+(nove valores) e apenas os `facts` que a tela de decisão precisa mostrar — o
+documento inteiro nunca vai numa resposta de erro, porque quem foi recusado é,
+por definição, quem talvez não devesse mais estar lendo aquele dado (é
+literalmente o caso 9). O campo `error` em português segue **idêntico** ao que
+sempre foi: nada que já consumia estas rotas precisa saber que o código existe.
+
+**A regra que sobrevive ao desconhecido.** Recusa sem código não vira palpite e
+não vira sucesso: vira `DESCONHECIDO`, que **também** para a fila e **também**
+pede decisão do cuidador. Errar para o lado de perguntar é barato; errar para o
+lado de aplicar sozinho, num prontuário, é irreversível.
+
+**Provado por:** `scripts/test-offline-conflicts.mjs` (86 asserções, as treze
+linhas, incluindo a prova de que uma frase que *parece* o caso 1 não é
+promovida a caso 1 sem o código) e `scripts/test-conflict-codes.mjs` (22
+asserções contra o servidor de verdade, provando que os códigos saem de lá e
+que a mensagem original foi preservada).

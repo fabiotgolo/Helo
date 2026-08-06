@@ -11,7 +11,10 @@ import {
   isNodeActionKind,
   type NodeAction,
 } from "@/lib/option-conversation-machine";
-import { statusForCreationError } from "@/lib/realtime-question-store";
+import {
+  respostaDeErro,
+  statusForCreationError,
+} from "@/lib/realtime-question-store";
 
 // Níveis de um caminho da conversa por opções.
 //
@@ -114,10 +117,7 @@ export async function POST(request: Request) {
     );
     return Response.json({ node });
   } catch (e) {
-    return Response.json(
-      { error: (e as Error).message },
-      { status: statusForCreationError(e) }
-    );
+    return respostaDeErro(e, statusForCreationError(e));
   }
 }
 
@@ -196,7 +196,7 @@ export async function PATCH(request: Request) {
       );
       return Response.json({ node });
     } catch (e) {
-      return Response.json({ error: (e as Error).message }, { status: 400 });
+      return respostaDeErro(e, 400);
     }
   }
 
@@ -216,6 +216,6 @@ export async function PATCH(request: Request) {
     );
     return Response.json(result);
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }

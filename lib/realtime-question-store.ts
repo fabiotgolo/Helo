@@ -36,6 +36,8 @@ import {
   isResponseInputMethod,
   isSemanticResponse,
   isSensitiveCategory,
+  RtqConflictError,
+  type RtqConflictFacts,
   RtqDomainError,
   type ConversationQuestionSession,
   type ConversationQuestionTurn,
@@ -351,9 +353,9 @@ export function payloadFingerprint(conteudo: unknown): string {
  * reenvio", e o motor de sincronização (Fase B) o marca CONFLICT, nunca
  * FAILED — retentar não resolve, é a mesma colisão de novo.
  */
-export class RtqIdempotencyConflictError extends RtqDomainError {
+export class RtqIdempotencyConflictError extends RtqConflictError {
   constructor(message = "mesma chave de idempotência usada para uma intenção diferente") {
-    super(message);
+    super("IDEMPOTENCY_MISMATCH", message);
     this.name = "RtqIdempotencyConflictError";
   }
 }
@@ -365,6 +367,32 @@ export class RtqIdempotencyConflictError extends RtqDomainError {
  */
 export function statusForCreationError(e: unknown): number {
   return e instanceof RtqIdempotencyConflictError ? 409 : 400;
+}
+
+/**
+ * A resposta de erro de uma rota RTQ, com o conflito NOMEADO quando houver um
+ * (§10, Fase C).
+ *
+ * Existe como função única, e não como um objeto montado em cada `catch`,
+ * porque são dezessete blocos: a chance de um deles esquecer o `code` — e com
+ * ele condenar aquela rota a "conflito desconhecido" para sempre, sem erro de
+ * compilação — é alta demais para depender de disciplina.
+ *
+ * O `error` em texto continua idêntico ao que sempre foi. Nada que já
+ * consumia estas rotas precisa saber que o campo novo existe.
+ */
+export function respostaDeErro(e: unknown, status: number): Response {
+  const corpo: { error: string; code?: string; facts?: RtqConflictFacts } = {
+    error: (e as Error).message,
+  };
+  if (e instanceof RtqConflictError) {
+    corpo.code = e.code;
+    // Só vai o que a tela de decisão precisa mostrar. O documento inteiro
+    // NUNCA entra numa resposta de erro: quem foi recusado é, por definição,
+    // quem talvez não devesse mais estar lendo aquele dado (caso 9).
+    if (Object.keys(e.facts).length > 0) corpo.facts = e.facts;
+  }
+  return Response.json(corpo, { status });
 }
 
 /** Normaliza um `clientRequestId` recebido do corpo da requisição. */

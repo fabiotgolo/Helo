@@ -218,6 +218,24 @@ export interface OfflineOperation {
    * servidor, não uma repetição do que o cliente já sabia.
    */
   remoteEntityId: string | null;
+
+  // ——— Conflito nomeado (Fase C, §10) ———
+
+  /**
+   * QUAL das treze linhas da matriz aconteceu, com os fatos que a tela de
+   * decisão precisa mostrar. Preenchido só quando `status === "CONFLICT"`.
+   *
+   * É campo próprio, e não algo derivado de `lastError`, porque `lastError` é
+   * uma frase para o humano ler e este é um dado estruturado para a tela
+   * consumir. Guardá-lo junto da operação — e não em memória — é o que faz o
+   * conflito sobreviver a um refresh: uma decisão clínica pendente não pode
+   * depender da aba continuar aberta.
+   *
+   * O tipo vem de `conflicts.ts` como `unknown` para manter este módulo sem
+   * dependência de lá (é `conflicts.ts` que importa daqui, não o contrário);
+   * `restoreConflict` valida na leitura.
+   */
+  conflict: unknown | null;
 }
 
 // ---------- Retry e backoff (Fase B, §9 da auditoria) ----------

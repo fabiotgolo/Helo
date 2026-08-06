@@ -15,6 +15,7 @@ import {
   isSemanticResponse,
   isSensitiveCategory,
   isTerminalSessionStatus,
+  RtqConflictError,
   RtqDomainError,
   type ConversationQuestionTurn,
   type InteractionEventType,
@@ -77,6 +78,29 @@ export function applySessionAction(
 ): SessionStateChange {
   const target = SESSION_ACTION_TARGET[action];
   if (!canTransitionSession(current, target)) {
+    // ——— §10, casos 1 e 2 ———
+    //
+    // A recusa é a mesma de sempre; o que muda é ela passar a DIZER qual é.
+    // Uma fila offline recusada aqui precisa distinguir "encerrada em outro
+    // aparelho" (caso 1: nada do que ficou aqui entra, e a saída é levar os
+    // textos como rascunho para uma conversa nova) de "pausada em outro
+    // aparelho" (caso 2: dá para retomar e seguir enviando). As duas viravam
+    // a mesma frase, e com ela a mesma tela — que não poderia oferecer
+    // nenhuma das duas saídas certas.
+    if (isTerminalSessionStatus(current)) {
+      throw new RtqConflictError(
+        "SESSION_COMPLETED",
+        `transição de sessão inválida: ${current} → ${target}`,
+        { serverStatus: current }
+      );
+    }
+    if (current === "PAUSED") {
+      throw new RtqConflictError(
+        "SESSION_PAUSED",
+        `transição de sessão inválida: ${current} → ${target}`,
+        { serverStatus: current }
+      );
+    }
     throw new RtqDomainError(
       `transição de sessão inválida: ${current} → ${target}`
     );

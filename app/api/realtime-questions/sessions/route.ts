@@ -5,6 +5,7 @@ import {
   getRtqSession,
   listRtqSessions,
   listTurns,
+  respostaDeErro,
   runSessionAction,
 } from "@/lib/realtime-question-store";
 import { getActiveSessionContext } from "@/lib/session-context-store";
@@ -75,7 +76,7 @@ export async function POST(request: Request) {
     });
     return Response.json({ session });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }
 
@@ -114,6 +115,6 @@ export async function PATCH(request: Request) {
     });
     return Response.json({ session });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 400 });
+    return respostaDeErro(e, 400);
   }
 }
