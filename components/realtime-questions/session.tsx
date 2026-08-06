@@ -41,6 +41,9 @@ import {
 } from "@/components/realtime-questions/offline-chip";
 import { useOfflineSession } from "@/lib/offline/use-offline-session";
 import { pacienteEstaOlhando } from "@/lib/option-conversation-screen";
+import { ConflictScreen } from "@/components/realtime-questions/conflict-screen";
+import { restoreConflict, type ConflictCase } from "@/lib/offline/conflicts";
+import type { OfflineOperation } from "@/lib/offline/types";
 import {
   HistoryActionsDialog,
   HistoryDetail,
@@ -100,6 +103,35 @@ import {
  */
 const RASCUNHO_PERGUNTA = "pergunta";
 const RASCUNHO_INTERPRETACAO = "interpretacao";
+
+/**
+ * O conflito que está travando a fila AGORA — o primeiro em ordem causal que
+ * tem detalhe legível para mostrar.
+ *
+ * Um de cada vez, e sempre o mais antigo: quando vários se acumulam, o
+ * primeiro costuma ser a CAUSA dos seguintes, e decidi-lo com frequência
+ * resolve os outros sozinho (descartar a criação leva a cadeia junto).
+ * Mostrar uma lista convidaria a decidir sobre efeitos antes da causa — o
+ * oposto do que §10, caso 13, manda fazer.
+ *
+ * Uma operação em CONFLICT cujo detalhe não sobreviveu (gravação truncada,
+ * schema antigo) continua travando a fila e continua exigindo decisão; ela só
+ * não tem tela para oferecer, e por isso é pulada aqui em vez de abrir um
+ * diálogo vazio.
+ *
+ * Função de módulo, e não `useMemo`: com o `return` dentro do laço o React
+ * Compiler não consegue preservar a memoização manual, e desiste de otimizar o
+ * componente inteiro. Fora do componente, ele memoiza a chamada sozinho.
+ */
+function primeiroConflitoLegivel(
+  conflitos: readonly OfflineOperation[]
+): { operacao: OfflineOperation; conflito: ConflictCase } | null {
+  for (const operacao of conflitos) {
+    const conflito = restoreConflict(operacao.conflict);
+    if (conflito) return { operacao, conflito };
+  }
+  return null;
+}
 
 export function RealtimeQuestionSession({
   patientId,
@@ -231,6 +263,11 @@ export function RealtimeQuestionSession({
   const [contextVersions, setContextVersions] = useState<
     SessionContextVersion[] | null
   >(null);
+  // Conflito de sincronização (Fase 4.9.3-C.2). Começa FECHADO e só abre por
+  // clique no chip: §11 é explícito — um conflito espera, ele não interrompe
+  // uma conversa em curso, e nenhum modal se abre sozinho.
+  const [conflitoAberto, setConflitoAberto] = useState(false);
+  const [avisoDeDecisao, setAvisoDeDecisao] = useState<string | null>(null);
   // A ação que falhou fica guardada para "Tentar novamente" repetir
   // exatamente ela — nada é reconstruído por adivinhação.
   const failed = useRef<
@@ -1012,6 +1049,21 @@ export function RealtimeQuestionSession({
   const pacienteNoCaminho = openPath != null && pacienteEstaOlhando(openPath);
 
   /**
+   * O conflito que está travando a fila AGORA — o primeiro em ordem causal.
+   *
+   * Um de cada vez, e sempre o mais antigo: quando vários se acumulam, o
+   * primeiro costuma ser a CAUSA dos seguintes, e decidi-lo com frequência
+   * resolve os outros sozinho (descartar a criação leva a cadeia junto).
+   * Mostrar uma lista convidaria a decidir sobre efeitos antes da causa.
+   *
+   * `conflict` é validado na leitura: uma operação em CONFLICT cujo detalhe
+   * não sobreviveu (schema antigo, gravação truncada) continua travando a
+   * fila e continua pedindo decisão — só não tem tela para oferecer, e por
+   * isso é filtrada aqui em vez de renderizar um diálogo vazio.
+   */
+  const conflitoAtual = primeiroConflitoLegivel(offline.conflitos);
+
+  /**
    * A tela é do PACIENTE. Uma expressão só, usada pela barra de contexto e
    * pela faixa do armazenamento local — as duas coisas que existem para o
    * cuidador e que não podem aparecer sobre o palco.
@@ -1067,7 +1119,57 @@ export function RealtimeQuestionSession({
               onReconhecerAviso={offline.reconhecerDescarte}
               pendenciasDeOutroPaciente={offline.pendenciasDeOutroPaciente}
               onSincronizarAgora={offline.tentarNovamente}
+              onDecidirConflito={() => setConflitoAberto(true)}
             />
+          )}
+
+          {/* A tela de decisão (Fase C.2, §10).
+
+              Três guardas, e cada uma responde por uma coisa diferente:
+              `conflitoAberto` — só abre por clique do cuidador, nunca sozinha;
+              `!telaEDoPaciente` — a MESMA fronteira do chip e da barra de
+              contexto, porque um conflito é assunto do cuidador e o palco é do
+              paciente; `conflitoAtual` — a fila pode ter esvaziado entre o
+              clique e o render (outra aba decidiu, por exemplo). */}
+          {conflitoAberto && !telaEDoPaciente && conflitoAtual && (
+            <ConflictScreen
+              operacao={conflitoAtual.operacao}
+              conflito={conflitoAtual.conflito}
+              fila={offline.fila}
+              onFechar={() => setConflitoAberto(false)}
+              onDecidir={(opcao) => {
+                void offline
+                  .decidirConflito(conflitoAtual.operacao.id, opcao)
+                  .then((descricao) => {
+                    if (descricao) setAvisoDeDecisao(descricao);
+                    // Fecha só quando a decisão foi TERMINAL. As informativas
+                    // (ver a cadeia) devolvem frase vazia e mantêm a tela
+                    // aberta — fechar ali obrigaria o cuidador a reabrir para
+                    // decidir o que ele acabou de pedir para ver.
+                    if (descricao) setConflitoAberto(false);
+                  })
+                  .catch(() => {});
+              }}
+            />
+          )}
+
+          {/* O que a decisão fez. `status`/`polite`: informa sem interromper. */}
+          {avisoDeDecisao && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="aviso-de-decisao"
+              className="flex flex-wrap items-center gap-2 self-start rounded-2xl border border-line bg-surface/60 px-3 py-2 text-xs text-ink"
+            >
+              <span>{avisoDeDecisao}</span>
+              <button
+                type="button"
+                onClick={() => setAvisoDeDecisao(null)}
+                className="rounded-full border border-line px-3 py-1 font-semibold"
+              >
+                Entendi
+              </button>
+            </div>
           )}
 
           {notUnderstood && !sessionOver && (

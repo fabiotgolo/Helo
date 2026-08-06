@@ -29,6 +29,8 @@ import {
   type NovaOperacao,
 } from "@/lib/offline/queue";
 import { servidorEstaAlcancavel, sincronizarFila } from "@/lib/offline/sync-engine";
+import { aplicarDecisao } from "@/lib/offline/decisions";
+import { restoreConflict, type ConflictOptionId } from "@/lib/offline/conflicts";
 import {
   motivoParaRecusarOffline,
   projetarCaminhos,
@@ -100,6 +102,20 @@ export interface OfflineBridge {
   sincronizar: () => Promise<void>;
   /** "Sincronizar agora" do cuidador — também reenfileira o que estava FAILED. */
   tentarNovamente: () => Promise<void>;
+
+  // ——— Conflitos: a decisão que só o cuidador toma (Fase C, §10) ———
+
+  /** As operações que pararam a fila esperando uma decisão, em ordem causal. */
+  conflitos: OfflineOperation[];
+  /**
+   * Aplica a saída escolhida. Devolve a frase do que aconteceu, para a tela
+   * confirmar ao cuidador que a decisão dele valeu — vazia quando a opção era
+   * só informativa (ver a cadeia, ver o que ficou pendente).
+   */
+  decidirConflito: (
+    operationId: string,
+    opcao: ConflictOptionId
+  ) => Promise<string>;
 
   // ——— Rascunhos: o terceiro estatuto ———
   //
@@ -577,6 +593,54 @@ export function useOfflineSession(args: {
     [store]
   );
 
+  /**
+   * A decisão do cuidador sobre um conflito (Fase C.2, §10).
+   *
+   * Vive DEPOIS de `definirRascunho` porque precisa dele: os casos 1 e 5
+   * devolvem o texto como rascunho, e é essa dependência real que decide a
+   * ordem no arquivo — não uma preferência de organização.
+   *
+   * Persiste ANTES de sincronizar. Se a decisão foi descartar e a
+   * sincronização viesse primeiro, um refresh no meio poderia ressuscitar do
+   * banco a operação que o cuidador acabou de mandar embora.
+   *
+   * Só sincroniza quando sobrou algo PENDING: descartar tudo não deixa nada
+   * para enviar, e ir à rede assim mesmo só serviria para descobrir isso.
+   */
+  const decidirConflito = useCallback(
+    async (operationId: string, opcao: ConflictOptionId): Promise<string> => {
+      if (!store) return "";
+      const alvo = filaRef.current.find((op) => op.id === operationId);
+      const conflito = restoreConflict(alvo?.conflict);
+      if (!alvo || !conflito) return "";
+
+      const resultado = aplicarDecisao(
+        filaRef.current,
+        operationId,
+        opcao,
+        conflito
+      );
+      await store.aplicarDecisaoDoCuidador(resultado.fila, resultado.removidas);
+      setFila(resultado.fila);
+
+      // §10, casos 1 e 5: o texto volta como RASCUNHO — nunca como registro,
+      // nunca como fala confirmada. O paciente não respondeu a isto.
+      if (resultado.rascunho) {
+        definirRascunho(resultado.rascunho.chave, resultado.rascunho.valor);
+      }
+
+      if (resultado.fila.some((op) => op.status === "PENDING")) {
+        await sincronizarFila({
+          store,
+          obterFila: () => filaRef.current,
+          aplicarFila: setFila,
+        });
+      }
+      return resultado.descricao;
+    },
+    [store, setFila, definirRascunho]
+  );
+
   useEffect(() => {
     const mapa = temporizadores.current;
     return () => {
@@ -592,6 +656,17 @@ export function useOfflineSession(args: {
 
   const status = useMemo(() => resumo(fila, online), [fila, online]);
   const filaOrdenada = useMemo(() => ordenada(fila), [fila]);
+  /**
+   * Em ordem causal, e não por "mais recente primeiro": quando vários
+   * conflitos se acumulam, o primeiro da fila costuma ser a CAUSA dos
+   * seguintes (a criação que falhou, e depois as ações sobre ela). Resolver
+   * de trás para frente faria o cuidador decidir sobre efeitos antes da
+   * causa — que é exatamente o que §10, caso 13, manda evitar.
+   */
+  const conflitos = useMemo(
+    () => filaOrdenada.filter((op) => op.status === "CONFLICT"),
+    [filaOrdenada]
+  );
 
   // ——— A ponte é MEMOIZADA, e isso não é micro-otimização ———
   //
@@ -625,6 +700,8 @@ export function useOfflineSession(args: {
       registrar,
       sincronizar,
       tentarNovamente,
+      conflitos,
+      decidirConflito,
       rascunhosProntos,
       lerRascunho,
       definirRascunho,
@@ -649,6 +726,8 @@ export function useOfflineSession(args: {
       registrar,
       sincronizar,
       tentarNovamente,
+      conflitos,
+      decidirConflito,
       rascunhosProntos,
       lerRascunho,
       definirRascunho,

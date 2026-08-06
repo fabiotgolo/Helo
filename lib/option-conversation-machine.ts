@@ -1171,7 +1171,11 @@ export function applyStatementRejection(
 /** Sessão encerrada não aceita caminho novo (§33). */
 export function assertSessionAcceptsNewPath(status: RtqSessionStatus): void {
   if (isTerminalSessionStatus(status)) {
-    throw new RtqDomainError("sessão encerrada não aceita nova conversa por opções");
+    throw new RtqConflictError(
+      "SESSION_COMPLETED",
+      "sessão encerrada não aceita nova conversa por opções",
+      { serverStatus: status }
+    );
   }
 }
 

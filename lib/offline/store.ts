@@ -224,6 +224,26 @@ export class OfflineSessionStore {
   }
 
   /**
+   * Grava a fila inteira — usada quando uma DECISÃO do cuidador muda várias
+   * operações de uma vez (Fase C.2): descarta uma e a cadeia que dependia
+   * dela, ou enfileira um RESUME antes do resto.
+   *
+   * Recebe a lista do que sai porque quem calculou a decisão já sabe disso, e
+   * recalcular aqui — comparando duas filas — seria uma segunda regra sobre o
+   * que pode ser apagado. A primeira (e única) está em `decisions.ts`, onde é
+   * pura e testável.
+   */
+  async aplicarDecisaoDoCuidador(
+    fila: readonly OfflineOperation[],
+    removidas: readonly string[]
+  ): Promise<void> {
+    await Promise.all(removidas.map((id) => apagarOperacao(id)));
+    await Promise.all(
+      fila.map((op) => gravarOperacao(this.escopo, op.id, op))
+    );
+  }
+
+  /**
    * Remove da fila SOMENTE o que o servidor confirmou.
    *
    * Nesta fase nada chega a SYNCED, então na prática isto não remove nada. Ele

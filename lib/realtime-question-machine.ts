@@ -698,11 +698,23 @@ function buildTurnChange(
 
 // ---------- Guardas de sessão ----------
 
+// As guardas da pergunta FECHADA. São o par das de `option-conversation-
+// machine.ts` (`assertSessaoECaminhoAceitam`) e precisam nomear os mesmos
+// casos da §10 — uma fila offline recusada aqui tem exatamente o mesmo
+// problema, e o cuidador precisa das mesmas saídas.
+//
+// Um turno criado sem conexão, numa sessão que outro aparelho encerrou, cai
+// AQUI — não em `applySessionAction`. Foi o que o e2e da Fase C.2 encontrou:
+// a tela abria classificando como "desconhecido", porque a recusa vinha de um
+// ponto que ainda não tinha nome.
+
 /** Sessão encerrada não aceita novas perguntas (seção 12). */
 export function assertSessionAcceptsNewTurn(status: RtqSessionStatus): void {
   if (isTerminalSessionStatus(status)) {
-    throw new RtqDomainError(
-      "sessão encerrada não aceita novas perguntas"
+    throw new RtqConflictError(
+      "SESSION_COMPLETED",
+      "sessão encerrada não aceita novas perguntas",
+      { serverStatus: status }
     );
   }
 }
@@ -713,11 +725,17 @@ export function assertSessionAcceptsTurnAction(
   kind: TurnActionKind
 ): void {
   if (isTerminalSessionStatus(status)) {
-    throw new RtqDomainError("sessão encerrada não aceita novas interações");
+    throw new RtqConflictError(
+      "SESSION_COMPLETED",
+      "sessão encerrada não aceita novas interações",
+      { serverStatus: status }
+    );
   }
   if (status === "PAUSED" && PATIENT_FACING_ACTIONS.includes(kind)) {
-    throw new RtqDomainError(
-      "sessão pausada: retome a sessão antes de registrar respostas"
+    throw new RtqConflictError(
+      "SESSION_PAUSED",
+      "sessão pausada: retome a sessão antes de registrar respostas",
+      { serverStatus: status }
     );
   }
 }

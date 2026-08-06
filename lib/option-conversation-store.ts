@@ -79,6 +79,7 @@ import {
 import { PREFIXO } from "@/lib/offline/ids";
 import {
   isSensitiveCategory,
+  RtqConflictError,
   type RtqSessionStatus,
   type SemanticResponse,
   type SensitiveCategory,
@@ -2348,8 +2349,10 @@ export async function reuseNode(
     const detail = await getPathDetail(patientId, sessionId, targetPathId);
     if (!detail) throw new RtqDomainError("conversa por opções não encontrada");
     if (isTerminalPathStatus(detail.path.status)) {
-      throw new RtqDomainError(
-        "esta conversa já foi encerrada; inicie uma nova para reutilizar"
+      throw new RtqConflictError(
+        "PATH_ENDED",
+        "esta conversa já foi encerrada; inicie uma nova para reutilizar",
+        { serverStatus: detail.path.status }
       );
     }
     path = detail.path;
@@ -2426,8 +2429,10 @@ export async function reuseStatement(
     const detail = await getPathDetail(patientId, sessionId, targetPathId);
     if (!detail) throw new RtqDomainError("conversa por opções não encontrada");
     if (isTerminalPathStatus(detail.path.status)) {
-      throw new RtqDomainError(
-        "esta conversa já foi encerrada; inicie uma nova para reutilizar"
+      throw new RtqConflictError(
+        "PATH_ENDED",
+        "esta conversa já foi encerrada; inicie uma nova para reutilizar",
+        { serverStatus: detail.path.status }
       );
     }
     path = detail.path;

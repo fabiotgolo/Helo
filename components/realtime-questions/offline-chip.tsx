@@ -154,6 +154,7 @@ export function OfflineChip({
   onReconhecerAviso,
   pendenciasDeOutroPaciente = 0,
   onSincronizarAgora,
+  onDecidirConflito,
 }: {
   status: OfflineStatusSummary;
   /** Migração de schema descartou dados locais. §8: nunca em silêncio. */
@@ -163,12 +164,20 @@ export function OfflineChip({
   pendenciasDeOutroPaciente?: number;
   /** Disparo manual do cuidador (Fase B). Omitido: o botão não aparece. */
   onSincronizarAgora?: () => void;
+  /**
+   * Abre a tela de decisão (Fase C.2). É o ÚNICO caminho até ela: §11 diz que
+   * a tela de conflito só abre por ação do cuidador, a partir do chip. Nada
+   * neste componente abre nada sozinho.
+   */
+  onDecidirConflito?: () => void;
 }) {
   const aparencia = APARENCIA[status.state];
   if (!aparencia && !aviso && pendenciasDeOutroPaciente === 0) return null;
 
   const mostrarBotao =
     Boolean(onSincronizarAgora) && ESTADOS_COM_BOTAO_MANUAL.has(status.state);
+  const mostrarDecidir =
+    Boolean(onDecidirConflito) && status.state === "CONFLITO";
 
   return (
     <div className="flex flex-col gap-2">
@@ -196,6 +205,16 @@ export function OfflineChip({
               className="ml-1 rounded-full border border-current/30 px-2 py-0.5 font-semibold underline-offset-2 hover:underline"
             >
               Sincronizar agora
+            </button>
+          )}
+          {mostrarDecidir && (
+            <button
+              type="button"
+              onClick={onDecidirConflito}
+              data-testid="decidir-conflito"
+              className="ml-1 rounded-full border border-current/30 px-2 py-0.5 font-semibold underline-offset-2 hover:underline"
+            >
+              Ver e decidir
             </button>
           )}
         </div>
