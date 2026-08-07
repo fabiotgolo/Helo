@@ -1463,3 +1463,133 @@ fecha essa janela por construção. Provado em
   chamada, e exige **zero**. Autenticação ausente e acesso revogado são
   detectados sem nenhuma tentativa de escrita; fila e `idempotencyKey`
   preservadas em ambos.
+
+---
+
+# Fase E — validação integrada final
+
+7 de agosto de 2026. HEAD `289e55a`, mais o commit desta fase.
+
+A Fase E **não acrescenta funcionalidade**. Ela faz três coisas: roda o conjunto
+inteiro de uma vez, confere item a item se o que foi entregue é o que foi
+planejado, e diz em voz alta o que ficou de fora. Um item do plano que não foi
+entregue é reportado aqui — **não implementado às pressas no fim da fase**, que
+é exatamente o que esta fase existe para não fazer.
+
+## E.1 A tabela de riscos, fechada
+
+| # | Risco | Estado | Prova nominal |
+| --- | --- | --- | --- |
+| R1 | Dado clínico em dispositivo compartilhado | **Fechado** | `offline-continuidade.spec.ts` ("nenhum token, cookie ou segredo é gravado no aparelho"; "o texto da conversa fica cifrado, mas o escopo fica legível") · `offline-logout-expiracao.spec.ts` (3 cenários: logout sem pendência, com pendência, e expiração) · `offline-app-shell.spec.ts` #8 |
+| R2 | Intenção exibida como fala confirmada | **Fechado** | `scripts/test-confirmed-patient-statement.mjs` (53) · `scripts/test-offline-projection.mjs` (103), com o guarda conferindo a projeção inteira ao fim de cada execução · `tsc` |
+| R3 | Registro duplicado na trilha | **Fechado** | `scripts/test-offline-idempotency.mjs` (34) · `offline-sync.spec.ts` #2 (resposta perdida depois de persistir) e #3 (dois disparos, uma requisição) |
+| R4 | `correctionCount` inflado por replay | **Fechado** | `scripts/test-offline-idempotency.mjs` §4, o caso dedicado ao `REMOVE_RESPONSE` de frase |
+| R5 | Ordem invertida na sincronização | **Fechado** | `scripts/test-offline-queue.mjs` (105) · `offline-sync.spec.ts` #4 e #5 |
+| R6 | Sincronizar sob a identidade errada | **Fechado** | `offline-conflitos.spec.ts` #9 (verificado por mutação: desligar os DOIS guardas faz o teste falhar) · `scripts/test-conflict-codes.mjs` (`IDENTITY_MISMATCH`) · `scripts/test-sync-preflight.mjs` |
+| R7 | Gravar no paciente errado | **Fechado** | `offline-sync.spec.ts` #13 · `offline-conflitos.spec.ts` #12 · `offline-app-shell.spec.ts` #8 e #9 |
+| R8 | Service Worker servir HTML velho | **Fechado** | `offline-app-shell.spec.ts` #3 e #4, em build de produção |
+| R9 | Service Worker interferir na voz | **Fechado** | `offline-app-shell.spec.ts`, bloco "R9 — Agent Helo com o Service Worker ativo" (4 cenários), em build de produção |
+| R10 | Cota de armazenamento estourada | **Fechado** | `scripts/test-offline-armazenamento.mjs` (49) · `offline-conflitos.spec.ts` #10–#13, com `QuotaExceededError` de verdade |
+| R11 | Relógio local contaminar a trilha | **Fechado pela metade forte** | Nenhum horário local alcança a trilha: as rotas não aceitam `createdAt`, e o `now` é do servidor. A outra metade — *marcar* a origem offline — não foi entregue; ver E.3 |
+| R12 | Complexidade nova quebrar o que funciona | **Fechado** | As 13 suítes de domínio/HTTP e os 7 lotes rodam sem alteração nos testes existentes |
+| R13 | Cuidador confiar demais no modo offline | **Fechado** | `scripts/test-offline-armazenamento.mjs` (aviso em 200, teto em 500) · `offline-conflitos.spec.ts` #13 (o aviso nunca alcança o palco do paciente) |
+
+## E.2 O plano de testes (§15), item a item
+
+**Domínio.** Ordem FIFO com dependências, backoff com teto, `CONFLICT`/`FAILED`
+parando a fila, retomada do ponto exato, `clientRequestId` idêntico em todas as
+retentativas, fila de outro usuário ou de outro paciente que não sincroniza,
+expiração de snapshot e chave — todos em `scripts/test-offline-queue.mjs` (105).
+A resolução de handles **não** foi testada porque handles deixaram de existir na
+Decisão 1: o cliente cunha o id definitivo, e não há o que reescrever.
+
+**Tipos.** `scripts/test-confirmed-patient-statement.mjs` (53) e `tsc --noEmit`.
+
+**HTTP.** `scripts/test-offline-idempotency.mjs` (34) cobre replay em criação e
+em transição, o `REMOVE_RESPONSE`, o `CONTENT_REUSED` único, a chave de outra
+sessão, o 403 após revogação e o 401 após expiração. O último item da lista —
+`metadata.offlineQueued` e `metadata.intendedAt` — **não existe** (E.3).
+
+**Interface.** As nove jornadas de `offline-continuidade.spec.ts`, as treze de
+`offline-sync.spec.ts`, as treze de `offline-conflitos.spec.ts`, as três de
+`offline-preflight.spec.ts`, as três de `offline-logout-expiracao.spec.ts` e as
+dezessete de `offline-app-shell.spec.ts`.
+
+**Regressão obrigatória.** Critério de aceite cumprido: nenhum teste existente
+precisou mudar para acomodar a 4.9.
+
+## E.3 O que ficou de fora — dito, não escondido
+
+**`metadata.offlineQueued` e `metadata.intendedAt` nunca foram implementados.**
+A §3.5 e a §7 item 7 prometem que o servidor marca, na trilha, que a operação
+nasceu offline e a que horas o cuidador agiu pelo relógio dele. Uma busca no
+repositório inteiro encontra os dois nomes **apenas neste documento**.
+
+O que isso significa, com precisão:
+
+- **O risco R11 está fechado.** Ele era *contaminação* — relógio local virando
+  fato temporal na trilha. Nenhum horário local chega ao servidor: as rotas não
+  aceitam `createdAt` e o `now` é gerado do lado do servidor. A fila tem seu
+  próprio `createdAt` local, que nunca sai do aparelho.
+- **A capacidade prometida na §3.5 não existe.** A trilha de auditoria não
+  distingue uma operação que nasceu offline de uma que nasceu online, e não
+  registra a defasagem entre a intenção e a aplicação. Para quem lê a trilha
+  depois, uma conversa inteira conduzida sem rede aparece como se tivesse
+  acontecido no minuto em que a conexão voltou.
+
+Não foi implementado agora **de propósito**: a Fase E valida o conjunto final e
+não introduz funcionalidade. Fica registrado como pendência nomeada, com escopo
+pequeno e bem delimitado — dois campos no corpo da requisição, dois campos no
+evento de auditoria, e um teste HTTP.
+
+A ordem correta é a mesma de sempre: proposta de valores e formato primeiro,
+implementação depois.
+
+## E.4 Resultado agregado
+
+**Estáticas e domínio** — `tsc --noEmit` 0 erros · build de produção limpo ·
+`eslint` 61 problemas, a baseline exata · 13 suítes de domínio/HTTP com 793
+asserções e 0 falhas · offline puro 467 e 0 falhas · `test:conflict-codes` 42/42
+· `test:sync-preflight` 15/15 · `test:offline:idempotency` 34/34 · app shell e
+R9 em build de produção 17/17.
+
+**Os 7 lotes.** Primeira rodada: 182 aprovados, 5 falhos, 187 testes, 91:35.
+Todas as cinco falhas foram reexecutadas conforme o protocolo — teste isolado, e
+depois o lote inteiro com dev server e emulador novos:
+
+| lote | 1ª rodada | reexecução limpa |
+| --- | --- | --- |
+| `base` | 30 · 1 falha | **31 · 0** |
+| `conversa-por-opcoes` | 28 · 4 falhas | **32 · 0** |
+| `fases-4x` | **33 · 0** | — |
+| `controles-do-paciente` | **12 · 0** | — |
+| `offline` | **41 · 0** | — |
+| `responsivo-base` | **10 · 0** | — |
+| `responsivo-fases` | **28 · 0** | — |
+
+**Os 187 testes passaram em execução limpa.**
+
+## E.5 As falhas, e por que elas são da máquina
+
+O que sustenta a conclusão não é "rodei de novo e passou" — é a medida.
+
+1. **O relógio.** O lote `conversa-por-opcoes` levou **32,6 minutos** na rodada
+   vermelha e **19,2** na limpa. O `base` levou 9,3 e depois 7,2. A máquina
+   estava com *load average* entre 19 e 26, com Safari, Preview e Chrome em uso
+   ativo ao lado do Chromium dos testes.
+2. **A natureza das falhas.** Quatro das cinco eram timeout de 90s esperando um
+   botão aparecer — nenhuma asserção errada, nenhuma resposta incorreta do
+   servidor. A quinta era o nome do paciente ausente na tela de início.
+3. **O sorteio.** O lote `base` falhou nas duas rodadas vermelhas, mas em
+   **testes diferentes**: `realtime-questions.spec.ts` #1 na primeira e
+   `conversa-regressao.spec.ts` #30 na segunda. Um defeito de produto não troca
+   de vítima.
+4. **O isolamento.** `conversa-regressao.spec.ts` #30 rodou 3 vezes seguidas
+   sozinho: 3 verdes, em 5,6–11,7s. `realtime-questions.spec.ts` #1 rodou 3
+   vezes: 3 verdes, em ~3,2s — contra os 90s do timeout. Fator de 28.
+5. **A origem.** Nenhum dos três arquivos que falharam importa `lib/offline`. O
+   lote que carrega a 4.9 inteira — `offline`, com os 41 testes, incluindo os 3
+   de preflight — fechou verde na primeira rodada, sem reexecução.
+
+Nenhuma linha de produto foi alterada, e nenhuma asserção foi enfraquecida, para
+produzir esses verdes.

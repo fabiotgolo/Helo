@@ -450,7 +450,7 @@ exige uma confirmação final: escolher "encerrar" não encerra sozinho.
 
 Ainda **não** implementados aqui: ElevenLabs, voz e geração por IA.
 
-### Continuidade sem conexão (4.9.2)
+### Continuidade sem conexão (4.9)
 
 Quando a conexão cai no meio de uma conversa **já iniciada e já autenticada**, o
 cuidador continua registrando. O que ele faz vai para uma **fila de intenções**
@@ -477,21 +477,26 @@ Pausar, retomar, criar pergunta, montar e apresentar níveis, registrar a
 seleção observada, escrever interpretação, editar o contexto e abrir os
 controles do paciente: tudo isso continua.
 
-A faixa do armazenamento diz **Salvo neste aparelho**, **Aguardando conexão** ou
-**Sincronização pendente** — e nunca "Sincronizado", porque nesta fase nada foi
-confirmado remotamente. Ela vive na moldura do cuidador e some no palco do
-paciente, pela MESMA `pacienteEstaOlhando` que governa a barra de contexto.
+A faixa do armazenamento diz **Salvo neste aparelho**, **Aguardando conexão**,
+**Sincronização pendente**, **Sincronizando** ou **Sincronizado** — e "Sincronizado"
+é a única que afirma confirmação, contando registros que o servidor aceitou. Ela
+vive na moldura do cuidador e some no palco do paciente, pela MESMA
+`pacienteEstaOlhando` que governa a barra de contexto.
 
 - `lib/offline/types.ts` — vocabulário, versão do schema, TTL e a recusa de
   credenciais no payload.
-- `lib/offline/ids.ts` — identidade cunhada no cliente, que o servidor
-  preservará (4.9.3).
+- `lib/offline/ids.ts` — identidade cunhada no cliente, que o servidor preserva.
 - `lib/offline/queue.ts` — fila pura: ordem causal, dependências, deduplicação.
 - `lib/offline/projection.ts` — snapshot + fila, com o guarda de autoria.
 - `lib/offline/crypto.ts` · `db.ts` — AES-GCM com chave não extraível sobre
   IndexedDB, com versionamento de schema.
 - `lib/offline/store.ts` · `use-offline-session.ts` · `retomada.ts` — fachada,
   ponte com a tela e recuperação após refresh.
+- `lib/offline/sync-engine.ts` · `sync-endpoints.ts` — o envio: uma operação por
+  vez, backoff, e a fila que para no primeiro bloqueio.
+- `lib/offline/conflicts.ts` · `decisions.ts` — a classificação do que o servidor
+  recusou e o efeito de cada decisão sobre a fila.
+- `lib/offline/armazenamento.ts` — espaço do aparelho e teto da fila.
 - `public/sw.js` · `lib/offline/app-shell.ts` — o app shell: recarregar, fechar
   e reabrir o navegador **sem rede nenhuma**.
 
@@ -529,8 +534,50 @@ cuidador é avisado de que existe) e continua ilegível para a sessão atual, cu
 chave é de outro escopo. Apagá-la seria o apagamento silencioso que a fase
 proíbe.
 
-**Limitações, ditas por inteiro.** **O envio da fila ao servidor é a 4.9.3**:
-nada sai deste aparelho ainda. A cifra local é **higiene, não
+**O envio.** Quando a conexão volta, o motor sobe a fila **uma operação por vez,
+em ordem**, e para no primeiro bloqueio — o que veio depois espera, porque
+depende do que veio antes. Cada retentativa reenvia a **mesma**
+`clientRequestId`: o servidor tem um ledger transacional e devolve o resultado
+já aplicado em vez de aplicar de novo, então reenviar nunca duplica registro nem
+evento de auditoria. Falha de rede tem backoff; recusa do servidor, não — recusa
+é decisão, e decisão é do cuidador.
+
+Antes de começar o ciclo, o cliente pergunta ao servidor se ainda pode enviar
+(`GET /api/realtime-questions/preflight`), e a rota chama **a mesma**
+`requirePatientAccess` que toda escrita chama — sem segunda cópia da regra de
+autorização. Uma vez por ciclo, não por operação. Se a autenticação caiu, o
+vínculo com o paciente foi revogado ou a fila é de outro usuário, nada é enviado
+e a fila fica intacta. E se a mudança acontecer **depois** do preflight, o 401/403
+da própria escrita continua tratando o caso: o preflight adianta a descoberta,
+não substitui a autoridade do servidor.
+
+**Conflitos.** O servidor **nomeia** o conflito com um código tipado; o cliente
+nunca lê a mensagem de erro para adivinhar o que houve. Cada caso da matriz vira
+uma tela de decisão com opções de mesmo peso visual — o produto não opina sobre
+uma decisão clínica. A tela **só abre quando o cuidador clica** na faixa, nunca
+sozinha, e nunca no palco do paciente. Descartar uma operação descarta também a
+cadeia que dependia dela, dita por inteiro antes de confirmar. Quando a fila é de
+outro usuário, não há opção nenhuma — nem descartar: ela espera aquele usuário
+voltar.
+
+**Espaço e teto.** O aparelho pode encher. A fila **nunca** é sacrificada: sob
+pressão de cota o que sai é o *snapshot*, que uma requisição reconstrói, e a
+degradação tem um nome só — "fila sem snapshot". Operação pendente, conflito,
+chave de idempotência e dependência não são descartáveis em hipótese alguma. A
+fila avisa em **200 operações** (~35–40 turnos sem conexão) e para de aceitar em
+**500** (~85–100 turnos, além de qualquer sessão plausível); são valores de
+julgamento, exportados em `lib/offline/armazenamento.ts` para serem ajustados
+quando houver dado de campo. No teto, a operação é **recusada em voz alta** — o
+Helo nunca finge que guardou. Todos esses avisos vivem na moldura do cuidador: o
+paciente não vê aviso técnico e não confirma aviso técnico.
+
+**Limitações, ditas por inteiro.** A trilha de auditoria **não distingue** uma
+operação que nasceu offline de uma que nasceu online: o horário é sempre o do
+servidor, no momento em que ele aceitou, e a defasagem entre a intenção e a
+aplicação não é registrada. Isso protege a trilha do relógio local errado, mas
+significa que uma conversa inteira conduzida sem rede aparece, para quem lê
+depois, como se tivesse acontecido no minuto em que a conexão voltou. A cifra
+local é **higiene, não
 confidencialidade** — não protege contra XSS, extensão do navegador, aparelho
 desbloqueado ou perícia com acesso ao disco; o escopo (`usuário::paciente`)
 fica legível, o conteúdo da conversa não. E a suíte do app shell
@@ -551,6 +598,14 @@ npm run test:feedback    # Feedback & Support (banco isolado, ex.: feedback-test
 npm run test:realtime-questions  # Perguntas em tempo real (estados e auditoria)
 npm run test:option-conversation # Conversa por opções (as quatro suítes abaixo)
 npm run test:authorship  # invariável de autoria da fala confirmada (domínio puro)
+```
+
+O offline tem ainda duas suítes que **exigem servidor**, porque o que elas
+provam é o comportamento do servidor:
+
+```bash
+npm run test:conflict-codes  # o servidor NOMEIA cada conflito da matriz
+npm run test:sync-preflight  # revalidação de identidade, acesso e sessão antes do envio
 ```
 
 As Fases 4.2, 4.7 e 4.8 usam um banco **dedicado**, para não apagar o
@@ -589,17 +644,25 @@ npm run test:ui                   # a suíte inteira, num servidor só
 npm run test:ui:oc                # só a conversa por opções
 ```
 
-**Prefira `test:ui:lotes`.** Rodar os 143 testes contra um único dev server que
+**Prefira `test:ui:lotes`.** Rodar a suíte inteira contra um único dev server que
 fica quase uma hora no ar produzia falhas que não eram do produto: o servidor
 degradava e testes variados quebravam ao *carregar a página* — os mesmos que
 passavam quando rodados por arquivo. `scripts/run-e2e-batches.mjs` corta a
-suíte em seis lotes por domínio e dá a cada um banco de teste vazio, dev server
+suíte em sete lotes por domínio e dá a cada um banco de teste vazio, dev server
 novo e rotas pré-compiladas, sem retry nenhum; ao final imprime um resultado
 agregado único com aprovados, falhos e ignorados por lote.
 
-Nesse arranjo a suíte fecha **143 aprovados, 0 falhos, 0 ignorados** em cerca de
-41 minutos — `base` 31, `conversa-por-opcoes` 32, `fases-4x` 30,
-`controles-do-paciente` 12, `responsivo-base` 10, `responsivo-fases` 28.
+Nesse arranjo a suíte fecha **187 aprovados, 0 falhos, 0 ignorados** — `base` 31,
+`conversa-por-opcoes` 32, `fases-4x` 33, `controles-do-paciente` 12, `offline` 41,
+`responsivo-base` 10, `responsivo-fases` 28.
+
+A duração depende da máquina, e mais do que parece: numa estação ocupada
+(*load average* acima de 20) lotes individuais já levaram **cinco vezes** o
+tempo normal, e testes começaram a estourar o teto de 90s esperando um botão
+aparecer — sempre testes diferentes a cada rodada, sempre verdes quando
+reexecutados sozinhos. Antes de investigar uma falha da suíte, **olhe a carga e
+o relógio**: um lote que demorou o triplo do normal está dizendo que a máquina,
+não o produto, é o problema.
 
 ```bash
 npm run test:ui:lotes -- --list         # os lotes disponíveis
