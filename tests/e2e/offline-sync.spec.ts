@@ -499,18 +499,24 @@ test.describe("Motor de sincronização", () => {
     await page.route(`**${RTQ}/**`, (route) => route.abort("connectionreset"));
     await context.setOffline(false);
 
-    // Poll direto no retryCount — não só no status: PENDING é alcançado na
-    // MESMA escrita que incrementa o retry, mas ler os dois em passos
-    // separados deixa uma janela (a leitura seguinte pode pegar um instante
-    // ainda mais cedo do que o poll observou). Uma condição só evita isso.
+    // Poll direto no retryCount — não só no status.
     await expect
       .poll(
         async () => (await statusDe(page, "createTurn"))[0]?.retryCount ?? 0,
         { timeout: 15_000 }
       )
       .toBeGreaterThan(0);
+
+    // O mesmo padrão do teste 7: PENDING e SYNCING são as DUAS leituras
+    // corretas aqui. Desde a Fase 4.9.4, o primeiro passo de cada ciclo é o
+    // preflight — e ele já marca SYNCING antes de perguntar, para que uma
+    // recusa vire uma transição de verdade (ver a nota em sync-engine.ts). O
+    // efeito colateral é que, entre o retry incrementar e esta leitura, o
+    // PRÓXIMO ciclo (backoff, ou outro gatilho automático) pode já ter
+    // marcado SYNCING de novo. O que NUNCA pode acontecer é SYNCED — só isso
+    // fingiria uma sincronização que não houve.
     const op = (await statusDe(page, "createTurn"))[0];
-    expect(op.status).toBe("PENDING");
+    expect(op.status).toMatch(/PENDING|SYNCING/);
     expect(op.lastError?.kind).toBe("offline");
     // Nunca apagada, nunca marcada como se tivesse ido.
     await expect(chip(page)).toBeVisible();

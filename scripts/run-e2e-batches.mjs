@@ -94,6 +94,7 @@ const LOTES = [
       "tests/e2e/offline-logout-expiracao.spec.ts",
       "tests/e2e/offline-sync.spec.ts",
       "tests/e2e/offline-conflitos.spec.ts",
+      "tests/e2e/offline-preflight.spec.ts",
     ],
   },
   {

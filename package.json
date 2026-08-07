@@ -31,6 +31,7 @@
     "test:offline:decisions": "node scripts/test-offline-decisions.mjs",
     "test:offline:armazenamento": "node scripts/test-offline-armazenamento.mjs",
     "test:conflict-codes": "node scripts/test-conflict-codes.mjs",
+    "test:sync-preflight": "node scripts/test-sync-preflight.mjs",
     "test:offline": "npm run test:offline:queue && npm run test:offline:projection && npm run test:offline:sync-endpoints && npm run test:offline:conflicts && npm run test:offline:decisions && npm run test:offline:armazenamento",
     "test:ui": "playwright test",
     "test:ui:oc": "playwright test tests/e2e/option-conversation-",

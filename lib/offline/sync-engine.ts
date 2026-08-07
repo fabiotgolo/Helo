@@ -16,6 +16,19 @@
 // respondeu; só uma falha de rede (o `fetch` rejeita, ou estoura o tempo)
 // prova que não.
 //
+// ——— Revalidação pré-envio (requisito 7, complemento 4.9.4) ———
+//
+// Autenticação, identidade e acesso ao paciente são confirmados ANTES de
+// consumir a fila — não só reativamente, no meio de um envio de verdade.
+// `consultarPreflight` faz UMA requisição por CICLO (não por operação, e não
+// quando a fila está vazia ou já bloqueada) e devolve o MESMO tipo de
+// resultado que um envio de verdade devolveria — para que preflight e
+// reação passem pelo MESMO tratamento (`tratarResultado`), sem duas regras.
+//
+// Quem decide continua sendo o servidor: `requirePatientAccess`, na rota
+// `/api/realtime-questions/preflight`, é a MESMA função que toda escrita já
+// chama. Nada de autorização é decidido aqui — só interpretado.
+//
 // ——— Confirmação individual (requisito 4) ———
 //
 // Cada operação é enviada e confirmada isoladamente. Não existe "enviar o
@@ -205,6 +218,66 @@ async function enviarOperacao(op: OfflineOperation): Promise<ResultadoEnvio> {
   return { kind: "sucesso", remoteEntityId, remoteConfirmedAt };
 }
 
+// ---------- Preflight: autenticação, identidade e acesso, ANTES do envio ----------
+
+/**
+ * Pergunta ao servidor, uma vez, se este ciclo pode escrever — antes de
+ * consumir qualquer coisa da fila.
+ *
+ * Devolve `null` quando pode seguir (a resposta foi "sim", ou foi
+ * inconclusiva e cabe ao envio de verdade decidir — um 5xx aqui não é
+ * decisão de domínio, é o servidor passando mal). Devolve o MESMO formato
+ * que `enviarOperacao` devolveria para uma recusa, para que os dois
+ * caminhos — pego antes, ou pego durante — recebam o MESMO tratamento.
+ *
+ * Uma falha de REDE ao perguntar já é uma falha de rede para enviar — sem
+ * gastar a tentativa de escrita para descobrir a mesma coisa duas vezes.
+ */
+async function consultarPreflight(
+  store: OfflineSessionStore
+): Promise<Exclude<ResultadoEnvio, { kind: "sucesso" }> | null> {
+  let resposta: Response;
+  try {
+    resposta = await fetch(
+      `/api/realtime-questions/preflight?patientId=${encodeURIComponent(
+        store.patientId
+      )}&expectedUserId=${encodeURIComponent(store.userId)}`,
+      { method: "GET", cache: "no-store" }
+    );
+  } catch {
+    return { kind: "rede" };
+  }
+
+  if (resposta.ok) return null;
+  if (resposta.status !== 401 && resposta.status !== 403) {
+    // 5xx, ou qualquer coisa que não seja uma decisão de identidade/acesso:
+    // este endpoint não é quem decide isso — o envio de verdade decide.
+    return null;
+  }
+
+  const detalhe = (await resposta.json().catch(() => null)) as
+    | { error?: string; code?: unknown; facts?: ConflictFacts }
+    | null;
+  const mensagem = detalhe?.error ?? "O servidor recusou o acesso.";
+  const conflito = classificarRecusa({
+    status: resposta.status,
+    code: detalhe?.code,
+    mensagem,
+    fatos: detalhe?.facts,
+  });
+
+  if (resposta.status === 401) {
+    return {
+      kind: "naoAutorizado",
+      mensagem: "Sua sessão expirou. Entre novamente para enviar o que ficou guardado.",
+      conflito,
+    };
+  }
+  // 403: mesma regra do envio de verdade — "não há saída de forçar",
+  // independente de ser acesso revogado (caso 9) ou identidade trocada (R6).
+  return { kind: "naoAutorizado", mensagem: conflito.titulo, conflito };
+}
+
 // ---------- Orquestração ----------
 
 /** Um escopo por vez — ver a nota de concorrência no cabeçalho do arquivo. */
@@ -216,6 +289,73 @@ export function sincronizacaoEmVoo(escopo: string): boolean {
 
 function erro(kind: OfflineOperationError["kind"], mensagem: string): OfflineOperationError {
   return { kind, message: mensagem, at: new Date().toISOString() };
+}
+
+/**
+ * O que acontece a UMA operação depois de um resultado que NÃO foi sucesso —
+ * seja ele de um envio de verdade, seja de uma recusa pega no preflight.
+ * Um lugar só, para que os dois caminhos produzam exatamente o mesmo efeito
+ * na fila: nunca SYNCED, nunca troca de `idempotencyKey`, nunca finge.
+ */
+async function tratarResultado(
+  ctx: SyncContext,
+  fila: OfflineOperation[],
+  operationId: string,
+  resultado: Exclude<ResultadoEnvio, { kind: "sucesso" }>
+): Promise<void> {
+  switch (resultado.kind) {
+    case "rede": {
+      const alvo = fila.find((o) => o.id === operationId);
+      const tentativas = (alvo?.retryCount ?? 0) + 1;
+      if (tentativas > MAX_RETRY) {
+        const falhou = await ctx.store.marcar(fila, operationId, "FAILED", {
+          incrementRetry: true,
+          error: erro(
+            "offline",
+            "Não conseguimos enviar depois de várias tentativas. Você pode tentar de novo quando quiser."
+          ),
+        });
+        ctx.aplicarFila(falhou);
+      } else {
+        const proximaTentativa = new Date(Date.now() + backoffMs(tentativas)).toISOString();
+        const pendente = await ctx.store.marcar(fila, operationId, "PENDING", {
+          incrementRetry: true,
+          nextRetryAt: proximaTentativa,
+          error: erro("offline", "Sem conexão com o Helo. Vamos tentar de novo em instantes."),
+        });
+        ctx.aplicarFila(pendente);
+      }
+      return;
+    }
+
+    case "naoAutorizado": {
+      // §7: preserva — nunca finge sincronização, e não tenta de novo
+      // sozinho (entrar de novo é decisão do cuidador, não um retry).
+      const falhou = await ctx.store.marcar(fila, operationId, "FAILED", {
+        error: erro("unauthorized", resultado.mensagem),
+        conflict: resultado.conflito,
+      });
+      ctx.aplicarFila(falhou);
+      return;
+    }
+
+    case "conflito": {
+      const emConflito = await ctx.store.marcar(fila, operationId, "CONFLICT", {
+        error: erro("conflict", resultado.mensagem),
+        conflict: resultado.conflito,
+      });
+      ctx.aplicarFila(emConflito);
+      return;
+    }
+
+    case "invalida": {
+      const falhou = await ctx.store.marcar(fila, operationId, "FAILED", {
+        error: erro("unknown", resultado.mensagem),
+      });
+      ctx.aplicarFila(falhou);
+      return;
+    }
+  }
 }
 
 /**
@@ -232,120 +372,64 @@ export async function sincronizarFila(ctx: SyncContext): Promise<void> {
   emVooPorEscopo.add(escopo);
 
   try {
-    // R6 — antes de qualquer envio, confirma que quem está autenticado AGORA
-    // é o dono desta fila. O cookie é ambiente e pode ter mudado numa outra
-    // aba desde que o cuidador escreveu.
+    // Nada para enviar? Nenhuma requisição — nem o preflight, nem o envio.
+    // "Impacto desnecessário no servidor" começa por não perguntar quando a
+    // pergunta não muda nada.
+    const filaInicial = ctx.obterFila();
+    const primeira = nextSendable(filaInicial);
+    if (primeira.kind !== "ENVIAR") return;
+
+    // SYNCING é marcado ANTES do preflight, não só antes do envio — e é
+    // essencial, não decorativo: `markStatus` trata PENDING→PENDING como
+    // "nada mudou" e IGNORA os campos extras (retryCount, erro), por design
+    // — é o que deixa marcar um status igual ao atual seguro em qualquer
+    // outro lugar. Sem isto, uma recusa do preflight tentaria PENDING→PENDING
+    // e o retry, silenciosamente, nunca contaria. Marcar SYNCING agora faz da
+    // recusa uma transição de VERDADE (SYNCING→PENDING/FAILED/CONFLICT) —
+    // exatamente a mesma que um envio de verdade já produzia.
     //
-    // Uma consulta por CICLO, não por operação: a janela que sobra (o cookie
-    // mudar no meio de um dreno) é fechada pelo servidor, que confere a cada
-    // requisição. Consultar aqui poupa a requisição de escrita inútil; é o
-    // servidor que garante.
-    const identidade = await consultarServidor();
-    if (
-      identidade.alcancavel &&
-      identidade.userId &&
-      ctx.store.userId &&
-      identidade.userId !== ctx.store.userId
-    ) {
-      const fila = ctx.obterFila();
-      const proxima = nextSendable(fila);
-      if (proxima.kind === "ENVIAR") {
-        const conflito = classificarRecusa({
-          status: 403,
-          code: "IDENTITY_MISMATCH",
-          mensagem:
-            "estes registros são de outro cuidador; entre com a conta de quem os criou para enviá-los",
-        });
-        const marcada = await ctx.store.marcar(fila, proxima.operacao.id, "CONFLICT", {
-          error: erro("unauthorized", conflito.titulo),
-          conflict: conflito,
-        });
-        ctx.aplicarFila(marcada);
-      }
+    // É por isto, também, que esta primeira operação NÃO passa de novo por
+    // `nextSendable` depois do preflight: SYNCING bloquearia a fila inteira
+    // (é a defesa de concorrência do cabeçalho), inclusive ELA MESMA.
+    const emPreparo = await ctx.store.marcar(filaInicial, primeira.operacao.id, "SYNCING");
+    ctx.aplicarFila(emPreparo);
+
+    // Preflight — UMA consulta por CICLO. Confirma autenticação, identidade
+    // (R6) e acesso ao paciente ANTES do primeiro envio deste ciclo.
+    const resultadoPreflight = await consultarPreflight(ctx.store);
+    if (resultadoPreflight) {
+      await tratarResultado(ctx, ctx.obterFila(), primeira.operacao.id, resultadoPreflight);
       return;
     }
 
+    // Preflight passou: envia esta operação — já selecionada, já marcada
+    // SYNCING. Da segunda em diante, o laço volta ao caminho normal:
+    // `nextSendable` escolhe, e cada uma é marcada SYNCING na hora.
+    let atual = primeira.operacao;
     for (;;) {
+      const resultado = await enviarOperacao(atual);
+
+      if (resultado.kind === "sucesso") {
+        const antes = ctx.obterFila();
+        const confirmada = await ctx.store.marcar(antes, atual.id, "SYNCED", {
+          remoteEntityId: resultado.remoteEntityId,
+          remoteConfirmedAt: resultado.remoteConfirmedAt,
+          error: null,
+        });
+        ctx.aplicarFila(confirmada);
+      } else {
+        // Qualquer coisa que não seja sucesso pausa o dreno deste ciclo — a
+        // mesma regra de sempre, agora compartilhada com o preflight acima.
+        await tratarResultado(ctx, ctx.obterFila(), atual.id, resultado);
+        return;
+      }
+
       const fila = ctx.obterFila();
       const proxima = nextSendable(fila);
       if (proxima.kind !== "ENVIAR") return;
-
-      // SYNCING é marcado ANTES do envio: é o que faz um segundo ciclo (outra
-      // aba? um clique manual bem no meio?) ver a fila bloqueada, em vez de
-      // pegar a mesma operação — ver a nota de concorrência acima.
       const emVoo = await ctx.store.marcar(fila, proxima.operacao.id, "SYNCING");
       ctx.aplicarFila(emVoo);
-
-      const resultado = await enviarOperacao(proxima.operacao);
-
-      switch (resultado.kind) {
-        case "sucesso": {
-          const antes = ctx.obterFila();
-          const confirmada = await ctx.store.marcar(antes, proxima.operacao.id, "SYNCED", {
-            remoteEntityId: resultado.remoteEntityId,
-            remoteConfirmedAt: resultado.remoteConfirmedAt,
-            error: null,
-          });
-          ctx.aplicarFila(confirmada);
-          continue; // a próxima, se houver
-        }
-
-        case "rede": {
-          const antes = ctx.obterFila();
-          const alvo = antes.find((o) => o.id === proxima.operacao.id);
-          const tentativas = (alvo?.retryCount ?? 0) + 1;
-          if (tentativas > MAX_RETRY) {
-            const falhou = await ctx.store.marcar(antes, proxima.operacao.id, "FAILED", {
-              incrementRetry: true,
-              error: erro(
-                "offline",
-                "Não conseguimos enviar depois de várias tentativas. Você pode tentar de novo quando quiser."
-              ),
-            });
-            ctx.aplicarFila(falhou);
-          } else {
-            const proximaTentativa = new Date(Date.now() + backoffMs(tentativas)).toISOString();
-            const pendente = await ctx.store.marcar(antes, proxima.operacao.id, "PENDING", {
-              incrementRetry: true,
-              nextRetryAt: proximaTentativa,
-              error: erro("offline", "Sem conexão com o Helo. Vamos tentar de novo em instantes."),
-            });
-            ctx.aplicarFila(pendente);
-          }
-          return; // rede fora: nada mais desta fila vai adiante agora
-        }
-
-        case "naoAutorizado": {
-          const antes = ctx.obterFila();
-          // §7: preserva — nunca finge sincronização, e não tenta de novo
-          // sozinho (entrar de novo é decisão do cuidador, não um retry).
-          const falhou = await ctx.store.marcar(antes, proxima.operacao.id, "FAILED", {
-            error: erro("unauthorized", resultado.mensagem),
-            conflict: resultado.conflito,
-          });
-          ctx.aplicarFila(falhou);
-          return;
-        }
-
-        case "conflito": {
-          const antes = ctx.obterFila();
-          const emConflito = await ctx.store.marcar(antes, proxima.operacao.id, "CONFLICT", {
-            error: erro("conflict", resultado.mensagem),
-            conflict: resultado.conflito,
-          });
-          ctx.aplicarFila(emConflito);
-          return;
-        }
-
-        case "invalida": {
-          const antes = ctx.obterFila();
-          const falhou = await ctx.store.marcar(antes, proxima.operacao.id, "FAILED", {
-            error: erro("unknown", resultado.mensagem),
-          });
-          ctx.aplicarFila(falhou);
-          return;
-        }
-      }
+      atual = proxima.operacao;
     }
   } finally {
     emVooPorEscopo.delete(escopo);

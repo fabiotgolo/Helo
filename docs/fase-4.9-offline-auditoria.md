@@ -1388,3 +1388,78 @@ frases) e `tests/e2e/offline-conflitos.spec.ts`, bloco "Armazenamento sob
 pressão" (4 cenários, com `QuotaExceededError` forçado de verdade no
 `IDBObjectStore.put`: fila sobrevive e snapshot cede, refresh preserva a fila,
 isolamento entre pacientes, e o aviso ausente no palco).
+
+## Decisão 8 — revalidação pré-envio de verdade (requisito 7)
+
+**Corrige uma lacuna real do requisito 7.** Constatada e fechada em 7 de
+agosto de 2026, antes da Fase E.
+
+### O que existia antes
+
+A Fase C4 (R6) já fazia UMA consulta por ciclo antes de enviar — mas só
+verificava **identidade divergente** (`identidade.userId !== ctx.store.userId`,
+usando `/api/auth/me`). Duas coberturas faltavam:
+
+- **autenticação ausente** — se `/api/auth/me` devolvesse `user: null`
+  (sessão expirada ou nunca existiu), a condição de bloqueio simplesmente não
+  disparava (`identidade.userId &&` curto-circuitava), e o ciclo seguia para
+  o envio de verdade. 401 só era descoberto REATIVAMENTE, no meio da escrita;
+- **acesso ao paciente revogado** — `/api/auth/me` não recebe `patientId` e
+  não chama `requirePatientAccess`. Um vínculo revogado só era descoberto
+  reativamente, também.
+
+### O que mudou
+
+Uma rota nova, mínima: `GET /api/realtime-questions/preflight`. Ela não
+decide nada — chama `requirePatientAccess(request, patientId, "createSession",
+expectedUserId)`, a MESMA função que toda escrita da fila já usa, e devolve a
+resposta dela direto. Nenhuma regra de autorização nova; só um lugar barato
+para perguntar isso ANTES de consumir a fila.
+
+O motor (`sincronizarFila`) consulta essa rota UMA vez por ciclo — nunca por
+operação, e nunca quando não há nada para enviar (`nextSendable` é checado
+ANTES do preflight). Uma recusa do preflight passa pelo MESMO `tratarResultado`
+que uma recusa de um envio de verdade — os dois caminhos produzem exatamente
+o mesmo efeito na fila.
+
+### O bug que a implementação revelou, e como foi corrigido
+
+A primeira versão marcava a operação `PENDING` de novo ao registrar uma
+recusa de rede no preflight — mas a operação JÁ estava `PENDING` (o preflight
+roda antes de qualquer coisa marcar `SYNCING`). `markStatus` (queue.ts) trata
+"mesmo status" como no-op e **ignora os campos extras** — por design, é o que
+torna reentrante marcar um status igual ao atual em qualquer outro lugar do
+código. O efeito colateral aqui: o retry NUNCA incrementava, e o erro nunca
+era gravado — silenciosamente.
+
+A correção: a operação é marcada `SYNCING` ANTES do preflight, não só antes
+do envio. Isso faz de qualquer recusa uma transição de VERDADE
+(`SYNCING→PENDING/FAILED/CONFLICT`), e evita que essa mesma operação seja
+escolhida de novo por `nextSendable` (que bloqueia em `SYNCING`) — ela é
+usada diretamente, sem nova seleção, se o preflight passar.
+
+Encontrado por teste, não por leitura de código: `offline-sync.spec.ts` #8
+começou a falhar de forma intermitente na regressão pós-refatoração. Isolado
+com um script de depuração que lia o registro cifrado diretamente do
+IndexedDB, confirmando `retryCount: 0` onde deveria ser `> 0`.
+
+### O que continua reativo, de propósito
+
+"Mudança ocorrida DEPOIS do preflight" — o acesso revogado no instante entre
+o preflight responder "pode" e o envio de verdade acontecer — continua sendo
+pego pelo 401/403 do WRITE, não pelo preflight. Isso é o requisito, não uma
+lacuna: o servidor confere a CADA requisição, e nenhuma checagem antecipada
+fecha essa janela por construção. Provado em
+`scripts/test-sync-preflight.mjs` §6 e `tests/e2e/offline-preflight.spec.ts`
+#3.
+
+**Provado por:**
+- `scripts/test-sync-preflight.mjs` (15 asserções, servidor real): identidade
+  correta passa; autenticação ausente → 401; acesso revogado → 403; identidade
+  trocada → 403 `IDENTITY_MISMATCH`; conta desativada depois do login → 401;
+  mudança depois do preflight ainda é pega pelo write.
+- `tests/e2e/offline-preflight.spec.ts` (3 cenários, navegador real): a prova
+  central de cada um é NEGATIVA — conta quantas vezes a rota de ESCRITA foi
+  chamada, e exige **zero**. Autenticação ausente e acesso revogado são
+  detectados sem nenhuma tentativa de escrita; fila e `idempotencyKey`
+  preservadas em ambos.
