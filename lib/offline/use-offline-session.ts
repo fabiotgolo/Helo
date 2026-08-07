@@ -56,7 +56,14 @@ import type { PathDetail } from "@/lib/option-conversation-types";
  * hook, e deixá-los fora é o que impede uma chamada de gravar a intenção no
  * paciente errado.
  */
-export type EntradaOffline = Omit<NovaOperacao, "sessionId" | "patientId">;
+// `offlineQueued` sai daqui de propósito (4.9.5): a origem é OBSERVADA por
+// `registrar`, no instante do clique, e não informada por quem chama. Deixá-la
+// no tipo abriria a porta para uma tela marcar offline o que foi feito com
+// conexão — e a trilha não tem como desconfiar depois.
+export type EntradaOffline = Omit<
+  NovaOperacao,
+  "sessionId" | "patientId" | "offlineQueued"
+>;
 
 export interface RegistroOffline {
   operacao: OfflineOperation;
@@ -261,9 +268,29 @@ export function useOfflineSession(args: {
   const temporizadores = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   // Palpite inicial do navegador, lido uma vez na montagem. Ele erra em portal
   // cativo e em Wi-Fi sem rota — quem corrige é a primeira requisição real.
-  const [online, setOnline] = useState(
+  const [online, setOnlineState] = useState(
     () => typeof navigator === "undefined" || navigator.onLine !== false
   );
+  /**
+   * O MESMO valor de `online`, legível de forma SÍNCRONA (4.9.5).
+   *
+   * `registrar` precisa saber se havia conexão no instante do clique, e o
+   * estado do React não serve para isso: `comQueda` chama `registrarQueda()`
+   * e, na linha seguinte, enfileira — tudo antes de qualquer re-render. Lendo
+   * o estado, a fila veria o valor ANTERIOR e marcaria como nascida online
+   * justamente a operação que caiu na fila porque o servidor não respondeu.
+   *
+   * Por isso `definirOnline` escreve nos dois ao mesmo tempo, e é o ÚNICO
+   * caminho para mudar conectividade neste hook. Um `setOnlineState` solto
+   * deixaria o espelho para trás — e o defeito voltaria calado.
+   */
+  const onlineRef = useRef(
+    typeof navigator === "undefined" || navigator.onLine !== false
+  );
+  const definirOnline = useCallback((valor: boolean) => {
+    onlineRef.current = valor;
+    setOnlineState(valor);
+  }, []);
 
   // Snapshots ficam em ref: eles alimentam leituras sob demanda, e colocá-los
   // em estado provocaria uma renderização a cada gravação — no meio de uma
@@ -350,18 +377,18 @@ export function useOfflineSession(args: {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const voltou = () => setOnline(true);
-    const caiu = () => setOnline(false);
+    const voltou = () => definirOnline(true);
+    const caiu = () => definirOnline(false);
     window.addEventListener("online", voltou);
     window.addEventListener("offline", caiu);
     return () => {
       window.removeEventListener("online", voltou);
       window.removeEventListener("offline", caiu);
     };
-  }, []);
+  }, [definirOnline]);
 
-  const registrarQueda = useCallback(() => setOnline(false), []);
-  const registrarSucesso = useCallback(() => setOnline(true), []);
+  const registrarQueda = useCallback(() => definirOnline(false), [definirOnline]);
+  const registrarSucesso = useCallback(() => definirOnline(true), [definirOnline]);
 
   // ——— Sincronização (Fase B) ———
   //
@@ -418,7 +445,7 @@ export function useOfflineSession(args: {
     const aoVoltar = () => {
       void servidorEstaAlcancavel().then((alcancavel) => {
         if (cancelado) return;
-        setOnline(alcancavel);
+        definirOnline(alcancavel);
         if (alcancavel) void sincronizar();
       });
     };
@@ -427,7 +454,7 @@ export function useOfflineSession(args: {
       cancelado = true;
       window.removeEventListener("online", aoVoltar);
     };
-  }, [store, sincronizar]);
+  }, [store, sincronizar, definirOnline]);
 
   // Gatilho 2 — retomada automática do backoff (requisito 6). Reagenda
   // sempre que a fila muda, para a PRÓXIMA `nextRetryAt` mais cedo entre as
@@ -564,7 +591,13 @@ export function useOfflineSession(args: {
       );
       if (recusa) throw new Error(recusa);
 
-      const { fila: nova, operacao } = await store.enfileirar(filaRef.current, entrada);
+      // A ORIGEM é observada aqui, uma vez, e a fila a guarda para sempre.
+      // Quem chamou não escolhe: se a tela pudesse informar a origem, um
+      // caminho distraído marcaria offline o que foi feito com conexão.
+      const { fila: nova, operacao } = await store.enfileirar(filaRef.current, {
+        ...entrada,
+        offlineQueued: !onlineRef.current,
+      });
       setFila(nova);
       const projecao = projetar(nova);
       setMarcas(projecao.marcas);

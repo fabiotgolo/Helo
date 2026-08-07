@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import {
   getOpenPatientControl,
   listPatientControls,
@@ -68,16 +69,18 @@ export async function POST(request: Request) {
   if (auth instanceof Response) return auth;
 
   try {
-    const result = await openPatientControl(
-      patientId,
-      body.sessionId,
-      {
-        clientRequestId: body.clientRequestId,
-        targetType: body.targetType,
-        targetId: body.targetId,
-        targetPathId: body.targetPathId,
-      },
-      { id: auth.user.id, name: auth.user.name }
+    const result = await comOrigem(lerOrigem(body), () =>
+      openPatientControl(
+        patientId,
+        body.sessionId!,
+        {
+          clientRequestId: body.clientRequestId,
+          targetType: body.targetType,
+          targetId: body.targetId,
+          targetPathId: body.targetPathId,
+        },
+        { id: auth.user.id, name: auth.user.name }
+      )
     );
     return Response.json({ request: result });
   } catch (e) {
@@ -141,13 +144,15 @@ export async function PATCH(request: Request) {
   if (auth instanceof Response) return auth;
 
   try {
-    const result = await runPatientControlAction(
-      patientId,
-      body.sessionId,
-      body.requestId,
-      action,
-      { id: auth.user.id, name: auth.user.name },
-      body.clientRequestId
+    const result = await comOrigem(lerOrigem(body), () =>
+      runPatientControlAction(
+        patientId,
+        body.sessionId!,
+        body.requestId!,
+        action,
+        { id: auth.user.id, name: auth.user.name },
+        body.clientRequestId
+      )
     );
     return Response.json(result);
   } catch (e) {

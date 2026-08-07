@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import { logAudit } from "@/lib/access";
 import {
   getResponseProfile,
@@ -36,9 +37,11 @@ export async function PUT(request: Request) {
   const auth = await requirePatientAccess(request, patientId, "editGestures");
   if (auth instanceof Response) return auth;
   try {
-    const profile = await setResponseProfile(patientId, body.mappings, {
-      id: auth.user.id,
-    });
+    const profile = await comOrigem(lerOrigem(body), () =>
+      setResponseProfile(patientId, body.mappings, {
+        id: auth.user.id,
+      })
+    );
     void logAudit({
       userId: auth.user.id,
       userName: auth.user.name,

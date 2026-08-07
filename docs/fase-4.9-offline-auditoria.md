@@ -1490,7 +1490,7 @@ entregue é reportado aqui — **não implementado às pressas no fim da fase**,
 | R8 | Service Worker servir HTML velho | **Fechado** | `offline-app-shell.spec.ts` #3 e #4, em build de produção |
 | R9 | Service Worker interferir na voz | **Fechado** | `offline-app-shell.spec.ts`, bloco "R9 — Agent Helo com o Service Worker ativo" (4 cenários), em build de produção |
 | R10 | Cota de armazenamento estourada | **Fechado** | `scripts/test-offline-armazenamento.mjs` (49) · `offline-conflitos.spec.ts` #10–#13, com `QuotaExceededError` de verdade |
-| R11 | Relógio local contaminar a trilha | **Fechado pela metade forte** | Nenhum horário local alcança a trilha: as rotas não aceitam `createdAt`, e o `now` é do servidor. A outra metade — *marcar* a origem offline — não foi entregue; ver E.3 |
+| R11 | Relógio local contaminar a trilha | **Fechado** (ver E.6) | As rotas não aceitam `createdAt` e o `now` é do servidor · o relógio do aparelho entra como `metadata.intendedAt`, validado e explicitamente informativo · `scripts/test-offline-origem.mjs` · `scripts/test-audit-origem.mjs` · `tests/e2e/offline-origem.spec.ts` |
 | R12 | Complexidade nova quebrar o que funciona | **Fechado** | As 13 suítes de domínio/HTTP e os 7 lotes rodam sem alteração nos testes existentes |
 | R13 | Cuidador confiar demais no modo offline | **Fechado** | `scripts/test-offline-armazenamento.mjs` (aviso em 200, teto em 500) · `offline-conflitos.spec.ts` #13 (o aviso nunca alcança o palco do paciente) |
 
@@ -1519,6 +1519,10 @@ dezessete de `offline-app-shell.spec.ts`.
 precisou mudar para acomodar a 4.9.
 
 ## E.3 O que ficou de fora — dito, não escondido
+
+> **Fechado depois, na 4.9.5.** O que segue é o registro de como a lacuna foi
+> encontrada — a Fase E não a implementou de propósito. A correção veio no
+> commit seguinte, isolada; ver a Decisão 9 e a seção E.6.
 
 **`metadata.offlineQueued` e `metadata.intendedAt` nunca foram implementados.**
 A §3.5 e a §7 item 7 prometem que o servidor marca, na trilha, que a operação
@@ -1593,3 +1597,155 @@ O que sustenta a conclusão não é "rodei de novo e passou" — é a medida.
 
 Nenhuma linha de produto foi alterada, e nenhuma asserção foi enfraquecida, para
 produzir esses verdes.
+
+---
+
+## Decisão 9 — a trilha passa a dizer que a operação nasceu offline (4.9.5)
+
+A Fase E encontrou a lacuna e não a fechou de propósito. Esta é a correção,
+isolada, sem nenhuma outra funcionalidade junto.
+
+### As duas perguntas que o metadado responde
+
+`metadata.offlineQueued` responde **"havia rede quando o cuidador agiu?"**.
+`metadata.intendedAt` responde **"que horas eram, pelo relógio do aparelho?"**.
+Nenhuma das duas responde "quando isso ficou registrado" — essa continua sendo
+a pergunta do `createdAt`, cunhado pelo servidor dentro da transação que aplica.
+
+### Onde cada coisa é decidida
+
+| Pergunta | Quem responde | Por quê |
+| --- | --- | --- |
+| Havia rede? | A TELA, no instante do clique | É o único ponto que observa o fato. A fila herda; o servidor não tem como saber |
+| Que horas eram no aparelho? | O `createdAt` LOCAL da operação | Já existia, já era imutável, já sobrevivia a refresh. Um campo novo em paralelo poderia divergir dele |
+| O horário é plausível? | O servidor | Formato ISO completo, e uma janela de 24h no futuro / 30 dias no passado |
+| Que horas ficou registrado? | O servidor, sempre | Inalterado desde a Fase 1 |
+
+`offlineQueued` é gravado uma vez, em `appendOperation`, e **nenhuma transição
+de status o toca**. `EntradaOffline` — o tipo que as telas usam — exclui o campo
+de propósito: quem chama `registrar` não pode informar a origem, só o hook a
+observa. Uma tela distraída não tem como marcar offline o que foi feito com
+conexão.
+
+### Por que um ponto só, dos dois lados
+
+`buildSyncRequest` acrescenta os dois campos a **todo** corpo, depois do switch
+dos catorze tipos — a mesma escolha que o `expectedUserId` (R6) já tinha feito,
+pelo mesmo motivo: o único tipo que esquecesse o campo seria justamente o que
+passaria despercebido na trilha.
+
+Do lado do servidor o problema é maior — são **48 pontos** que gravam trilha,
+espalhados por quatro arquivos, dentro de funções de domínio que não conhecem
+(e não devem conhecer) o corpo HTTP. Passar a origem por 29 assinaturas até 48
+chamadas teria exatamente a mesma falha de modo. A origem viaja por
+`AsyncLocalStorage`, aberta uma vez por handler de escrita, e `writeAudit` — o
+ponto único por onde todo evento passa — a lê no momento de gravar. Fora de uma
+requisição (teste de domínio, script) não há origem, e a trilha sai idêntica ao
+que era antes desta fase.
+
+### O que o servidor recusa, e o que ele faz com a recusa
+
+Um valor que não seja ISO 8601 completo, ou que caia fora da janela, é
+**omitido** — nunca corrigido para um horário que ninguém observou. A operação
+acontece assim mesmo: o cuidador agiu, e o registro do que ele fez vale mais que
+o metadado sobre quando.
+
+Isso deixa um estado legível na trilha: `offlineQueued: true` **sem**
+`intendedAt` significa "o aparelho afirmou origem offline com um relógio em que
+não se pôde confiar". Não foi preciso inventar um terceiro campo para dizer
+isso.
+
+### O que NÃO mudou
+
+Nenhum payload funcional. Nenhuma regra de autorização. Nenhuma decisão de
+domínio passa a olhar `intendedAt` — ele não ordena, não autoriza, não resolve
+conflito e não entra em comparação nenhuma. A trilha administrativa
+(`logAudit`, em `auditEvents`) também não mudou: ela registra ação de gestão,
+não operação de conversa, e a distinção que esta fase precisa é por operação.
+
+### Provado por
+
+- `scripts/test-offline-origem.mjs` (48 asserções, puro): a origem é cunhada uma
+  vez; retry, conflito, `SYNCED` e refresh não a alteram; os **catorze** tipos
+  do domínio — lidos de `OFFLINE_OPERATION_TYPES`, não de uma cópia — levam os
+  dois campos; o corpo NÃO carrega `createdAt`; e a validação recusa `"2026"`,
+  texto livre, número, data sem hora, um "amanhã" de dois dias e um horário de
+  dois meses atrás.
+- `scripts/test-audit-origem.mjs` (33 asserções, servidor real): a trilha grava
+  os dois campos; `createdAt` vem do servidor e é comprovadamente **posterior**
+  à intenção; uma operação online não recebe classificação offline nem um
+  `intendedAt` inventado; o reenvio da mesma `clientRequestId` **não cria evento
+  novo** e não reescreve a origem já gravada — nem quando o reenvio mente sobre
+  ela; um relógio 90 dias adiantado não entra na trilha e não empurra o
+  `createdAt`; e o metadata de domínio que já existia (`restartedIntoPathId`)
+  continua legível ao lado dos campos novos — a origem **somou**, não substituiu.
+- `tests/e2e/offline-origem.spec.ts` (3 cenários, navegador real): é o único
+  lugar que prova o MEIO. Um teste HTTP pode mandar `offlineQueued: true` de um
+  terminal com rede perfeita; só `context.setOffline(true)` prova que o app
+  marca offline **porque estava** offline. O terceiro cenário fecha o navegador
+  e reabre: a trilha recebe a intenção de ANTES do refresh, e o único lugar de
+  onde esse horário poderia ter vindo é o registro cifrado que sobreviveu ao
+  disco.
+
+### Verificação adicional 1 — qual sinal define a origem
+
+A pergunta era se `offlineQueued` dependia só de `navigator.onLine`. **Não
+dependia — mas dependia de algo pior**, e a verificação encontrou um defeito
+real na primeira versão da 4.9.5.
+
+O sinal correto sempre esteve lá: `online`, no hook, é o estado de
+conectividade EFETIVA da fase — `navigator.onLine` só dá o palpite inicial e o
+evento de "voltou", e quem afirma é a requisição real (`registrarSucesso` /
+`registrarQueda`, chamados por `comQueda` em `realtime-question-client.ts`) mais
+a sondagem `servidorEstaAlcancavel`. É o mesmo estado que o motor de
+sincronização usa.
+
+O defeito estava em COMO a fila lia esse estado. `comQueda` faz:
+
+```
+offline?.registrarQueda();   // setOnline(false) — estado do React, assíncrono
+return await semRede();      // enfileira AGORA
+```
+
+A primeira versão espelhava `online` num ref por `useEffect`, que só roda depois
+do render. Quando `semRede()` enfileirava, o ref ainda valia `true`. Resultado:
+**servidor inalcançável com a rede fisicamente ativa** — portal cativo, Wi-Fi
+sem rota, VPN caída, servidor fora do ar — produzia uma operação na fila marcada
+como nascida ONLINE. Exatamente o caso que `navigator.onLine` não vê, e que a
+política da fase existe para cobrir.
+
+O e2e não pegou porque `context.setOffline(true)` dispara o evento `offline` do
+navegador, e aí o estado já chega certo ao clique. O caminho do servidor mudo
+não estava coberto.
+
+**Correção:** `definirOnline(valor)` escreve no ref e no estado ao mesmo tempo,
+e passou a ser o único caminho para mudar conectividade no hook — os cinco
+pontos que chamavam `setOnline` agora chamam ele. Um `setOnlineState` solto
+deixaria o espelho para trás, e o defeito voltaria calado.
+
+**Provado por** `tests/e2e/offline-origem.spec.ts` #4: a rede segue ativa e o
+SERVIDOR some (`page.route(...).abort()`), sem nenhum evento `offline` do
+navegador. A operação tem de entrar na fila com `offlineQueued: true`. Contra a
+versão anterior, este teste falha.
+
+`intendedAt` continua imutável por construção: é o `createdAt` local, e nenhuma
+transição de status o toca (`scripts/test-offline-origem.mjs` §B).
+
+### Verificação adicional 2 — isolamento do AsyncLocalStorage
+
+`AsyncLocalStorage` é a escolha certa para 48 pontos de gravação, e é também a
+que, se estivesse errada, erraria em silêncio e do pior jeito: a operação de um
+cuidador levando o metadado da operação de outro, numa trilha clínica, sem nada
+na tela indicando isso. Não dá para aceitar "deve funcionar" como resposta.
+
+`scripts/test-audit-concorrencia.mjs` (17 asserções, servidor real) dispara
+**dezesseis** criações simultâneas — oito offline com `intendedAt` DISTINTO uma
+da outra, oito online sem campo de origem nenhum — e confere que o conjunto de
+horários gravados é exatamente o conjunto enviado. Depois: uma operação sem
+origem disparada no meio de oito offline em voo (nada vaza); turnos simultâneos
+na MESMA sessão, onde um vazamento não teria nem a separação por sessão para
+disfarçar; e quatro reenvios concorrentes da mesma `clientRequestId`, que
+produzem **um** evento, não quatro.
+
+Passou com a implementação atual. `writeAudit` e as funções de domínio **não
+foram alteradas**.

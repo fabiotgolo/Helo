@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import {
   createTurn,
   listTurns,
@@ -70,19 +71,21 @@ export async function POST(request: Request) {
   );
   if (auth instanceof Response) return auth;
   try {
-    const turn = await createTurn(
-      patientId,
-      body.sessionId,
-      {
-        text: body.text,
-        questionSource: body.questionSource,
-        isSensitive: body.isSensitive,
-        sensitiveCategory: body.sensitiveCategory,
-        reusedFromTurnId: body.reusedFromTurnId,
-        clientRequestId: body.clientRequestId,
-        turnId: body.turnId,
-      },
-      { id: auth.user.id, name: auth.user.name }
+    const turn = await comOrigem(lerOrigem(body), () =>
+      createTurn(
+        patientId,
+        body.sessionId!,
+        {
+          text: body.text,
+          questionSource: body.questionSource,
+          isSensitive: body.isSensitive,
+          sensitiveCategory: body.sensitiveCategory,
+          reusedFromTurnId: body.reusedFromTurnId,
+          clientRequestId: body.clientRequestId,
+          turnId: body.turnId,
+        },
+        { id: auth.user.id, name: auth.user.name }
+      )
     );
     return Response.json({ turn });
   } catch (e) {
@@ -161,14 +164,16 @@ export async function PATCH(request: Request) {
   );
   if (auth instanceof Response) return auth;
   try {
-    const turn = await runTurnAction(
-      patientId,
-      body.sessionId,
-      body.turnId,
-      action,
-      { id: auth.user.id, name: auth.user.name },
-      body.clientRequestId,
-      body.baseVersion
+    const turn = await comOrigem(lerOrigem(body), () =>
+      runTurnAction(
+        patientId,
+        body.sessionId!,
+        body.turnId!,
+        action,
+        { id: auth.user.id, name: auth.user.name },
+        body.clientRequestId,
+        body.baseVersion
+      )
     );
     return Response.json({ turn });
   } catch (e) {

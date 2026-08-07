@@ -571,13 +571,17 @@ quando houver dado de campo. No teto, a operação é **recusada em voz alta** �
 Helo nunca finge que guardou. Todos esses avisos vivem na moldura do cuidador: o
 paciente não vê aviso técnico e não confirma aviso técnico.
 
-**Limitações, ditas por inteiro.** A trilha de auditoria **não distingue** uma
-operação que nasceu offline de uma que nasceu online: o horário é sempre o do
-servidor, no momento em que ele aceitou, e a defasagem entre a intenção e a
-aplicação não é registrada. Isso protege a trilha do relógio local errado, mas
-significa que uma conversa inteira conduzida sem rede aparece, para quem lê
-depois, como se tivesse acontecido no minuto em que a conexão voltou. A cifra
-local é **higiene, não
+**A trilha diz de onde veio.** Cada evento registra `offlineQueued` — havia rede
+quando o cuidador agiu? — e, quando a operação nasceu sem rede, `intendedAt`, o
+horário do **aparelho** naquele instante. Os dois são metadados informativos: o
+`createdAt` continua sendo cunhado pelo servidor, dentro da transação que
+aplica, e `intendedAt` não ordena, não autoriza e não resolve conflito. O
+servidor confere formato e plausibilidade — um relógio adiantado em três meses
+é **omitido**, nunca corrigido para um horário que ninguém observou. Sem isso,
+uma conversa inteira conduzida sem rede apareceria, para quem lê depois, como se
+tivesse acontecido no minuto em que a conexão voltou.
+
+**Limitações, ditas por inteiro.** A cifra local é **higiene, não
 confidencialidade** — não protege contra XSS, extensão do navegador, aparelho
 desbloqueado ou perícia com acesso ao disco; o escopo (`usuário::paciente`)
 fica legível, o conteúdo da conversa não. E a suíte do app shell
@@ -606,6 +610,7 @@ provam é o comportamento do servidor:
 ```bash
 npm run test:conflict-codes  # o servidor NOMEIA cada conflito da matriz
 npm run test:sync-preflight  # revalidação de identidade, acesso e sessão antes do envio
+npm run test:audit-origem    # a trilha distingue offline de online, sem confundir horários
 ```
 
 As Fases 4.2, 4.7 e 4.8 usam um banco **dedicado**, para não apagar o

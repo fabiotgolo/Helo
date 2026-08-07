@@ -74,6 +74,15 @@ export interface NovaOperacao {
   baseVersion?: string | null;
   /** Chave estável. Omitida, nasce aqui — e nasce UMA vez. */
   idempotencyKey?: string;
+  /**
+   * A conexão estava de fato ausente quando o cuidador agiu? (4.9.5)
+   *
+   * Quem sabe disso é a tela, no instante do clique — não a fila, e muito
+   * menos o servidor depois. Omitido, o padrão é `false`: afirmar origem
+   * offline sem evidência contaminaria a trilha, que é justamente o que a
+   * §3.5 quer evitar.
+   */
+  offlineQueued?: boolean;
 }
 
 // ---------- Impressão digital do conteúdo ----------
@@ -169,6 +178,7 @@ function vazia(entrada: NovaOperacao): OfflineOperation {
     status: "PENDING",
     createdAt: "",
     retryCount: 0,
+    offlineQueued: entrada.offlineQueued === true,
     sequence: 0,
     schemaVersion: OFFLINE_SCHEMA_VERSION,
     updatedAt: "",
@@ -281,6 +291,9 @@ export function appendOperation(
     status: "PENDING",
     createdAt: iso,
     retryCount: 0,
+    // Uma vez, aqui, e nunca mais: é a origem que se está registrando, e a
+    // origem não muda depois. Ver `offlineQueued` em types.ts.
+    offlineQueued: entrada.offlineQueued === true,
     sequence,
     schemaVersion: OFFLINE_SCHEMA_VERSION,
     updatedAt: iso,
@@ -524,6 +537,10 @@ export function restoreOperation(bruto: unknown): OfflineOperation | null {
     status: status === "SYNCING" ? "PENDING" : status,
     createdAt,
     retryCount: Number(v.retryCount ?? 0),
+    // `=== true` e não `Boolean(...)`: uma operação gravada antes da 4.9.5
+    // não tem o campo, e "ausente" tem de ler como online — nunca como uma
+    // origem offline que ninguém observou.
+    offlineQueued: v.offlineQueued === true,
     sequence: Number(v.sequence ?? 0),
     schemaVersion: OFFLINE_SCHEMA_VERSION,
     updatedAt: texto("updatedAt") ?? createdAt,

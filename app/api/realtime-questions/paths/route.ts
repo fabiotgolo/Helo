@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import {
   createPath,
   getPathDetail,
@@ -92,23 +93,25 @@ export async function POST(request: Request) {
   const assistant = { id: auth.user.id, name: auth.user.name };
 
   try {
-    if (typeof body.reuseFromPathId === "string" && body.reuseFromPathId) {
-      const result = await reusePath(
+    return await comOrigem(lerOrigem(body), async () => {
+      if (typeof body.reuseFromPathId === "string" && body.reuseFromPathId) {
+        const result = await reusePath(
+          patientId,
+          body.sessionId!,
+          body.reuseFromPathId,
+          body.clientRequestId,
+          assistant
+        );
+        return Response.json(result);
+      }
+      const path = await createPath(
         patientId,
-        body.sessionId,
-        body.reuseFromPathId,
-        body.clientRequestId,
+        body.sessionId!,
+        { clientRequestId: body.clientRequestId, pathId: body.pathId },
         assistant
       );
-      return Response.json(result);
-    }
-    const path = await createPath(
-      patientId,
-      body.sessionId,
-      { clientRequestId: body.clientRequestId, pathId: body.pathId },
-      assistant
-    );
-    return Response.json({ path });
+      return Response.json({ path });
+    });
   } catch (e) {
     return respostaDeErro(e, statusForCreationError(e));
   }
@@ -166,46 +169,48 @@ export async function PATCH(request: Request) {
   const assistant = { id: auth.user.id, name: auth.user.name };
 
   try {
-    // Voltar pelo breadcrumb desativa a ramificação posterior e abre uma nova,
-    // na mesma transação — separar as duas deixaria o caminho sem nível ativo.
-    if (typeof body.returnToNodeId === "string" && body.returnToNodeId) {
-      const detail = await returnToNode(
+    return await comOrigem(lerOrigem(body), async () => {
+      // Voltar pelo breadcrumb desativa a ramificação posterior e abre uma nova,
+      // na mesma transação — separar as duas deixaria o caminho sem nível ativo.
+      if (typeof body.returnToNodeId === "string" && body.returnToNodeId) {
+        const detail = await returnToNode(
+          patientId,
+          body.sessionId!,
+          body.pathId!,
+          body.returnToNodeId,
+          body.clientRequestId,
+          assistant
+        );
+        return Response.json(detail);
+      }
+
+      const action = parsePathAction(body.action);
+      if (!action) {
+        return Response.json({ error: "ação inválida" }, { status: 400 });
+      }
+
+      // Reiniciar encerra o caminho atual E cria o seguinte: é uma operação só.
+      if (action.kind === "RESTART") {
+        const result = await restartPath(
+          patientId,
+          body.sessionId!,
+          body.pathId!,
+          body.clientRequestId,
+          assistant
+        );
+        return Response.json(result);
+      }
+
+      const path = await runPathAction(
         patientId,
-        body.sessionId,
-        body.pathId,
-        body.returnToNodeId,
-        body.clientRequestId,
-        assistant
+        body.sessionId!,
+        body.pathId!,
+        action,
+        assistant,
+        body.clientRequestId
       );
-      return Response.json(detail);
-    }
-
-    const action = parsePathAction(body.action);
-    if (!action) {
-      return Response.json({ error: "ação inválida" }, { status: 400 });
-    }
-
-    // Reiniciar encerra o caminho atual E cria o seguinte: é uma operação só.
-    if (action.kind === "RESTART") {
-      const result = await restartPath(
-        patientId,
-        body.sessionId,
-        body.pathId,
-        body.clientRequestId,
-        assistant
-      );
-      return Response.json(result);
-    }
-
-    const path = await runPathAction(
-      patientId,
-      body.sessionId,
-      body.pathId,
-      action,
-      assistant,
-      body.clientRequestId
-    );
-    return Response.json({ path });
+      return Response.json({ path });
+    });
   } catch (e) {
     return respostaDeErro(e, 400);
   }
@@ -241,15 +246,17 @@ export async function PUT(request: Request) {
   const auth = await requirePatientAccess(request, patientId, "viewSessions");
   if (auth instanceof Response) return auth;
   try {
-    await recordHistoryOpen(
-      patientId,
-      body.sessionId,
-      {
-        itemType: body.itemType as (typeof types)[number],
-        itemId: body.itemId,
-        pathId: body.pathId ?? null,
-      },
-      { id: auth.user.id, name: auth.user.name }
+    await comOrigem(lerOrigem(body), () =>
+      recordHistoryOpen(
+        patientId,
+        body.sessionId!,
+        {
+          itemType: body.itemType as (typeof types)[number],
+          itemId: body.itemId!,
+          pathId: body.pathId ?? null,
+        },
+        { id: auth.user.id, name: auth.user.name }
+      )
     );
     return Response.json({ ok: true });
   } catch (e) {

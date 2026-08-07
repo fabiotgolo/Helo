@@ -50,12 +50,25 @@ function payloadOf(op: OfflineOperation): Payload {
  * servidor o confere em `requirePatientAccess` e recusa quando o cookie que
  * chegou é de outro cuidador. Operações gravadas antes desta fase não têm
  * `userId` e seguem sem o campo — para elas vale a defesa do escopo.
+ *
+ * `offlineQueued` e `intendedAt` (4.9.5, §3.5) entram pelo mesmo motivo e no
+ * mesmo lugar: são catorze tipos, e o único que esquecesse os campos seria
+ * justamente o que passaria despercebido na trilha. Eles vão em TODA
+ * requisição — inclusive com `offlineQueued: false` —, porque a trilha
+ * precisa distinguir "nasceu online" de "esta versão do cliente não sabia
+ * informar". `intendedAt` é o `createdAt` LOCAL da operação, cunhado uma vez
+ * na criação: o servidor o trata como metadado informativo e continua
+ * cunhando os próprios horários.
  */
 export function buildSyncRequest(op: OfflineOperation): SyncRequest {
   const req = montarRequisicao(op);
-  return op.userId
-    ? { ...req, body: { ...req.body, expectedUserId: op.userId } }
-    : req;
+  const body: Record<string, unknown> = {
+    ...req.body,
+    offlineQueued: op.offlineQueued,
+    intendedAt: op.createdAt,
+  };
+  if (op.userId) body.expectedUserId = op.userId;
+  return { ...req, body };
 }
 
 function montarRequisicao(op: OfflineOperation): SyncRequest {

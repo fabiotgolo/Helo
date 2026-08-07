@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import {
   getActiveSessionContext,
   listSessionContextVersions,
@@ -72,22 +73,24 @@ export async function POST(request: Request) {
   if (auth instanceof Response) return auth;
 
   try {
-    const context = await saveSessionContext(
-      patientId,
-      body.sessionId,
-      {
-        clientRequestId: body.clientRequestId,
-        skipped: body.skipped,
-        interlocutorPersonId: body.interlocutorPersonId,
-        interlocutorName: body.interlocutorName,
-        interlocutorRelation: body.interlocutorRelation,
-        intention: body.intention,
-        environment: body.environment,
-        initialTopic: body.initialTopic,
-        notes: body.notes,
-        baseVersion: body.baseVersion,
-      },
-      { id: auth.user.id, name: auth.user.name }
+    const context = await comOrigem(lerOrigem(body), () =>
+      saveSessionContext(
+        patientId,
+        body.sessionId!,
+        {
+          clientRequestId: body.clientRequestId,
+          skipped: body.skipped,
+          interlocutorPersonId: body.interlocutorPersonId,
+          interlocutorName: body.interlocutorName,
+          interlocutorRelation: body.interlocutorRelation,
+          intention: body.intention,
+          environment: body.environment,
+          initialTopic: body.initialTopic,
+          notes: body.notes,
+          baseVersion: body.baseVersion,
+        },
+        { id: auth.user.id, name: auth.user.name }
+      )
     );
     return Response.json({ context });
   } catch (e) {
@@ -115,11 +118,13 @@ export async function PUT(request: Request) {
   if (auth instanceof Response) return auth;
 
   try {
-    const result = await recordSessionContextView(
-      patientId,
-      body.sessionId,
-      body.contextId,
-      { id: auth.user.id, name: auth.user.name }
+    const result = await comOrigem(lerOrigem(body), () =>
+      recordSessionContextView(
+        patientId,
+        body.sessionId!,
+        body.contextId!,
+        { id: auth.user.id, name: auth.user.name }
+      )
     );
     return Response.json(result);
   } catch (e) {

@@ -96,6 +96,7 @@ export function newId(prefix: string): string {
 // conflitos (§10) — continua valendo sem alteração: nenhum deles dependia de
 // handles, só da identidade ser estável, e ela é, com ou sem handle.
 import { isValidEntityId, PREFIXO, type PrefixoEntidade } from "@/lib/offline/ids";
+import { metadadosDaOrigem } from "@/lib/origem-da-operacao";
 
 /**
  * Resolve o id de um registro em criação.
@@ -258,6 +259,16 @@ export function writeAudit(
   now: string
 ): void {
   const ref = eventsCol(input.sessionId).doc(newId("ev"));
+  // Origem da operação (4.9.5): entra aqui, uma vez, para os 48 pontos que
+  // gravam trilha. `createdAt` continua sendo `now` — cunhado pelo servidor,
+  // dentro desta transação. `intendedAt` é o que o APARELHO disse, e por isso
+  // vive em `metadata`, ao lado dos demais metadados informativos, e nunca no
+  // lugar de um horário oficial.
+  const origem = metadadosDaOrigem();
+  const metadata =
+    origem === null
+      ? (input.metadata ?? null)
+      : { ...(input.metadata ?? {}), ...origem };
   transaction.set(ref, {
     sessionId: input.sessionId,
     turnId: input.turnId,
@@ -270,7 +281,7 @@ export function writeAudit(
     eventType: input.eventType,
     previousValue: input.previousValue ?? null,
     newValue: input.newValue ?? null,
-    metadata: input.metadata ?? null,
+    metadata,
     createdAt: now,
   });
 }

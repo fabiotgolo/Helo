@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import {
   createNode,
   getPathDetail,
@@ -80,49 +81,54 @@ export async function POST(request: Request) {
   const assistant = { id: auth.user.id, name: auth.user.name };
 
   try {
-    if (typeof body.reuseFromNodeId === "string" && body.reuseFromNodeId) {
-      const result = await reuseNode(
-        patientId,
-        body.sessionId,
-        body.reuseFromNodeId,
-        { targetPathId: body.pathId, clientRequestId: body.clientRequestId },
-        assistant
-      );
-      return Response.json(result);
-    }
+    // O bloco INTEIRO entra no contexto da origem (4.9.5) — são três caminhos
+    // de escrita aqui, e envolver um por um deixaria o esquecido justamente
+    // como o que ninguém notaria na trilha.
+    return await comOrigem(lerOrigem(body), async () => {
+      if (typeof body.reuseFromNodeId === "string" && body.reuseFromNodeId) {
+        const result = await reuseNode(
+          patientId,
+          body.sessionId!,
+          body.reuseFromNodeId,
+          { targetPathId: body.pathId, clientRequestId: body.clientRequestId },
+          assistant
+        );
+        return Response.json(result);
+      }
 
-    if (!body.pathId) {
-      return Response.json({ error: "pathId obrigatório" }, { status: 400 });
-    }
+      if (!body.pathId) {
+        return Response.json({ error: "pathId obrigatório" }, { status: 400 });
+      }
 
-    if (typeof body.replaceNodeId === "string" && body.replaceNodeId) {
-      const result = await replaceNode(
+      if (typeof body.replaceNodeId === "string" && body.replaceNodeId) {
+        const result = await replaceNode(
+          patientId,
+          body.sessionId!,
+          body.pathId,
+          body.replaceNodeId,
+          body.clientRequestId,
+          assistant
+        );
+        return Response.json(result);
+      }
+
+      const node = await createNode(
         patientId,
-        body.sessionId,
+        body.sessionId!,
         body.pathId,
-        body.replaceNodeId,
-        body.clientRequestId,
+        {
+          promptText: body.promptText,
+          options: body.options,
+          parentNodeId: body.parentNodeId,
+          isSensitive: body.isSensitive,
+          sensitiveCategory: body.sensitiveCategory,
+          clientRequestId: body.clientRequestId,
+          nodeId: body.nodeId,
+        },
         assistant
       );
-      return Response.json(result);
-    }
-
-    const node = await createNode(
-      patientId,
-      body.sessionId,
-      body.pathId,
-      {
-        promptText: body.promptText,
-        options: body.options,
-        parentNodeId: body.parentNodeId,
-        isSensitive: body.isSensitive,
-        sensitiveCategory: body.sensitiveCategory,
-        clientRequestId: body.clientRequestId,
-        nodeId: body.nodeId,
-      },
-      assistant
-    );
-    return Response.json({ node });
+      return Response.json({ node });
+    });
   } catch (e) {
     return respostaDeErro(e, statusForCreationError(e));
   }
@@ -194,19 +200,21 @@ export async function PATCH(request: Request) {
   // criação (§27).
   if (raw.kind === "REVIEW") {
     try {
-      const node = await reviewNode(
-        patientId,
-        body.sessionId,
-        body.pathId,
-        body.nodeId,
-        {
-          promptText: raw.promptText,
-          options: raw.options,
-          isSensitive: raw.isSensitive,
-          sensitiveCategory: raw.sensitiveCategory,
-          clientRequestId: body.clientRequestId,
-        },
-        assistant
+      const node = await comOrigem(lerOrigem(body), () =>
+        reviewNode(
+          patientId,
+          body.sessionId!,
+          body.pathId!,
+          body.nodeId!,
+          {
+            promptText: raw.promptText,
+            options: raw.options,
+            isSensitive: raw.isSensitive,
+            sensitiveCategory: raw.sensitiveCategory,
+            clientRequestId: body.clientRequestId,
+          },
+          assistant
+        )
       );
       return Response.json({ node });
     } catch (e) {
@@ -219,14 +227,16 @@ export async function PATCH(request: Request) {
     return Response.json({ error: "ação inválida" }, { status: 400 });
   }
   try {
-    const result = await runNodeAction(
-      patientId,
-      body.sessionId,
-      body.pathId,
-      body.nodeId,
-      action,
-      assistant,
-      body.clientRequestId
+    const result = await comOrigem(lerOrigem(body), () =>
+      runNodeAction(
+        patientId,
+        body.sessionId!,
+        body.pathId!,
+        body.nodeId!,
+        action,
+        assistant,
+        body.clientRequestId
+      )
     );
     return Response.json(result);
   } catch (e) {

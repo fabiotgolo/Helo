@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import { logAudit } from "@/lib/access";
 import {
   createRtqSession,
@@ -71,10 +72,12 @@ export async function POST(request: Request) {
   );
   if (auth instanceof Response) return auth;
   try {
-    const session = await createRtqSession(patientId, {
-      id: auth.user.id,
-      name: auth.user.name,
-    });
+    const session = await comOrigem(lerOrigem(body), () =>
+      createRtqSession(patientId, {
+        id: auth.user.id,
+        name: auth.user.name,
+      })
+    );
     void logAudit({
       userId: auth.user.id,
       userName: auth.user.name,
@@ -114,12 +117,14 @@ export async function PATCH(request: Request) {
   );
   if (auth instanceof Response) return auth;
   try {
-    const session = await runSessionAction(
-      patientId,
-      body.sessionId,
-      body.action as SessionAction,
-      { id: auth.user.id, name: auth.user.name },
-      body.clientRequestId
+    const session = await comOrigem(lerOrigem(body), () =>
+      runSessionAction(
+        patientId,
+        body.sessionId!,
+        body.action as SessionAction,
+        { id: auth.user.id, name: auth.user.name },
+        body.clientRequestId
+      )
     );
     void logAudit({
       userId: auth.user.id,

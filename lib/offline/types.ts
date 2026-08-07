@@ -189,8 +189,30 @@ export interface OfflineOperation {
   payload: unknown;
 
   status: OfflineOperationStatus;
+  /**
+   * Quando o cuidador agiu, pelo relógio DESTE aparelho. Cunhado uma única
+   * vez, na criação, e nunca reescrito — nem em retry, refresh, reabertura,
+   * conflito ou reautenticação. É ele que viaja como `metadata.intendedAt`
+   * (4.9.5, §3.5 da auditoria).
+   *
+   * NÃO é, e nunca vira, o `createdAt` do registro no servidor: aquele é
+   * cunhado lá, na transação que aplica. Ver `origem-da-operacao.ts`.
+   */
   createdAt: string;
   retryCount: number;
+
+  /**
+   * A operação nasceu SEM conexão efetiva com o servidor. (4.9.5)
+   *
+   * Vale para a origem, não para o destino: uma operação criada online que
+   * só conseguiu ser enviada meia hora depois continua `false`, porque o
+   * cuidador tinha conexão quando agiu. Imutável depois da criação — retry,
+   * conflito e reautenticação não mexem nela.
+   *
+   * Ausente nas operações gravadas antes desta fase: `false` é o padrão de
+   * leitura, porque afirmar origem offline sem evidência seria inventar.
+   */
+  offlineQueued: boolean;
 
   // ——— Campos técnicos aprovados na auditoria (§4) ———
 

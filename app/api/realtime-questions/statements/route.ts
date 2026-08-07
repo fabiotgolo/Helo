@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comOrigem, lerOrigem } from "@/lib/origem-da-operacao";
 import {
   createCaregiverInterpretation,
   createStatement,
@@ -94,13 +95,14 @@ export async function POST(request: Request) {
   const assistant = { id: auth.user.id, name: auth.user.name };
 
   try {
+    return await comOrigem(lerOrigem(body), async () => {
     if (
       typeof body.reuseFromStatementId === "string" &&
       body.reuseFromStatementId
     ) {
       const result = await reuseStatement(
         patientId,
-        body.sessionId,
+        body.sessionId!,
         body.reuseFromStatementId,
         { targetPathId: body.pathId, clientRequestId: body.clientRequestId },
         assistant
@@ -114,7 +116,7 @@ export async function POST(request: Request) {
     if (body.origin === "CAREGIVER_INTERPRETATION" && !body.pathId) {
       const result = await createCaregiverInterpretation(
         patientId,
-        body.sessionId,
+        body.sessionId!,
         {
           text: body.text,
           isSensitive: body.isSensitive,
@@ -138,7 +140,7 @@ export async function POST(request: Request) {
     ) {
       const result = await replaceStatement(
         patientId,
-        body.sessionId,
+        body.sessionId!,
         body.pathId,
         body.replaceStatementId,
         body.clientRequestId,
@@ -149,7 +151,7 @@ export async function POST(request: Request) {
 
     const statement = await createStatement(
       patientId,
-      body.sessionId,
+      body.sessionId!,
       body.pathId,
       {
         text: body.text,
@@ -163,6 +165,7 @@ export async function POST(request: Request) {
       assistant
     );
     return Response.json({ statement });
+    });
   } catch (e) {
     return respostaDeErro(e, statusForCreationError(e));
   }
@@ -238,14 +241,16 @@ export async function PATCH(request: Request) {
   );
   if (auth instanceof Response) return auth;
   try {
-    const result = await runStatementAction(
-      patientId,
-      body.sessionId,
-      body.pathId,
-      body.statementId,
-      action,
-      { id: auth.user.id, name: auth.user.name },
-      body.clientRequestId
+    const result = await comOrigem(lerOrigem(body), () =>
+      runStatementAction(
+        patientId,
+        body.sessionId!,
+        body.pathId!,
+        body.statementId!,
+        action,
+        { id: auth.user.id, name: auth.user.name },
+        body.clientRequestId
+      )
     );
     return Response.json(result);
   } catch (e) {
