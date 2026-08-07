@@ -25,6 +25,11 @@
 
 import type { OfflineStatusSummary } from "@/lib/offline/types";
 import type { AvisoDeDescarte } from "@/lib/offline/store";
+import {
+  ARMAZENAMENTO_TRANQUILO,
+  fraseDoArmazenamento,
+  type EstadoDoArmazenamento,
+} from "@/lib/offline/armazenamento";
 
 function plural(n: number, um: string, varios: string): string {
   return n === 1 ? um : varios;
@@ -155,6 +160,7 @@ export function OfflineChip({
   pendenciasDeOutroPaciente = 0,
   onSincronizarAgora,
   onDecidirConflito,
+  armazenamento = ARMAZENAMENTO_TRANQUILO,
 }: {
   status: OfflineStatusSummary;
   /** Migração de schema descartou dados locais. §8: nunca em silêncio. */
@@ -170,9 +176,22 @@ export function OfflineChip({
    * neste componente abre nada sozinho.
    */
   onDecidirConflito?: () => void;
+  /** O que o aparelho consegue guardar (R10/R13). */
+  armazenamento?: EstadoDoArmazenamento;
 }) {
   const aparencia = APARENCIA[status.state];
-  if (!aparencia && !aviso && pendenciasDeOutroPaciente === 0) return null;
+  const fraseArmazenamento = fraseDoArmazenamento(armazenamento);
+  // O aviso de armazenamento entra na condição: a degradação do snapshot
+  // acontece com a fila VAZIA (é o snapshot que ocupa espaço, não ela), e sem
+  // isto o cuidador nunca saberia que a recuperação local foi reduzida.
+  if (
+    !aparencia &&
+    !aviso &&
+    !fraseArmazenamento &&
+    pendenciasDeOutroPaciente === 0
+  ) {
+    return null;
+  }
 
   const mostrarBotao =
     Boolean(onSincronizarAgora) && ESTADOS_COM_BOTAO_MANUAL.has(status.state);
@@ -217,6 +236,34 @@ export function OfflineChip({
               Ver e decidir
             </button>
           )}
+        </div>
+      )}
+
+      {/* R10 e R13 — o que o APARELHO consegue guardar.
+
+          Faixa separada do chip de propósito: o chip fala do que está
+          pendente de ENVIO, e isto fala de espaço. Juntar os dois numa frase
+          só faria "aguardando conexão" e "sem espaço" — que pedem coisas
+          diferentes do cuidador — parecerem o mesmo problema.
+
+          Nunca chega ao palco do paciente: quem monta este componente já o
+          faz atrás de `!telaEDoPaciente`, a MESMA expressão que governa o
+          chip e a barra de contexto. E não há botão aqui — um aviso técnico
+          não é coisa que o paciente possa resolver ou dispensar. */}
+      {fraseArmazenamento && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="offline-armazenamento"
+          data-cheia={armazenamento.cheia ? "sim" : "nao"}
+          data-degradado={armazenamento.degradado ? "sim" : "nao"}
+          className={`self-start rounded-2xl border px-3 py-2 text-xs ${
+            armazenamento.cheia
+              ? "border-rose-500/30 bg-rose-500/10 text-rose-900 dark:text-rose-100"
+              : "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-100"
+          }`}
+        >
+          {fraseArmazenamento}
         </div>
       )}
 

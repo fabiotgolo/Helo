@@ -1283,3 +1283,108 @@ trivial —, nada gravado, e a autoria correta quando a identidade bate) e
 `tests/e2e/offline-conflitos.spec.ts` cenário 9 (o navegador de verdade, com
 troca de cookie no meio). O cenário 9 foi verificado por **mutação**: com as
 duas guardas desligadas ele falha; com qualquer uma delas ativa, passa.
+
+## Decisão 6 — R8 e R9 estavam feitos; faltava um teste nominal
+
+**Reconcilia a §13, linhas R8 e R9.** Constatado em 6 de agosto de 2026.
+
+O Service Worker e o app shell foram entregues em `ceb1037` — `public/sw.js`
+(285 linhas), `lib/offline/app-shell.ts` e `tests/e2e/offline-app-shell.spec.ts`
+(13 testes). A tabela de riscos nunca foi atualizada, e por isso os dois
+apareciam como pendentes. Conferência mitigação por mitigação:
+
+| Mitigação exigida | Situação | Onde |
+| --- | --- | --- |
+| R8 · versionamento do cache | feito | `sw.js` — `CACHE = PREFIXO + VERSAO`, e o `activate` purga o que não é o corrente |
+| R8 · `no-cache` para `/sw.js` | feito | `firebase.json` — a regra `**` aplica `Cache-Control: no-cache`; só `/_next/static/**` é imutável |
+| R8/R9 · nunca cachear `/api/**` | feito | `sw.js` retorna antes de tocar em `/api/`; asserção no teste do cache |
+| R9 · ignorar outra origem | feito | `sw.js` — `url.origin !== self.location.origin` |
+| R9 · teste de regressão do Agent Helo | **faltava** | agora em `offline-app-shell.spec.ts`, bloco "R9" |
+
+**O que foi feito, e o que NÃO foi.** O Service Worker não foi tocado — não
+havia lacuna nele. O que faltava era a prova nominal, e ela agora existe, no
+build de produção e com o SW ativo: as duas rotas de voz
+(`/api/helo/conversation-token` e `/api/tts`) saem pela rede em toda chamada e
+nunca entram no cache; nada de outra origem é armazenado; WebSocket não é
+interceptado nem aparece no cache; e um `registration.update()` com a página
+aberta não derruba a conversa por voz nem a fila.
+
+## Decisão 7 — pressão de armazenamento e teto da fila (R10 e R13)
+
+**Fecha a §13, linhas R10 e R13.** Decidida em 6 de agosto de 2026.
+
+### A ordem de prioridade
+
+O armazenamento local guarda três coisas com estatutos diferentes, e sob
+pressão elas **não valem o mesmo**:
+
+| | Estatuto | Reconstruível? | Pode ser descartado sob pressão? |
+| --- | --- | --- | --- |
+| **Fila** | intenção do cuidador não aceita pelo servidor | **não** — ninguém mais tem | **nunca** |
+| **Rascunho** | texto digitado, não submetido | só pela memória de quem escreveu | não; segue o TTL próprio (7 dias / 24h sensível) |
+| **Snapshot** | o que o servidor disse | sim, por uma requisição | **sim — é o único** |
+
+Por isso a degradação tem um nome só: **"fila sem snapshot"**. Não existe
+"fila reduzida" nem "descartar as operações mais antigas". Operação pendente,
+conflito, `idempotencyKey` e `dependsOn` **nunca** são tocados para liberar
+espaço — a lista do que pode ser sacrificado é fechada, tem um item, e está em
+`DESCARTAVEIS_SOB_PRESSAO`.
+
+### R10 — cota
+
+Três camadas, porque nenhuma basta sozinha:
+
+1. **`navigator.storage.estimate()`** como sinal antecipado. Não existe em
+   todo navegador, é deliberadamente imprecisa e pode reportar folga no exato
+   instante em que a gravação falha. **Sem a API, a resposta é "não há
+   pressão"** — nunca "assume o pior": bloquear preventivamente um navegador
+   que talvez tivesse espaço de sobra transformaria a proteção em perda de
+   função.
+2. **`QuotaExceededError` tratado explicitamente** na gravação, em todos os
+   dialetos (`QuotaExceededError`, `NS_ERROR_DOM_QUOTA_REACHED`, código 22).
+   É esta que vale.
+3. **Uma retentativa após degradar**, ao enfileirar: se a operação não coube,
+   o snapshot é apagado e a gravação é tentada mais uma vez. Só depois disso
+   a operação é recusada.
+
+O aviso ao cuidador nomeia o que foi reduzido **e o que não se perdeu** —
+*"a recuperação visual da conversa foi reduzida. Nenhum registro pendente foi
+apagado."* Sem a segunda metade, ele teria motivo para achar que perdeu
+registro.
+
+### R13 — teto da fila
+
+| Constante | Valor | Fundamentação |
+| --- | --- | --- |
+| `AVISO_DA_FILA` | 200 | ≈ 35–40 turnos sem conexão (um turno custa ~5 operações). Uma conversa por gestos com 35 perguntas já é exaustiva para o paciente. É o número que mitiga o risco **comportamental**. |
+| `TETO_DA_FILA` | 500 | ≈ 85–100 turnos, além de qualquer sessão plausível; ~1 MB cifrado. É a parada **protetiva**. |
+| `FRACAO_DE_PRESSAO` | 0,9 | folga real sobre uma estimativa imprecisa |
+
+São valores de **julgamento**, derivados da contagem de operações por turno —
+não de medição em campo. Ficam exportados em `lib/offline/armazenamento.ts`,
+junto da mesma convenção de `MAX_RETRY` e `OFFLINE_TTL_MS`, para serem
+ajustados quando houver dado real de duração de sessão.
+
+No teto, `enfileirar` **lança** `OfflineStorageFullError` — não devolve um
+campo ignorável. Quem chamou é obrigado a tratar, e a tela não tem como
+seguir como se tivesse salvado. Nada antigo é descartado para abrir espaço.
+
+### Onde o aviso aparece — e onde não
+
+Faixa própria, separada do chip: o chip fala do que está pendente de **envio**,
+esta fala de **espaço**, e juntá-las faria dois problemas com saídas
+diferentes parecerem o mesmo. Ela vive atrás de `!telaEDoPaciente`, a mesma
+expressão que governa o chip e a barra de contexto — **nunca alcança o palco
+do paciente** —, e **não tem botão nenhum**: um aviso técnico não é coisa que
+o paciente possa resolver ou dispensar.
+
+Isolamento preservado: a degradação apaga somente os snapshots **daquele
+escopo** (`usuário::paciente`), sem alcançar outro paciente nem outro usuário.
+
+**Provado por:** `scripts/test-offline-armazenamento.mjs` (49 asserções, puro:
+`estimate()` disponível e indisponível, aproximação do limite, teto atingido,
+os dialetos do erro de cota, a lista fechada de descartáveis, e a ordem das
+frases) e `tests/e2e/offline-conflitos.spec.ts`, bloco "Armazenamento sob
+pressão" (4 cenários, com `QuotaExceededError` forçado de verdade no
+`IDBObjectStore.put`: fila sobrevive e snapshot cede, refresh preserva a fila,
+isolamento entre pacientes, e o aviso ausente no palco).

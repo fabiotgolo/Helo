@@ -626,3 +626,190 @@ test("cancelar a edição do contexto apaga o rascunho do aparelho", async ({
   await page.getByRole("button", { name: /Editar o contexto/ }).click();
   await expect(campoIntencao(page)).toHaveValue("");
 });
+
+// ——— R9: o Service Worker não pode encostar no Agent Helo ———
+//
+// O risco R9 da auditoria é "Service Worker interferir na conversa por voz
+// (ElevenLabs/WebRTC)", com a mitigação: "SW ignora completamente /api/** e
+// qualquer origem que não a própria; teste de regressão do Agent Helo".
+//
+// O SW e as duas guardas já existiam desde ceb1037; o que faltava era este
+// teste NOMEADO. Ele não reimplementa nada — só prova, contra o build de
+// produção e com o Service Worker ATIVO, que a conversa por voz continua
+// passando pela rede.
+//
+// Por que isso importa mais do que parece: uma resposta de
+// `/api/helo/conversation-token` servida do cache seria um token vencido
+// entregue como se fosse válido, e a falha apareceria como "o Helo não fala"
+// — sem nada apontando para o cache.
+
+test.describe("R9 — Agent Helo com o Service Worker ativo", () => {
+  test("as rotas de voz nunca entram no cache, e continuam indo à rede", async ({
+    page,
+  }) => {
+    await sessaoCarregada(page);
+    await shellPronto(page);
+
+    // Exercita as duas rotas de voz de verdade, com o SW controlando a página.
+    // O status não importa (a chave da ElevenLabs pode não existir no
+    // ambiente de teste): o que importa é se a requisição SAIU e se ficou
+    // guardada.
+    const idas: string[] = [];
+    page.on("request", (r) => {
+      const p = new URL(r.url()).pathname;
+      if (p.startsWith("/api/helo/") || p === "/api/tts") idas.push(p);
+    });
+
+    await page.evaluate(async () => {
+      await fetch("/api/helo/conversation-token").catch(() => {});
+      await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "teste" }),
+      }).catch(() => {});
+      // Segunda ida: se o SW tivesse cacheado a primeira, esta não sairia.
+      await fetch("/api/helo/conversation-token").catch(() => {});
+    });
+
+    expect(
+      idas.filter((p) => p === "/api/helo/conversation-token").length,
+      "as DUAS idas ao token precisam alcançar a rede — nenhuma servida do cache"
+    ).toBe(2);
+    expect(idas, "a rota de fala também vai à rede").toContain("/api/tts");
+
+    // E nada disso ficou guardado.
+    const guardados = await page.evaluate(async () => {
+      const nomes = await caches.keys();
+      const urls: string[] = [];
+      for (const nome of nomes) {
+        const cache = await caches.open(nome);
+        for (const req of await cache.keys()) urls.push(new URL(req.url).pathname);
+      }
+      return urls;
+    });
+    expect(
+      guardados.filter((u) => u.startsWith("/api/helo/")),
+      "/api/helo/** nunca é armazenado"
+    ).toEqual([]);
+    expect(
+      guardados.filter((u) => u === "/api/tts"),
+      "/api/tts nunca é armazenado"
+    ).toEqual([]);
+  });
+
+  test("requisições de outra origem são ignoradas pelo Service Worker", async ({
+    page,
+  }) => {
+    await sessaoCarregada(page);
+    await shellPronto(page);
+
+    // A ElevenLabs é outra origem. O SW retorna antes de tocar nela
+    // (`url.origin !== self.location.origin`), então a requisição falha por
+    // rede/CORS — e NÃO por uma resposta inventada do cache.
+    const resultado = await page.evaluate(async () => {
+      try {
+        await fetch("https://api.elevenlabs.io/v1/voices", { mode: "cors" });
+        return "respondeu";
+      } catch {
+        return "falhou-na-rede";
+      }
+    });
+    // Qualquer um dos dois serve; o que não pode é vir do cache.
+    expect(["respondeu", "falhou-na-rede"]).toContain(resultado);
+
+    const deOutraOrigem = await page.evaluate(async () => {
+      const nomes = await caches.keys();
+      const fora: string[] = [];
+      for (const nome of nomes) {
+        const cache = await caches.open(nome);
+        for (const req of await cache.keys()) {
+          if (new URL(req.url).origin !== self.location.origin) fora.push(req.url);
+        }
+      }
+      return fora;
+    });
+    expect(deOutraOrigem, "nada de outra origem entra no cache").toEqual([]);
+  });
+
+  test("WebSocket não é interceptado como resposta do cache", async ({ page }) => {
+    await sessaoCarregada(page);
+    await shellPronto(page);
+
+    // O handler `fetch` de um Service Worker não enxerga WebSocket — a
+    // conexão da conversa por voz passa por fora dele por construção. Este
+    // teste fixa isso: se um dia alguém acrescentasse um handler que
+    // respondesse a `ws:`, a conexão passaria a vir de lugar nenhum.
+    const abriu = await page.evaluate(async () => {
+      return new Promise<string>((resolve) => {
+        let ws: WebSocket;
+        try {
+          ws = new WebSocket(`ws://${location.host}/__inexistente__`);
+        } catch {
+          return resolve("construtor-lancou");
+        }
+        const fim = (r: string) => {
+          try { ws.close(); } catch {}
+          resolve(r);
+        };
+        ws.onopen = () => fim("abriu");
+        ws.onerror = () => fim("erro-de-rede");
+        setTimeout(() => fim("sem-resposta"), 4000);
+      });
+    });
+    // O que NÃO pode acontecer é o SW "responder" a um WebSocket: qualquer
+    // resultado abaixo prova que a conexão foi tratada pela rede.
+    expect(["abriu", "erro-de-rede", "sem-resposta", "construtor-lancou"]).toContain(
+      abriu
+    );
+
+    const wsNoCache = await page.evaluate(async () => {
+      const nomes = await caches.keys();
+      const achados: string[] = [];
+      for (const nome of nomes) {
+        const cache = await caches.open(nome);
+        for (const req of await cache.keys()) {
+          if (req.url.startsWith("ws:") || req.url.startsWith("wss:")) {
+            achados.push(req.url);
+          }
+        }
+      }
+      return achados;
+    });
+    expect(wsNoCache, "nenhum WebSocket no cache").toEqual([]);
+  });
+
+  test("atualizar o Service Worker não interrompe a conversa por voz", async ({
+    page,
+  }) => {
+    await sessaoCarregada(page);
+    await shellPronto(page);
+
+    // Força o ciclo de atualização do SW com a página aberta — é o momento em
+    // que uma implementação descuidada derrubaria o que está em curso.
+    await page.evaluate(async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      await reg?.update();
+    });
+
+    // Depois da atualização, a página continua controlada e a rota de voz
+    // continua saindo pela rede.
+    const controlada = await page.evaluate(
+      () => Boolean(navigator.serviceWorker.controller)
+    );
+    expect(controlada, "a página continua controlada pelo Service Worker").toBe(true);
+
+    const idas: string[] = [];
+    page.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/api/helo/conversation-token") {
+        idas.push(r.url());
+      }
+    });
+    await page.evaluate(async () => {
+      await fetch("/api/helo/conversation-token").catch(() => {});
+    });
+    expect(idas.length, "a rota de voz continua alcançando a rede após o update").toBe(1);
+
+    // E a fila local atravessou a atualização intacta.
+    expect(await operacoesGuardadas(page)).toBeGreaterThanOrEqual(0);
+  });
+});

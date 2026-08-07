@@ -1120,6 +1120,7 @@ export function RealtimeQuestionSession({
               pendenciasDeOutroPaciente={offline.pendenciasDeOutroPaciente}
               onSincronizarAgora={offline.tentarNovamente}
               onDecidirConflito={() => setConflitoAberto(true)}
+              armazenamento={offline.armazenamento}
             />
           )}
 

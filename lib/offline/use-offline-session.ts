@@ -32,6 +32,12 @@ import { servidorEstaAlcancavel, sincronizarFila } from "@/lib/offline/sync-engi
 import { aplicarDecisao } from "@/lib/offline/decisions";
 import { restoreConflict, type ConflictOptionId } from "@/lib/offline/conflicts";
 import {
+  AVISO_DA_FILA,
+  ocupacaoDaFila,
+  TETO_DA_FILA,
+  type EstadoDoArmazenamento,
+} from "@/lib/offline/armazenamento";
+import {
   motivoParaRecusarOffline,
   projetarCaminhos,
   projetarSessao,
@@ -69,6 +75,12 @@ export interface OfflineBridge {
   fila: OfflineOperation[];
   marcas: ProjecaoMarcas;
   avisoDeDescarte: AvisoDeDescarte | null;
+  /**
+   * O que o APARELHO consegue guardar (R10/R13) — distinto de `status`, que
+   * fala do que está pendente de envio. Um aparelho sem espaço e uma fila
+   * sem conexão são problemas diferentes, com saídas diferentes.
+   */
+  armazenamento: EstadoDoArmazenamento;
   reconhecerDescarte: () => void;
   /**
    * Quantas áreas de OUTROS pacientes ficaram no aparelho por terem intenção
@@ -319,6 +331,9 @@ export function useOfflineSession(args: {
   // ——— A área de outros pacientes sai do aparelho ———
 
   const [pendenciasDeOutroPaciente, setPendenciasDeOutroPaciente] = useState(0);
+  // O snapshot deixou de ser gravado por falta de espaço (R10). Vem do store
+  // porque é um FATO já ocorrido, e não algo calculável a partir da fila.
+  const [degradadoRef, setDegradado] = useState(false);
 
   useEffect(() => {
     if (!userId) return;
@@ -459,7 +474,10 @@ export function useOfflineSession(args: {
   const guardarSessao = useCallback(
     (detail: SessionDetailBase) => {
       snapSessao.current = detail;
-      void store?.salvarSnapshot("sessionDetail", detail).catch(() => {});
+      void store
+        ?.salvarSnapshot("sessionDetail", detail)
+        .then(() => setDegradado(store.degradado()))
+        .catch(() => {});
     },
     [store]
   );
@@ -467,7 +485,10 @@ export function useOfflineSession(args: {
   const guardarCaminhos = useCallback(
     (details: PathDetail[]) => {
       snapCaminhos.current = details;
-      void store?.salvarSnapshot("pathDetails", details).catch(() => {});
+      void store
+        ?.salvarSnapshot("pathDetails", details)
+        .then(() => setDegradado(store.degradado()))
+        .catch(() => {});
     },
     [store]
   );
@@ -655,6 +676,24 @@ export function useOfflineSession(args: {
   }, [store]);
 
   const status = useMemo(() => resumo(fila, online), [fila, online]);
+
+  /**
+   * O estado do armazenamento, derivado da fila a cada render — e não um
+   * estado próprio que precisasse ser mantido em sincronia. A degradação do
+   * snapshot é a única parte que o store guarda, porque ela é um FATO já
+   * ocorrido (o espaço acabou), não algo calculável da fila.
+   */
+  const armazenamento = useMemo<EstadoDoArmazenamento>(() => {
+    const pendentes = ocupacaoDaFila(fila);
+    return {
+      degradado: degradadoRef,
+      perto: pendentes >= AVISO_DA_FILA,
+      cheia: pendentes >= TETO_DA_FILA,
+      pendentes,
+      teto: TETO_DA_FILA,
+    };
+  }, [fila, degradadoRef]);
+
   const filaOrdenada = useMemo(() => ordenada(fila), [fila]);
   /**
    * Em ordem causal, e não por "mais recente primeiro": quando vários
@@ -689,6 +728,7 @@ export function useOfflineSession(args: {
       fila: filaOrdenada,
       marcas,
       avisoDeDescarte,
+      armazenamento,
       reconhecerDescarte,
       pendenciasDeOutroPaciente,
       registrarQueda,
@@ -715,6 +755,7 @@ export function useOfflineSession(args: {
       filaOrdenada,
       marcas,
       avisoDeDescarte,
+      armazenamento,
       reconhecerDescarte,
       pendenciasDeOutroPaciente,
       registrarQueda,

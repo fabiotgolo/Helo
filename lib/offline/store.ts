@@ -14,6 +14,8 @@ import {
   apagarMeta,
   apagarOperacao,
   apagarRascunho,
+  apagarSnapshotsDoEscopo,
+  estimarArmazenamento,
   gravarOperacao,
   gravarRascunho,
   gravarSnapshot,
@@ -26,6 +28,14 @@ import {
 } from "@/lib/offline/db";
 import { cifraDisponivel } from "@/lib/offline/crypto";
 import type { ConflictCase } from "@/lib/offline/conflicts";
+import {
+  decidirEnfileiramento,
+  ehErroDeCota,
+  haPressaoDeCota,
+  OfflineStorageFullError,
+  TETO_DA_FILA,
+  type DecisaoDeEnfileiramento,
+} from "@/lib/offline/armazenamento";
 import {
   appendOperation,
   markStatus,
@@ -188,7 +198,28 @@ export class OfflineSessionStore {
   async enfileirar(
     fila: readonly OfflineOperation[],
     entrada: Omit<NovaOperacao, "sessionId" | "patientId">
-  ): Promise<{ fila: OfflineOperation[]; operacao: OfflineOperation; deduplicada: boolean }> {
+  ): Promise<{
+    fila: OfflineOperation[];
+    operacao: OfflineOperation;
+    deduplicada: boolean;
+    /** Como o teto (R13) tratou esta entrada. */
+    decisao: DecisaoDeEnfileiramento;
+  }> {
+    // O teto vale para intenção NOVA. Um clique repetido, que a fila
+    // reconhece como a mesma intenção, não pode ser recusado por ela mesma
+    // já estar lá — seria recusar o que já foi aceito.
+    const decisao = decidirEnfileiramento(fila);
+    if (decisao.kind === "RECUSADA") {
+      const jaExiste =
+        entrada.idempotencyKey &&
+        fila.find((op) => op.idempotencyKey === entrada.idempotencyKey);
+      if (!jaExiste) {
+        // NÃO grava e NÃO devolve uma operação — quem chamou precisa poder
+        // dizer à tela que não foi salvo. Devolver algo aqui seria fingir.
+        throw new OfflineStorageFullError(decisao.pendentes, decisao.teto);
+      }
+    }
+
     const resultado = appendOperation(fila, {
       ...entrada,
       sessionId: this.sessionId,
@@ -199,9 +230,28 @@ export class OfflineSessionStore {
       userId: this.userId,
     });
     if (!resultado.deduplicada) {
-      await gravarOperacao(this.escopo, resultado.operacao.id, resultado.operacao);
+      try {
+        await gravarOperacao(this.escopo, resultado.operacao.id, resultado.operacao);
+      } catch (e) {
+        if (!ehErroDeCota(e)) throw e;
+        // Última cartada antes de recusar: o snapshot é reconstruível, a
+        // operação não. Libera o espaço dele e tenta UMA vez.
+        await this.degradarParaFilaSemSnapshot();
+        try {
+          await gravarOperacao(this.escopo, resultado.operacao.id, resultado.operacao);
+        } catch (e2) {
+          if (!ehErroDeCota(e2)) throw e2;
+          // Nem assim coube. Recusar é a única saída honesta: a alternativa
+          // seria devolver a operação como se estivesse guardada, e ela
+          // sumiria no próximo refresh sem ninguém saber.
+          throw new OfflineStorageFullError(
+            decisao.kind === "RECUSADA" ? decisao.pendentes : fila.length,
+            TETO_DA_FILA
+          );
+        }
+      }
     }
-    return resultado;
+    return { ...resultado, decisao };
   }
 
   /**
@@ -267,7 +317,36 @@ export class OfflineSessionStore {
 
   // ---------- Snapshot ----------
 
+  /**
+   * O snapshot parou de ser gravado para caber a fila (R10). Uma vez ligado,
+   * fica ligado enquanto a aba viver: voltar a gravar snapshot depois de ter
+   * faltado espaço só recriaria a pressão, e o cuidador já foi avisado.
+   */
+  private snapshotDegradado = false;
+
+  degradado(): boolean {
+    return this.snapshotDegradado;
+  }
+
+  /**
+   * Guarda o que o servidor disse. É a ÚNICA gravação que pode desistir em
+   * silêncio — snapshot é reconstruível por uma requisição, e insistir nele
+   * sob pressão de cota é exatamente o que tiraria espaço da fila.
+   *
+   * Três camadas, nesta ordem:
+   *   1. já degradado → nem tenta;
+   *   2. pressão prevista por `estimate()` → degrada ANTES de falhar;
+   *   3. `QuotaExceededError` na gravação → degrada, apaga os snapshots deste
+   *      escopo e segue. É esta que vale, porque (2) pode não ver nada.
+   */
   async salvarSnapshot(kind: OfflineSnapshotKind, value: unknown): Promise<void> {
+    if (this.snapshotDegradado) return;
+
+    if (haPressaoDeCota(await estimarArmazenamento())) {
+      await this.degradarParaFilaSemSnapshot();
+      return;
+    }
+
     const snapshot: OfflineSnapshot = {
       kind,
       sessionId: this.sessionId,
@@ -276,7 +355,30 @@ export class OfflineSessionStore {
       schemaVersion: OFFLINE_SCHEMA_VERSION,
       value,
     };
-    await gravarSnapshot(this.escopo, kind, this.sessionId, snapshot);
+    try {
+      await gravarSnapshot(this.escopo, kind, this.sessionId, snapshot);
+    } catch (e) {
+      if (!ehErroDeCota(e)) throw e;
+      await this.degradarParaFilaSemSnapshot();
+    }
+  }
+
+  /**
+   * "Fila sem snapshot" — a única degradação que existe.
+   *
+   * Apaga SOMENTE os snapshots DESTE escopo. Não toca operações (nem
+   * pendentes, nem em conflito — com suas chaves de idempotência e
+   * dependências intactas), não toca rascunhos, e não alcança o escopo de
+   * outro paciente ou de outro usuário.
+   */
+  private async degradarParaFilaSemSnapshot(): Promise<void> {
+    this.snapshotDegradado = true;
+    try {
+      await apagarSnapshotsDoEscopo(this.escopo);
+    } catch {
+      // Não conseguir apagar não desfaz a decisão de parar de gravar — que é
+      // o que realmente protege a fila daqui para a frente.
+    }
   }
 
   async lerSnapshot<T>(

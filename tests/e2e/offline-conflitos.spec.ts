@@ -490,3 +490,174 @@ test.describe("Decisão sobre conflitos", () => {
     await expect(botaoDecidir(page)).toBeHidden();
   });
 });
+
+// ——— R10 e R13: pressão de armazenamento e teto da fila ———
+//
+// A garantia central destes testes é a ORDEM DE PRIORIDADE: sob pressão, o
+// snapshot é sacrificável e a fila NÃO é. Um teste que apenas verificasse
+// "apareceu um aviso" passaria mesmo se a implementação estivesse apagando
+// operações para caber — que é exatamente o defeito que não pode existir.
+//
+// A pressão é forçada de verdade: `IDBObjectStore.put` é envolvido no
+// navegador para lançar `QuotaExceededError` na coleção alvo. Não é um
+// estado simulado no React — é o mesmo erro que o navegador lança quando o
+// disco acaba, chegando pelo mesmo caminho.
+
+test.describe("Armazenamento sob pressão", () => {
+  /** Faz `put` estourar a cota na coleção indicada, a partir de agora. */
+  async function estourarCotaEm(page: Page, colecao: string) {
+    await page.evaluate((alvo) => {
+      const original = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (
+        this: IDBObjectStore,
+        ...args: unknown[]
+      ) {
+        if (this.name === alvo) {
+          const e = new Error("cota estourada (teste)");
+          e.name = "QuotaExceededError";
+          throw e;
+        }
+        return (original as (...a: unknown[]) => IDBRequest).apply(this, args);
+      } as typeof IDBObjectStore.prototype.put;
+    }, colecao);
+  }
+
+  function snapshotsGuardados(page: Page): Promise<number> {
+    return page.evaluate(async () => {
+      const bancos = await indexedDB.databases?.();
+      if (bancos && !bancos.some((b) => b.name === "helo-offline")) return 0;
+      const banco = await new Promise<IDBDatabase>((res, rej) => {
+        const r = indexedDB.open("helo-offline");
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+      if (!banco.objectStoreNames.contains("snapshots")) return 0;
+      return new Promise<number>((res) => {
+        const r = banco
+          .transaction("snapshots", "readonly")
+          .objectStore("snapshots")
+          .count();
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(-1);
+      });
+    });
+  }
+
+  test("10. cota estourada no snapshot: a FILA sobrevive e o cuidador é avisado", async ({
+    page,
+    context,
+  }) => {
+    await sessaoCarregada(page);
+
+    // O snapshot só é gravado COM rede e com a fila vazia
+    // (`podeGuardarSnapshot`, em session.tsx) — é nesse caminho que a cota
+    // estoura na vida real, e é nele que o teste precisa entrar.
+    await estourarCotaEm(page, "snapshots");
+
+    // Uma ação online: o servidor responde, `detail` muda, e a gravação do
+    // snapshot é tentada — e falha por cota.
+    await campoDaPergunta(page).fill("Pergunta sob pressão de armazenamento");
+    await page.getByRole("button", { name: "Continuar" }).click();
+    await expect(page.getByText("Revisar antes de apresentar")).toBeVisible();
+
+    // O cuidador é informado de que a recuperação visual foi reduzida — com a
+    // segunda metade, que é a que evita o susto: nada pendente foi apagado.
+    const faixa = page.getByTestId("offline-armazenamento");
+    await expect(faixa).toBeVisible({ timeout: 15_000 });
+    await expect(faixa).toHaveAttribute("data-degradado", "sim");
+    await expect(faixa).toContainText(/recuperação visual.*reduzida/i);
+    await expect(faixa).toContainText(/nenhum registro pendente foi apagado/i);
+
+    // O snapshot foi o sacrificado.
+    expect(
+      await snapshotsGuardados(page),
+      "o snapshot é o que cede sob pressão"
+    ).toBe(0);
+
+    // E a FILA continua funcionando: sem rede, a próxima intenção é guardada
+    // normalmente. É esta a garantia que a ordem de prioridade existe para
+    // sustentar — o espaço acabou para o snapshot, não para o registro
+    // clínico.
+    await context.setOffline(true);
+    await page.getByRole("button", { name: "Apresentar ao paciente" }).click();
+    await expect.poll(() => operacoesGuardadas(page)).toBeGreaterThan(0);
+  });
+
+  test("11. depois da degradação, refresh e reabertura preservam a fila", async ({
+    page,
+    context,
+  }) => {
+    await sessaoCarregada(page);
+    await context.setOffline(true);
+    await estourarCotaEm(page, "snapshots");
+    await campoDaPergunta(page).fill("Sobrevive ao refresh sob pressão");
+    await page.getByRole("button", { name: "Continuar" }).click();
+    await expect.poll(() => operacoesGuardadas(page)).toBeGreaterThan(0);
+    const antes = await operacoesGuardadas(page);
+
+    // Recarrega COM rede (o app shell não é o assunto aqui) e volta à sessão.
+    await context.setOffline(false);
+    await page.route(`**${RTQ}/turns`, (route) => route.abort("connectionreset"));
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    // A fila atravessou: nada foi sacrificado para liberar espaço.
+    await expect.poll(() => operacoesGuardadas(page), { timeout: 20_000 }).toBe(
+      antes
+    );
+  });
+
+  test("12. a degradação é isolada: não alcança outro paciente", async ({
+    page,
+    context,
+  }) => {
+    await sessaoCarregada(page);
+    await context.setOffline(true);
+    await estourarCotaEm(page, "snapshots");
+    await campoDaPergunta(page).fill("Paciente A, sob pressão");
+    await page.getByRole("button", { name: "Continuar" }).click();
+    await expect.poll(() => operacoesGuardadas(page)).toBeGreaterThan(0);
+    const doPacienteA = await operacoesGuardadas(page);
+
+    // Volta a rede e troca para o outro paciente. A fila do A continua
+    // guardada (política do §8: pendência nunca some sozinha) e nada do que
+    // aconteceu no escopo dele vazou para o escopo do B.
+    await context.setOffline(false);
+    await page.route(`**${RTQ}/turns`, (route) => route.abort("connectionreset"));
+    await page.goto("/");
+    await abrirModo(page, dados.outroPacienteId);
+
+    expect(
+      await operacoesGuardadas(page),
+      "a fila do paciente anterior continua no aparelho"
+    ).toBeGreaterThanOrEqual(doPacienteA);
+  });
+
+  test("13. o aviso de armazenamento NUNCA aparece no palco do paciente", async ({
+    page,
+    context,
+  }) => {
+    await sessaoCarregada(page);
+    await estourarCotaEm(page, "snapshots");
+
+    // Provoca a degradação pelo caminho real (online), ainda em tela de
+    // cuidador, e confirma que a faixa está lá ANTES de ir ao palco.
+    await campoDaPergunta(page).fill("Você quer água?");
+    await page.getByRole("button", { name: "Continuar" }).click();
+    await expect(page.getByText("Revisar antes de apresentar")).toBeVisible();
+    await expect(page.getByTestId("offline-armazenamento")).toBeVisible({
+      timeout: 15_000,
+    });
+    await context.setOffline(true);
+
+    // Agora a tela passa a ser do PACIENTE.
+    await page.getByRole("button", { name: "Apresentar ao paciente" }).click();
+    await expect(
+      page.getByRole("group", { name: "Respostas possíveis do paciente" })
+    ).toBeVisible();
+
+    // O aviso técnico some junto com o chip — e não há botão nenhum aqui
+    // para o paciente resolver ou dispensar.
+    await expect(page.getByTestId("offline-armazenamento")).toBeHidden();
+    await expect(chip(page)).toBeHidden();
+  });
+});

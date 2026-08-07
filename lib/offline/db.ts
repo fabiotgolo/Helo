@@ -75,6 +75,40 @@ function pedido<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+/**
+ * Quanto o navegador diz que já usamos (R10).
+ *
+ * Sinal ANTECIPADO, não garantia: a API não existe em todo navegador, é
+ * deliberadamente imprecisa (proteção contra fingerprinting) e pode reportar
+ * folga no exato instante em que a gravação falha. Quem protege de verdade é
+ * o `QuotaExceededError` tratado na escrita.
+ */
+export async function estimarArmazenamento(): Promise<{
+  disponivel: boolean;
+  usadoBytes: number | null;
+  cotaBytes: number | null;
+}> {
+  const indisponivel = { disponivel: false, usadoBytes: null, cotaBytes: null };
+  if (
+    typeof navigator === "undefined" ||
+    !navigator.storage ||
+    typeof navigator.storage.estimate !== "function"
+  ) {
+    return indisponivel;
+  }
+  try {
+    const e = await navigator.storage.estimate();
+    return {
+      disponivel: true,
+      usadoBytes: typeof e.usage === "number" ? e.usage : null,
+      cotaBytes: typeof e.quota === "number" ? e.quota : null,
+    };
+  } catch {
+    // Uma API que lança é uma API que não temos.
+    return indisponivel;
+  }
+}
+
 function transacaoConcluida(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -316,6 +350,36 @@ export function chaveDeSnapshot(
   sessionId: string
 ): string {
   return `${escopo}|${kind}|${sessionId}`;
+}
+
+/**
+ * Apaga TODOS os snapshots de um escopo — a degradação do R10.
+ *
+ * É a única liberação de espaço que existe, e por isso tem nome próprio em
+ * vez de um `apagarPorColecao(colecao)` genérico: um parâmetro aqui seria o
+ * caminho por onde, um dia, alguém liberaria espaço apagando `operacoes`.
+ *
+ * Snapshot é o que o SERVIDOR disse: sempre reconstruível por uma requisição.
+ * Fila é intenção que ninguém mais tem. A assimetria é o ponto.
+ */
+export async function apagarSnapshotsDoEscopo(escopo: string): Promise<number> {
+  const banco = await abrirBanco();
+  const tx = banco.transaction(COL.snapshots, "readwrite");
+  const store = tx.objectStore(COL.snapshots);
+  const chaves = await new Promise<IDBValidKey[]>((res) => {
+    const r = store.getAllKeys();
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => res([]);
+  });
+  let apagados = 0;
+  for (const chave of chaves) {
+    if (typeof chave === "string" && chave.startsWith(`${escopo}|`)) {
+      store.delete(chave);
+      apagados += 1;
+    }
+  }
+  await transacaoConcluida(tx);
+  return apagados;
 }
 
 export function gravarSnapshot(
