@@ -85,6 +85,14 @@ const LOTES = [
     arquivos: ["tests/e2e/patient-controls.spec.ts"],
   },
   {
+    nome: "voz-robustez",
+    titulo: "Ciclo de vida do áudio, cancelamento e recuperação da voz (5.1B)",
+    // Lote próprio, e não uma adição a outro: esta suíte intercepta /api/tts
+    // para a aba inteira. Compartilhar o lote faria a interceptação alcançar
+    // testes que esperam o comportamento normal da voz.
+    arquivos: ["tests/e2e/voz-robustez.spec.ts"],
+  },
+  {
     nome: "offline",
     titulo: "Continuidade sem conexão e armazenamento local",
     // `offline-app-shell.spec.ts` NÃO entra aqui, e não é esquecimento: ele

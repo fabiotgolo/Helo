@@ -656,6 +656,29 @@ servidor + emulador. Rode-o com `ELEVENLABS_API_KEY` vazia: a autorização é
 decidida antes da chave, então uma fala proibida responde 403 e uma autorizada
 responde 503, ambas sem sair para a rede.
 
+A robustez do áudio (Fase 5.1B) — memória, prazos e recuperação — tem outras
+quatro, também de domínio puro e também sem chamada paga:
+
+```bash
+npm run test:5.1b               # as quatro abaixo, em sequência
+npm run test:audio:cache        # ObjectURL: LRU, fixação, purga, nenhum órfão
+npm run test:voice:cancel       # cancelamento e recuperação após 503 transitória
+npm run test:voice:timeout      # prazos, categorias de falha e log sem vazamento
+npm run test:audio:lifecycle    # o produto usa esses módulos nos pontos certos
+```
+
+O lote `voz-robustez` do Playwright fecha a mesma área **no navegador**, com
+`/api/tts` interceptado. Ele não é redundante: foi ali que apareceu um `fetch`
+sem `bind` que quebrava toda a fala do paciente e que as suítes de domínio, por
+rodarem em Node, não podiam ver.
+
+```bash
+npm run test:ui:lotes -- voz-robustez
+```
+
+A política de cache, os prazos escolhidos e as limitações assumidas estão em
+[docs/robustez-da-voz.md](docs/robustez-da-voz.md).
+
 O offline tem ainda duas suítes que **exigem servidor**, porque o que elas
 provam é o comportamento do servidor:
 

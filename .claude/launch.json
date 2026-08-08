@@ -51,6 +51,15 @@
         "node scripts/gen-version.mjs && FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 NEXT_DIST_DIR=.next-preview51a npx next dev --webpack -p 3400"
       ],
       "port": 3400
+    },
+    {
+      "name": "helo-regressao-5.1b",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "node scripts/gen-version.mjs && FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 FIRESTORE_DATABASE_ID=voz-teste ELEVENLABS_API_KEY= NEXT_DIST_DIR=.next-regressao51b npx next dev --webpack -p 3500"
+      ],
+      "port": 3500
     }
   ]
 }
