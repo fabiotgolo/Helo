@@ -164,17 +164,31 @@ export default function ConversaPage() {
   // Agente está ativo. O mute global continua vencendo. A voz (clone do
   // paciente → voz configurada em Ajustes → fallback aprovado) é resolvida no
   // servidor por patientId; a condução da conversa segue na voz da plataforma.
+  // A frase confirmada é REGISTRADA antes de ser falada, e é o registro que a
+  // autoriza. Guardamos o id — não o grant: "Repetir" pode ser tocado muito
+  // depois, e um id não vence.
+  const confirmedPhrase = useRef<{ text: string; messageId: string } | null>(null);
+
   const speakPatientPhrase = useCallback(
     async (text: string): Promise<SpeakResult> => {
       console.log("[HELO VOICE] source conversation");
       console.log("[HELO VOICE] role patient");
       console.log("[HELO AUDIO] suppressing platform narration");
+      const registered = confirmedPhrase.current;
+      // Sem registro confirmado para ESTE texto não há voz do paciente.
+      // Acontece quando a gravação falhou — e aí não existe frase confirmada
+      // no servidor, então não há nada a dizer em nome dele.
+      if (!registered || registered.text !== text) {
+        console.error("[VOZ] frase do paciente sem registro confirmado — não será falada");
+        return "erro";
+      }
       beginPatientVoiceOverride();
       try {
         return await speak(text, {
           speakerRole: "patient",
           confirmationStatus: "confirmed",
           patientId,
+          source: { kind: "confirmedMessage", messageId: registered.messageId },
           mode: "conversa",
           priority: "patientResponse",
         });
@@ -404,6 +418,15 @@ export default function ConversaPage() {
           category: confirm.category,
           detail: confirm.fromAI ? `${confirm.phrase} (sugestão IA)` : confirm.phrase,
         });
+        setPhase("done");
+        // Frase confirmada em nome do PACIENTE: sai na voz do paciente (clone
+        // → voz configurada em Ajustes → fallback), com prioridade máxima.
+        //
+        // A ordem inverteu na Fase 5.1A: REGISTRA e só então fala. Antes as
+        // duas coisas corriam em paralelo, e a voz não dependia do registro —
+        // era justamente o que permitia falar sem que existisse frase
+        // confirmada nenhuma no servidor.
+        console.log("[HELO CONVERSAR] patient message confirmed");
         void saveMessage({
           sessionId,
           patientId,
@@ -414,12 +437,14 @@ export default function ConversaPage() {
           confirmations: confirm.sensitive ? 2 : 1,
           speakerRole: "patient",
           confirmationStatus: "confirmed",
+        }).then((saved) => {
+          if (!saved) {
+            console.error("[HELO CONVERSAR] frase não registrada — a voz do paciente não soa");
+            return;
+          }
+          confirmedPhrase.current = { text: confirm.phrase, messageId: saved.id };
+          void speakPatientPhrase(confirm.phrase);
         });
-        setPhase("done");
-        // Frase confirmada em nome do PACIENTE: sai na voz do paciente (clone
-        // → voz configurada em Ajustes → fallback), com prioridade máxima.
-        console.log("[HELO CONVERSAR] patient message confirmed");
-        void speakPatientPhrase(confirm.phrase);
         return;
       }
 

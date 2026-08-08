@@ -44,6 +44,9 @@ export default function MensagemPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const rejected = useRef<string[]>([]);
   const shownAt = useRef(Date.now());
+  // Id do registro da mensagem confirmada — a origem que autoriza a voz do
+  // paciente, inclusive no "Repetir".
+  const confirmedMessageId = useRef<string | null>(null);
 
   const pool: Frase[] = useMemo(() => {
     const custom = preferredExpressions.map((e) => ({
@@ -253,6 +256,9 @@ export default function MensagemPage() {
       });
       if (g === "sim") {
         logEvent({ sessionId, patientId, type: "confirmacao", category: "mensagem", detail: fullMessage });
+        setPhase("done");
+        // Mensagem confirmada em nome do PACIENTE — voz clonada dele quando
+        // houver. Registra PRIMEIRO: é o registro que autoriza a voz.
         void saveMessage({
           sessionId,
           patientId,
@@ -261,13 +267,18 @@ export default function MensagemPage() {
           status: "confirmada",
           speakerRole: "patient",
           confirmationStatus: "confirmed",
-        });
-        setPhase("done");
-        // Mensagem confirmada em nome do PACIENTE — voz clonada dele quando houver.
-        void speak(fullMessage, {
-          speakerRole: "patient",
-          confirmationStatus: "confirmed",
-          patientId,
+        }).then((saved) => {
+          if (!saved) {
+            console.error("[HELO MENSAGEM] mensagem não registrada — a voz do paciente não soa");
+            return;
+          }
+          confirmedMessageId.current = saved.id;
+          void speak(fullMessage, {
+            speakerRole: "patient",
+            confirmationStatus: "confirmed",
+            patientId,
+            source: { kind: "confirmedMessage", messageId: saved.id },
+          });
         });
       } else if (g === "talvez") {
         // Reformular: remove a última frase e volta a perguntar
@@ -451,13 +462,16 @@ export default function MensagemPage() {
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  const messageId = confirmedMessageId.current;
+                  if (!messageId) return;
                   void speak(fullMessage, {
                     speakerRole: "patient",
                     confirmationStatus: "confirmed",
                     patientId,
-                  })
-                }
+                    source: { kind: "confirmedMessage", messageId },
+                  });
+                }}
                 className="rounded-full border border-line bg-card px-6 py-3 font-medium hover:border-ink-mute"
               >
                 🔊 Repetir

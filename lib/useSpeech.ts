@@ -12,6 +12,7 @@ import {
   patientCloneAllowed,
   type ActiveSpeaker,
   type SpeakOptions,
+  type SpeechSourceRef,
   type VoiceSource,
 } from "@/lib/voice";
 
@@ -179,15 +180,50 @@ export function useSpeech() {
     });
   }, []);
 
+  // Pede ao servidor a autorização para uma fala do paciente. A tela nomeia um
+  // RECURSO; o servidor responde com o texto daquele recurso e o grant que o
+  // autoriza. O texto devolvido é o que será sintetizado — se divergir do que a
+  // tela tinha em mãos, quem manda é o servidor.
+  const requestGrant = useCallback(
+    async (
+      patientId: number,
+      source: SpeechSourceRef
+    ): Promise<{ grant: string; text: string } | null> => {
+      try {
+        const res = await fetch("/api/voice/grant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ patientId, source }),
+        });
+        if (!res.ok) {
+          console.error("[VOZ] autorização de fala do paciente negada:", res.status);
+          return null;
+        }
+        const data = (await res.json()) as { grant?: string; text?: string };
+        return data.grant && data.text ? { grant: data.grant, text: data.text } : null;
+      } catch (err) {
+        console.error("[VOZ] falha ao pedir autorização de fala:", (err as Error)?.message ?? err);
+        return null;
+      }
+    },
+    []
+  );
+
   // Resolve a autoria e busca (ou reaproveita) o áudio ElevenLabs da fala.
   // Devolve null quando a ElevenLabs não pôde atender — o chamador decide o
   // fallback. Nunca devolve áudio de outro paciente: a chave de cache inclui
   // papel e paciente, e o patientId é validado contra o paciente ativo.
+  //
+  // Para a voz do paciente, o grant é obtido AQUI e só no MISS de cache: um
+  // acerto de cache já foi autorizado quando o áudio entrou, e a Emergência
+  // não pode pagar um round-trip a cada toque.
   const fetchElevenAudio = useCallback(
     async (
       text: string,
       opts: Required<Pick<SpeakOptions, "speakerRole" | "confirmationStatus">> & {
         patientId: number | null;
+        source?: SpeechSourceRef;
+        grant?: string;
       }
     ): Promise<{ url: string; source: VoiceSource } | null> => {
       const { speakerRole, confirmationStatus, patientId } = opts;
@@ -196,16 +232,34 @@ export function useSpeech() {
       console.log("[EMERGENCY] cache lookup:", cached ? "HIT" : "MISS");
       if (cached) return cached;
       if (elevenAvailable.current === false) return null;
+
+      // Autorização da fala do paciente. Sem ela nem tentamos sintetizar — o
+      // servidor recusaria de qualquer forma, e falhar aqui deixa o motivo
+      // legível no lugar certo.
+      let speechText = text;
+      let grant = opts.grant;
+      if (speakerRole === "patient" && !grant) {
+        if (!opts.source || patientId == null) {
+          console.error("[VOZ] fala do paciente sem origem nem grant — bloqueada");
+          return null;
+        }
+        const authorized = await requestGrant(patientId, opts.source);
+        if (!authorized) return null;
+        grant = authorized.grant;
+        speechText = authorized.text;
+      }
+
       try {
         console.log("[EMERGENCY] TTS request started");
         const res = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            text,
+            text: speechText,
             speakerRole,
             confirmationStatus,
             patientId: speakerRole === "patient" ? patientId : undefined,
+            grant,
           }),
         });
         console.log("[EMERGENCY] TTS response received:", res.status);
@@ -215,7 +269,13 @@ export function useSpeech() {
             (res.headers.get("X-Voice-Source") as VoiceSource | null) ??
             (speakerRole === "patient" ? "patientElevenLabsClone" : "heloElevenLabs");
           const entry = { url: URL.createObjectURL(await res.blob()), source };
+          // Guardado sob o texto que REALMENTE soou. Quando o servidor
+          // devolveu um texto diferente do que a tela tinha, é o dele que
+          // vale — e é ele que precisa ser encontrado no próximo acerto.
           cache.current.set(cacheKey, entry);
+          if (speechText !== text) {
+            cache.current.set(audioCacheKey(speakerRole, patientId, speechText), entry);
+          }
           return entry;
         }
         if (res.status === 503) elevenAvailable.current = false;
@@ -226,7 +286,7 @@ export function useSpeech() {
       }
       return null;
     },
-    []
+    [requestGrant]
   );
 
   const speak = useCallback(
@@ -283,11 +343,17 @@ export function useSpeech() {
         console.error("[VOZ] fala do paciente com patientId fora do contexto ativo — bloqueada");
         return "erro";
       }
-      // Bloqueio de domínio (regra obrigatória): a voz clonada do paciente
-      // nunca soa antes da confirmação exigida pelo fluxo. O servidor aplica
-      // o mesmo bloqueio — a interface não é a única barreira.
+      // Gate do FLUXO: a voz do paciente não soa antes de a tela liberá-la.
+      // Não é a autorização — só evita um pedido que o servidor recusaria.
       if (speakerRole === "patient" && !patientCloneAllowed(speakerRole, confirmationStatus)) {
-        console.error("[VOZ] fala do paciente sem confirmação exigida — bloqueada");
+        console.error("[VOZ] fala do paciente sem confirmação exigida pelo fluxo — bloqueada");
+        return "erro";
+      }
+      // A autorização de verdade é do servidor, e ela precisa de uma prova:
+      // a ORIGEM (um recurso que o servidor resolve) ou um grant já emitido.
+      // Uma tela que não declara nenhuma das duas não faz o paciente falar.
+      if (speakerRole === "patient" && !options?.source && !options?.grant) {
+        console.error("[VOZ] fala do paciente sem origem nem grant — bloqueada");
         return "erro";
       }
       stop();
@@ -299,6 +365,8 @@ export function useSpeech() {
           speakerRole,
           confirmationStatus,
           patientId,
+          source: options?.source,
+          grant: options?.grant,
         });
         // stop() chegou enquanto o áudio ainda era preparado — não toca
         if (genRef.current !== gen) {
@@ -413,8 +481,14 @@ export function useSpeech() {
   // certa, e as frases seguem faladas mesmo se a rede cair depois.
   // Sequencial de propósito — sem rajada na API de TTS; qualquer falha
   // apenas interrompe o aquecimento (o toque cai no fallback normal).
+  // Cada entrada leva a ORIGEM junto com o texto: aquecer o cache é sintetizar
+  // de verdade, e portanto passa exatamente pelo mesmo portão do toque real.
+  // Um aquecimento sem origem não gera áudio nenhum.
   const prime = useCallback(
-    async (texts: string[], options?: SpeakOptions): Promise<void> => {
+    async (
+      entries: { text: string; source?: SpeechSourceRef }[],
+      options?: SpeakOptions
+    ): Promise<void> => {
       const speakerRole = options?.speakerRole ?? "helo";
       const confirmationStatus = options?.confirmationStatus ?? "notRequired";
       const patientId =
@@ -423,14 +497,20 @@ export function useSpeech() {
           : null;
       if (speakerRole === "patient" && patientId !== activePatientId()) return;
       if (speakerRole === "patient" && !patientCloneAllowed(speakerRole, confirmationStatus)) return;
-      for (const text of texts) {
+      for (const entry of entries) {
         if (elevenAvailable.current === false) return;
-        if (!text.trim()) continue;
+        if (!entry.text.trim()) continue;
+        if (speakerRole === "patient" && !entry.source) continue;
         // Troca de paciente durante o aquecimento: para na hora — nenhum
         // áudio é gerado (nem cacheado) fora do contexto ativo.
         if (speakerRole === "patient" && patientId !== activePatientId()) return;
-        // Falhou (rede ou 503): o topo do laço decide se ainda vale insistir.
-        await fetchElevenAudio(text, { speakerRole, confirmationStatus, patientId });
+        // Falhou (rede, 403 ou 503): o topo do laço decide se ainda vale insistir.
+        await fetchElevenAudio(entry.text, {
+          speakerRole,
+          confirmationStatus,
+          patientId,
+          source: entry.source,
+        });
       }
     },
     [fetchElevenAudio]

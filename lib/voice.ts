@@ -27,13 +27,37 @@ export type ActiveSpeaker = "platform" | "patient" | "none";
 
 export type VoiceState = "idle" | "loading" | "speaking" | "interrupted" | "error";
 
+/**
+ * Referência a um recurso do servidor — a forma como a tela diz DE ONDE vem a
+ * fala, em vez de afirmar que ela está autorizada.
+ *
+ * Espelha `SpeechSource` em lib/voice/speech-sources.ts; repetida aqui porque
+ * aquele módulo importa Firestore e não pode atravessar para o cliente.
+ */
+export type SpeechSourceRef =
+  | { kind: "routineAnswer"; questionKey: string; answer: "yes" | "maybe" | "no" }
+  | { kind: "emergencyItem"; itemId?: string; defaultKey?: string }
+  | { kind: "activityResponse"; runId: string; itemId: string; optionId: string; gesture: "sim" | "talvez" | "nao" }
+  | { kind: "favoritePhrase"; phraseId: string }
+  | { kind: "confirmedMessage"; messageId: string }
+  | { kind: "patientVoicePreview" };
+
 /** Opções de uma fala. Sem opções, a fala pertence à plataforma. */
 export interface SpeakOptions {
   speakerRole?: SpeakerRole;
-  /** Exigido para a voz clonada: "confirmed" (gesto) ou "notRequired" (fluxo sem confirmação, ex.: Emergência). */
+  /**
+   * Estatuto da confirmação no FLUXO da tela. Continua governando o gate local
+   * (a interface não tenta falar o que o fluxo ainda não liberou), mas deixou
+   * de ser autorização: o servidor não o aceita mais como prova. Ver
+   * `source`/`grant`.
+   */
   confirmationStatus?: ConfirmationStatus;
   /** Paciente autor da fala — obrigatório quando speakerRole = "patient". */
   patientId?: number | null;
+  /** Recurso do servidor que autoriza esta fala do paciente. */
+  source?: SpeechSourceRef;
+  /** Grant já emitido pelo servidor (ex.: devolvido por /api/messages). */
+  grant?: string;
   mode?: HeloItemMode;
   /**
    * Prioridade da fala perante o Audio Manager.
@@ -51,10 +75,15 @@ export interface SpeakOptions {
 }
 
 /**
- * Regra obrigatória de confirmação (bloqueada no domínio, não só na UI):
- * a voz clonada do paciente só pode soar quando a fala é dele E o fluxo já
- * a liberou — por gesto confirmado ou por definição do produto de que o
+ * Gate LOCAL do fluxo: a interface não tenta falar o que o fluxo da tela ainda
+ * não liberou — por gesto confirmado, ou por definição do produto de que o
  * fluxo dispensa confirmação (Emergência: o toque é a confirmação).
+ *
+ * Isto NÃO é a autorização. Desde a Fase 5.1A quem autoriza a voz do paciente
+ * é o SpeechGrant emitido pelo servidor (lib/voice/speech-grant.ts): esta
+ * função roda só no cliente, e um cliente não pode se autorizar. Ela continua
+ * existindo porque evita um round-trip inútil para uma fala que o próprio
+ * fluxo já sabe que não deve acontecer.
  */
 export function patientCloneAllowed(
   speakerRole: SpeakerRole,

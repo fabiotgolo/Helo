@@ -269,15 +269,32 @@ export default function AjustesPage() {
 
   // Prévia de voz: o cliente NUNCA envia voiceId técnico — só ids do
   // catálogo interno aprovado ou a referência ao clone do paciente ativo.
+  //
+  // Na prévia da voz DO PACIENTE o texto também deixou de vir daqui: era um
+  // caminho aberto para ouvir qualquer frase na voz clonada da pessoa. Agora
+  // o servidor compõe a frase de demonstração e autoriza só ela.
   const playPreview = useCallback(
     async (which: "plataforma" | "paciente", payload: Record<string, unknown>, text: string) => {
       setPreviewing(which);
       try {
         audioRef.current?.pause();
+        let spoken = text;
+        let grant: string | undefined;
+        if (which === "paciente") {
+          const authorization = await fetch("/api/voice/grant", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ patientId, source: { kind: "patientVoicePreview" } }),
+          });
+          if (!authorization.ok) return;
+          const granted = (await authorization.json()) as { grant: string; text: string };
+          spoken = granted.text;
+          grant = granted.grant;
+        }
         const res = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, ...payload }),
+          body: JSON.stringify({ text: spoken, grant, ...payload }),
         });
         if (!res.ok) return;
         const url = URL.createObjectURL(await res.blob());
@@ -288,7 +305,7 @@ export default function AjustesPage() {
         setPreviewing(null);
       }
     },
-    []
+    [patientId]
   );
 
   const flashVoice = useCallback((msg: string) => {

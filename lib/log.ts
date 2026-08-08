@@ -12,13 +12,30 @@ export function logEvent(e: HeloEvent): void {
   }).catch(() => {});
 }
 
-export async function saveMessage(m: HeloMessage): Promise<void> {
-  await fetch("/api/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(m),
-    keepalive: true,
-  }).catch(() => {});
+/**
+ * Registra a comunicação. Quando a mensagem é uma fala CONFIRMADA do paciente,
+ * a resposta traz o SpeechGrant que autoriza vocalizá-la — o registro passa a
+ * existir antes da voz, e é ele que sustenta a fala.
+ *
+ * Devolve null quando o registro falhou (rede, permissão): sem registro não há
+ * grant, e sem grant a voz do paciente não soa. Falha FECHADA, de propósito.
+ */
+export async function saveMessage(
+  m: HeloMessage
+): Promise<{ id: string; grant?: string } | null> {
+  try {
+    const res = await fetch("/api/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(m),
+      keepalive: true,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { id?: string; grant?: string };
+    return data.id ? { id: data.id, grant: data.grant } : null;
+  } catch {
+    return null;
+  }
 }
 
 // O operador NÃO é enviado pelo cliente: o servidor deriva operatorId,

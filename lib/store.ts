@@ -423,6 +423,29 @@ export async function insertMessage(m: HeloMessage): Promise<string> {
   return ref.id;
 }
 
+/** Uma mensagem registrada, por id. Leitura crua — quem chama confere o
+ *  paciente e o estatuto (ver lib/voice/speech-sources.ts, que a usa como
+ *  prova de que uma frase já foi confirmada antes de virar voz do paciente). */
+export async function getMessage(id: string): Promise<
+  (HeloMessage & { id: string }) | null
+> {
+  const doc = await col.messages().doc(id).get();
+  if (!doc.exists) return null;
+  const d = doc.data()!;
+  return {
+    id: doc.id,
+    sessionId: d.sessionId ?? null,
+    patientId: d.patientId ?? null,
+    text: String(d.text ?? ""),
+    category: d.category ?? undefined,
+    sensitive: d.sensitive === 1,
+    status: d.status,
+    confirmations: d.confirmations ?? 1,
+    speakerRole: d.speakerRole ?? "patient",
+    confirmationStatus: d.confirmationStatus,
+  };
+}
+
 // ---------- Pessoas (por paciente) ----------
 
 export type Person = { id: number; name: string; relation: string | null };

@@ -482,6 +482,15 @@ export function SessionPlayer({
               speakerRole: "patient",
               confirmationStatus: "confirmed",
               patientId,
+              // O servidor lê o texto do snapshot IMUTÁVEL da execução —
+              // editar o template depois não muda o que o paciente disse.
+              source: {
+                kind: "activityResponse",
+                runId: run.id,
+                itemId,
+                optionId,
+                gesture: g,
+              },
               priority: "patientResponse",
             });
           } finally {

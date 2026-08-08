@@ -7,6 +7,7 @@ import { DEFAULT_ITEMS } from "@/lib/defaults";
 import { logEvent, saveMessage, startSession, endSession } from "@/lib/log";
 import { useHelo } from "@/lib/helo-state";
 import type { SpeakResult } from "@/lib/useSpeech";
+import type { SpeechSourceRef } from "@/lib/voice";
 import {
   beginPatientVoiceOverride,
   endPatientVoiceOverride,
@@ -35,6 +36,17 @@ type EmergencyAction = {
   label: string;
   phrase: string;
 };
+
+/**
+ * A origem que autoriza esta frase no servidor. Item personalizado responde
+ * pelo id; conteúdo padrão responde pela defaultKey (não está persistido, mas
+ * é enumerável). A tela não envia o texto — o servidor o resolve.
+ */
+function emergencySource(item: EmergencyAction): SpeechSourceRef {
+  return item.itemId
+    ? { kind: "emergencyItem", itemId: item.itemId }
+    : { kind: "emergencyItem", defaultKey: item.actionKey };
+}
 
 export default function EmergenciaPage() {
   const router = useRouter();
@@ -69,7 +81,7 @@ export default function EmergenciaPage() {
   useEffect(() => {
     if (actions.length > 0 && patientId != null) {
       void prime(
-        actions.map((item) => item.phrase),
+        actions.map((item) => ({ text: item.phrase, source: emergencySource(item) })),
         { speakerRole: "patient", confirmationStatus: "notRequired", patientId }
       );
     }
@@ -124,6 +136,10 @@ export default function EmergenciaPage() {
             speakerRole: "patient",
             confirmationStatus: "notRequired",
             patientId,
+            // Exceção formal da Emergência: o toque do assistente é a
+            // confirmação (regra de produto). Ainda assim o texto vem do
+            // servidor — a exceção dispensa o gesto, nunca a procedência.
+            source: emergencySource(item),
             mode: "emergencia",
             priority: "patientEmergency",
           });

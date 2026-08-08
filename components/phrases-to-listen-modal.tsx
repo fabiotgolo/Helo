@@ -58,14 +58,28 @@ export function PhrasesToListenModal({
     try {
       let source = phrase.audioUrl;
       if (!source) {
+        // A frase é um recurso do paciente: o servidor a resolve por id e
+        // devolve o texto junto com a autorização. Nada de texto livre aqui.
+        const authorization = await fetch("/api/voice/grant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            patientId,
+            source: { kind: "favoritePhrase", phraseId: phrase.id },
+          }),
+        });
+        if (!authorization.ok) {
+          throw new Error("Não foi possível preparar a voz do paciente.");
+        }
+        const granted = (await authorization.json()) as { grant: string; text: string };
         const response = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             patientId,
-            text: phrase.text,
+            text: granted.text,
             speakerRole: "patient",
-            confirmationStatus: "confirmed",
+            grant: granted.grant,
           }),
         });
         if (!response.ok) throw new Error("Não foi possível preparar a voz do paciente.");

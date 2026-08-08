@@ -1,0 +1,55 @@
+import { requirePatientAccess } from "@/lib/auth";
+import { issueSpeechGrant } from "@/lib/voice/speech-grant";
+import { parseSpeechSource, resolveSpeechSource } from "@/lib/voice/speech-sources";
+
+// Emissão de autorização para a voz do paciente.
+//
+// O cliente NOMEIA um recurso; o servidor responde qual é o texto daquele
+// recurso e emite o grant para ESSE texto. Em nenhum momento o texto a falar
+// vem do navegador — é a diferença entre "o servidor confere o que o cliente
+// afirmou" e "o servidor é quem afirma".
+//
+// Devolve o texto canônico junto com o grant de propósito: o cliente precisa
+// sintetizar exatamente o que foi autorizado, e receber os dois juntos torna
+// impossível uma divergência silenciosa entre o que a tela mostra e o que a
+// voz diz.
+//
+// Não devolve voiceId, não devolve segredo, e a resposta é no-store.
+
+export async function POST(request: Request) {
+  const body = (await request.json().catch(() => null)) as {
+    patientId?: unknown;
+    source?: unknown;
+  } | null;
+
+  const patientId = Number(body?.patientId);
+  if (!Number.isInteger(patientId) || patientId <= 0) {
+    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+  }
+
+  const source = parseSpeechSource(body?.source);
+  if (!source) {
+    return Response.json({ error: "origem de fala inválida" }, { status: 400 });
+  }
+
+  // Vínculo ativo com ESTE paciente. O patientId do cliente não é confiado:
+  // é exatamente o que esta verificação existe para desmentir.
+  const auth = await requirePatientAccess(request, patientId);
+  if (auth instanceof Response) return auth;
+
+  const resolved = await resolveSpeechSource(patientId, source);
+  if (!resolved.ok) {
+    return Response.json({ error: resolved.error }, { status: resolved.status });
+  }
+
+  const { grant, expiresAt } = issueSpeechGrant({
+    patientId,
+    text: resolved.text,
+    origin: resolved.origin,
+  });
+
+  return Response.json(
+    { grant, text: resolved.text, origin: resolved.origin, expiresAt },
+    { headers: { "Cache-Control": "no-store" } }
+  );
+}

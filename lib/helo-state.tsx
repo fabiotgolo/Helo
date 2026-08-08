@@ -14,7 +14,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useSpeech, type SpeakResult } from "@/lib/useSpeech";
-import type { ActiveSpeaker, SpeakOptions, VoiceSource } from "@/lib/voice";
+import type { ActiveSpeaker, SpeakOptions, SpeechSourceRef, VoiceSource } from "@/lib/voice";
 import type { OrbPalette } from "@/components/ui";
 
 export type HeloMode = "conversar" | "rotina" | "emergencia" | "atividades" | "helo";
@@ -106,8 +106,15 @@ interface HeloContextValue {
   // oficial ElevenLabs da Helo); com speakerRole "patient" + confirmação,
   // é do PACIENTE (voz clonada ElevenLabs dele).
   speak: (text: string, options?: SpeakOptions) => Promise<SpeakResult>;
-  /** Pré-aquece o cache de áudio para frases conhecidas, na voz da autoria indicada. */
-  prime: (texts: string[], options?: SpeakOptions) => Promise<void>;
+  /**
+   * Pré-aquece o cache de áudio para frases conhecidas, na voz da autoria
+   * indicada. Cada entrada leva a ORIGEM: aquecer é sintetizar, e portanto
+   * passa pelo mesmo portão de autorização do toque real.
+   */
+  prime: (
+    entries: { text: string; source?: SpeechSourceRef }[],
+    options?: SpeakOptions
+  ) => Promise<void>;
   stop: () => void;
   speaking: boolean;
   engine: "elevenlabs" | "navegador";

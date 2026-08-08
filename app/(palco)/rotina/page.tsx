@@ -153,6 +153,9 @@ export default function RotinaPage() {
             speakerRole: modeSpeakerRole("rotina"), // "patient"
             confirmationStatus: "confirmed", // a seleção da resposta é a confirmação
             patientId,
+            // O texto vem do catálogo, resolvido no servidor por
+            // (pergunta, resposta) — a tela nomeia o recurso, não a frase.
+            source: { kind: "routineAnswer", questionKey: key, answer: ans },
             mode: "rotina",
             priority: "patientResponse",
           });
