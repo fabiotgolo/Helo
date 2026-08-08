@@ -98,6 +98,42 @@ export function stopAllPlatformAudio(): void {
   for (const stop of platformStops) stop();
 }
 
+// ——— Liberação do áudio guardado (Fase 5.1B, R-06) ———
+//
+// Parar é uma coisa; LIBERAR é outra, e faltava a segunda. Um `stop()` apenas
+// pausa a reprodução — os Blobs sintetizados continuam presos na memória da
+// aba pelos ObjectURLs que os apontam. Dois momentos exigem soltá-los, e
+// nenhum deles é uma pausa:
+//
+//   "todos"     → logout. Nada do usuário anterior sobrevive, incluindo o
+//                 áudio da voz clonada de um paciente.
+//   "pacientes" → troca de paciente ativo. O áudio da plataforma é de
+//                 ninguém em particular e fica; o de paciente sai.
+//
+// Mesmo padrão de `platformStops`: em nível de módulo, para alcançar qualquer
+// instância de voz em qualquer árvore React — quem faz logout não sabe (nem
+// deveria saber) quantos `useSpeech` existem montados.
+
+export type EscopoLiberacaoAudio = "todos" | "pacientes";
+
+const platformAudioPurges = new Set<(escopo: EscopoLiberacaoAudio) => void>();
+
+/** Registra como liberar o áudio guardado de uma instância de voz. */
+export function registerPlatformAudioPurge(
+  purge: (escopo: EscopoLiberacaoAudio) => void
+): () => void {
+  platformAudioPurges.add(purge);
+  return () => {
+    platformAudioPurges.delete(purge);
+  };
+}
+
+/** Libera os ObjectURLs guardados, em qualquer instância de voz. */
+export function purgePlatformAudio(escopo: EscopoLiberacaoAudio): void {
+  console.log("[HELO AUDIO] released cached audio:", escopo);
+  for (const purge of platformAudioPurges) purge(escopo);
+}
+
 export function isPlatformMuted(): boolean {
   return state.platformMuted;
 }

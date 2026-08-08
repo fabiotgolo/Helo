@@ -5,8 +5,13 @@ import { ACTIVE_PATIENT_KEY } from "@/lib/patient";
 import {
   canPlatformSpeak,
   isPlatformMuted,
+  registerPlatformAudioPurge,
   registerPlatformStop,
+  type EscopoLiberacaoAudio,
 } from "@/lib/audio-coordinator";
+import { AudioCache } from "@/lib/voice/audio-cache";
+import { DisponibilidadeElevenLabs } from "@/lib/voice/eleven-availability";
+import { buscaAudioDaFala } from "@/lib/voice/speech-audio-source";
 import {
   audioCacheKey,
   patientCloneAllowed,
@@ -64,19 +69,34 @@ export function useSpeech() {
   const [engine, setEngine] = useState<"elevenlabs" | "navegador">("navegador");
   const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>("none");
   const [activeVoiceSource, setActiveVoiceSource] = useState<VoiceSource>("none");
-  const cache = useRef<Map<string, { url: string; source: VoiceSource }>>(new Map());
+  // Dono dos ObjectURLs. `useState` com inicializador preguiçoso (e não
+  // `useRef` com atribuição no primeiro render): tocar numa ref durante o
+  // render é justamente o que a regra react-hooks/refs proíbe.
+  const [cache] = useState(() => new AudioCache());
+  const [disponibilidade] = useState(() => new DisponibilidadeElevenLabs());
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const elevenAvailable = useRef<boolean | null>(null);
   const speakingRef = useRef(false);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const analyserData = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  // Ocioso há um tempo: o AudioContext é suspenso (ver suspendeQuandoOcioso).
+  const suspensaoRef = useRef(0);
   // Resolve a fala em curso exatamente uma vez — stop() interrompe de forma
   // determinística e eventos atrasados/duplicados são ignorados.
   const settleRef = useRef<((r: SpeakResult) => void) | null>(null);
   // Geração da fala: stop() invalida falas ainda em preparação (ex.: durante
   // o fetch do TTS), para o áudio não começar depois de interrompido.
   const genRef = useRef(0);
+  // Derruba a requisição em curso quando a fala é interrompida. Invalidar a
+  // geração impede o áudio de tocar; abortar impede o servidor de continuar
+  // sintetizando (e pagando) o que ninguém vai ouvir. As duas são precisas.
+  const abortRef = useRef<AbortController | null>(null);
+  // O aquecimento (`prime`) tem dono de cancelamento próprio — ver prime().
+  const primeAbortRef = useRef<AbortController | null>(null);
+  // Último paciente ativo que este hook viu. Uma troca libera o áudio do
+  // anterior mesmo sem passar pelo provider — a fala funciona em qualquer
+  // camada, e a liberação também precisa.
+  const pacienteVistoRef = useRef<number | null>(null);
 
   const setSpeakingBoth = useCallback((v: boolean) => {
     speakingRef.current = v;
@@ -84,7 +104,29 @@ export function useSpeech() {
     if (!v) {
       setActiveSpeaker("none");
       setActiveVoiceSource("none");
+      // Nenhum áudio ativo: a entrada de cache que estava tocando volta a ser
+      // candidata a despejo, e a amplitude volta ao neutro (getAmplitude já
+      // devolve 0 quando speakingRef é falso).
+      cache.fixa(null);
     }
+  }, [cache]);
+
+  // O AudioContext consome a thread de áudio enquanto estiver "running".
+  // Suspender no ocioso é o que o próprio navegador faz depois de um tempo —
+  // aqui só fica explícito e previsível. O caminho de volta já existia e é
+  // exercitado a cada fala: `ensureAudio` e `speak` retomam antes de tocar,
+  // e o resume é aguardado. Por isso suspender não cria um caminho de falha
+  // novo: cria um caminho JÁ percorrido hoje, só que na hora que escolhemos.
+  const suspendeQuandoOcioso = useCallback(() => {
+    window.clearTimeout(suspensaoRef.current);
+    suspensaoRef.current = window.setTimeout(() => {
+      const ctx = audioCtxRef.current;
+      if (!ctx || ctx.state !== "running") return;
+      if (speakingRef.current) return;
+      void ctx.suspend().catch(() => {
+        // Suspender é otimização; falhar não afeta a fala.
+      });
+    }, 5000);
   }, []);
 
   // Elemento único, reutilizado em todas as falas — permite ligar o
@@ -114,21 +156,82 @@ export function useSpeech() {
     return audio;
   }, []);
 
+  // Idempotente: chamar duas vezes seguidas não deixa nada num estado
+  // diferente de chamar uma. O incremento da geração é o que garante isso —
+  // toda fala em voo passa a não valer, e as que já não valiam continuam sem
+  // valer.
   const stop = useCallback(() => {
     genRef.current++;
+    // Aborta a requisição em curso: sem isso a síntese continua do outro lado
+    // e a resposta ainda chega, só para ser descartada.
+    abortRef.current?.abort();
+    abortRef.current = null;
     settleRef.current?.("interrompida");
     settleRef.current = null;
     audioRef.current?.pause();
     if (typeof window !== "undefined") window.speechSynthesis?.cancel();
     setSpeakingBoth(false);
-  }, [setSpeakingBoth]);
+    suspendeQuandoOcioso();
+  }, [setSpeakingBoth, suspendeQuandoOcioso]);
 
-  useEffect(() => stop, [stop]);
+  // Libera o que está guardado. Chamado no logout ("todos"), na troca de
+  // paciente ("pacientes") e na desmontagem definitiva.
+  //
+  // Não aborta o aquecimento em curso, e isso é deliberado. Os efeitos dos
+  // FILHOS rodam antes dos do provider de paciente: numa troca, a tela nova já
+  // começou a aquecer o áudio do paciente novo quando a liberação chega aqui.
+  // Abortar mataria justamente o aquecimento certo. Quem cuida do aquecimento
+  // obsoleto é o próprio `prime`, que confere o paciente ativo a cada volta e
+  // recolhe o que tiver guardado fora de contexto.
+  const liberaAudio = useCallback(
+    (escopo: EscopoLiberacaoAudio) => {
+      if (escopo === "todos") {
+        cache.purgeAll();
+        // A indisponibilidade também é da sessão: quem entra depois não herda
+        // o prazo de espera de quem saiu.
+        disponibilidade.reinicia();
+        return;
+      }
+      cache.purgePatient();
+    },
+    [cache, disponibilidade]
+  );
+
+  // Desmontagem definitiva: parar, soltar TODOS os ObjectURLs e fechar o
+  // AudioContext. Fechar é irreversível para o elemento atual — por isso as
+  // refs são zeradas junto: uma remontagem reconstrói o par elemento+contexto
+  // do zero em `ensureAudio`.
+  useEffect(() => {
+    return () => {
+      stop();
+      primeAbortRef.current?.abort();
+      primeAbortRef.current = null;
+      window.clearTimeout(suspensaoRef.current);
+      cache.purgeAll();
+      const audio = audioRef.current;
+      if (audio) {
+        audio.src = "";
+        audioRef.current = null;
+      }
+      const ctx = audioCtxRef.current;
+      audioCtxRef.current = null;
+      analyserRef.current = null;
+      analyserData.current = null;
+      if (ctx && ctx.state !== "closed") {
+        void ctx.close().catch(() => {
+          // Contexto já encerrado pelo navegador: nada a fazer.
+        });
+      }
+    };
+  }, [stop, cache]);
 
   // Registra este stop no gerenciador de áudio enquanto a instância viver: o
   // logout, o mute e a ativação do Agente Helo silenciam por aqui QUALQUER voz
   // em curso, sem depender de qual árvore React disparou.
   useEffect(() => registerPlatformStop(stop), [stop]);
+
+  // E registra também COMO liberar o áudio guardado — parar não libera.
+  useEffect(() => registerPlatformAudioPurge(liberaAudio), [liberaAudio]);
 
   // Fallback aprovado: voz local do navegador em pt-BR, claramente
   // identificada — nunca apresentada como voz da Helo nem do paciente.
@@ -180,43 +283,28 @@ export function useSpeech() {
     });
   }, []);
 
-  // Pede ao servidor a autorização para uma fala do paciente. A tela nomeia um
-  // RECURSO; o servidor responde com o texto daquele recurso e o grant que o
-  // autoriza. O texto devolvido é o que será sintetizado — se divergir do que a
-  // tela tinha em mãos, quem manda é o servidor.
-  const requestGrant = useCallback(
-    async (
-      patientId: number,
-      source: SpeechSourceRef
-    ): Promise<{ grant: string; text: string } | null> => {
-      try {
-        const res = await fetch("/api/voice/grant", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ patientId, source }),
-        });
-        if (!res.ok) {
-          console.error("[VOZ] autorização de fala do paciente negada:", res.status);
-          return null;
-        }
-        const data = (await res.json()) as { grant?: string; text?: string };
-        return data.grant && data.text ? { grant: data.grant, text: data.text } : null;
-      } catch (err) {
-        console.error("[VOZ] falha ao pedir autorização de fala:", (err as Error)?.message ?? err);
-        return null;
-      }
-    },
-    []
-  );
+  // Uma troca de paciente ativo libera o áudio do anterior na primeira fala
+  // seguinte. É a defesa de baixo: a liberação normal vem do provider de
+  // paciente, pelo gerenciador de áudio — mas `useSpeech` roda em camadas que
+  // podem não ter esse provider montado, e o áudio da voz clonada de alguém
+  // não pode depender de qual árvore React está viva.
+  const sincronizaEscopoDoPaciente = useCallback(() => {
+    const ativo = activePatientId();
+    if (pacienteVistoRef.current === ativo) return;
+    if (pacienteVistoRef.current != null) cache.purgePatient(pacienteVistoRef.current);
+    pacienteVistoRef.current = ativo;
+  }, [cache]);
 
   // Resolve a autoria e busca (ou reaproveita) o áudio ElevenLabs da fala.
-  // Devolve null quando a ElevenLabs não pôde atender — o chamador decide o
-  // fallback. Nunca devolve áudio de outro paciente: a chave de cache inclui
-  // papel e paciente, e o patientId é validado contra o paciente ativo.
+  // O trabalho de verdade está em lib/voice/speech-audio-source.ts — cache,
+  // grant, TTS, abort e o estado de disponibilidade.
   //
-  // Para a voz do paciente, o grant é obtido AQUI e só no MISS de cache: um
-  // acerto de cache já foi autorizado quando o áudio entrou, e a Emergência
-  // não pode pagar um round-trip a cada toque.
+  // Quem chama traz o `signal` e o `aindaVale`, em vez de esta função inventar
+  // os dois. A razão é concreta: `speak` e `prime` correm ao mesmo tempo e têm
+  // donos de cancelamento DIFERENTES — o stop() derruba a fala, não o
+  // aquecimento em segundo plano. Com um AbortController único aqui dentro, o
+  // aquecimento sobrescreveria o da fala e o stop() seguinte abortaria a
+  // requisição errada.
   const fetchElevenAudio = useCallback(
     async (
       text: string,
@@ -224,69 +312,42 @@ export function useSpeech() {
         patientId: number | null;
         source?: SpeechSourceRef;
         grant?: string;
+        signal: AbortSignal;
+        aindaVale: () => boolean;
       }
     ): Promise<{ url: string; source: VoiceSource } | null> => {
-      const { speakerRole, confirmationStatus, patientId } = opts;
-      const cacheKey = audioCacheKey(speakerRole, patientId, text);
-      const cached = cache.current.get(cacheKey);
-      console.log("[EMERGENCY] cache lookup:", cached ? "HIT" : "MISS");
-      if (cached) return cached;
-      if (elevenAvailable.current === false) return null;
-
-      // Autorização da fala do paciente. Sem ela nem tentamos sintetizar — o
-      // servidor recusaria de qualquer forma, e falhar aqui deixa o motivo
-      // legível no lugar certo.
-      let speechText = text;
-      let grant = opts.grant;
-      if (speakerRole === "patient" && !grant) {
-        if (!opts.source || patientId == null) {
-          console.error("[VOZ] fala do paciente sem origem nem grant — bloqueada");
-          return null;
+      sincronizaEscopoDoPaciente();
+      const resultado = await buscaAudioDaFala(
+        {
+          text,
+          speakerRole: opts.speakerRole,
+          confirmationStatus: opts.confirmationStatus,
+          patientId: opts.patientId,
+          source: opts.source,
+          grant: opts.grant,
+          signal: opts.signal,
+          aindaVale: opts.aindaVale,
+        },
+        {
+          cache,
+          disponibilidade,
+          log: (mensagem, detalhe) =>
+            detalhe === undefined ? console.warn(mensagem) : console.warn(mensagem, detalhe),
         }
-        const authorized = await requestGrant(patientId, opts.source);
-        if (!authorized) return null;
-        grant = authorized.grant;
-        speechText = authorized.text;
+      );
+      if (resultado.ok) {
+        console.log("[EMERGENCY] cache lookup:", resultado.doCache ? "HIT" : "MISS");
+        return resultado.entrada;
       }
-
-      try {
-        console.log("[EMERGENCY] TTS request started");
-        const res = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: speechText,
-            speakerRole,
-            confirmationStatus,
-            patientId: speakerRole === "patient" ? patientId : undefined,
-            grant,
-          }),
-        });
-        console.log("[EMERGENCY] TTS response received:", res.status);
-        if (res.ok) {
-          elevenAvailable.current = true;
-          const source =
-            (res.headers.get("X-Voice-Source") as VoiceSource | null) ??
-            (speakerRole === "patient" ? "patientElevenLabsClone" : "heloElevenLabs");
-          const entry = { url: URL.createObjectURL(await res.blob()), source };
-          // Guardado sob o texto que REALMENTE soou. Quando o servidor
-          // devolveu um texto diferente do que a tela tinha, é o dele que
-          // vale — e é ele que precisa ser encontrado no próximo acerto.
-          cache.current.set(cacheKey, entry);
-          if (speechText !== text) {
-            cache.current.set(audioCacheKey(speakerRole, patientId, speechText), entry);
-          }
-          return entry;
-        }
-        if (res.status === 503) elevenAvailable.current = false;
-      } catch (err) {
-        // Rede indisponível: a fala não pode falhar — o chamador segue para
-        // o fallback aprovado (voz local do navegador, identificada).
-        console.error("[EMERGENCY ERROR] TTS fetch:", (err as Error)?.message ?? err);
+      if (resultado.motivo === "indisponivel") {
+        console.warn(
+          "[VOZ] ElevenLabs em espera por falha recente:",
+          `${Math.ceil(disponibilidade.esperaRestanteMs / 1000)}s`
+        );
       }
       return null;
     },
-    [requestGrant]
+    [cache, disponibilidade, sincronizaEscopoDoPaciente]
   );
 
   const speak = useCallback(
@@ -358,8 +419,11 @@ export function useSpeech() {
       }
       stop();
       const gen = ++genRef.current;
+      window.clearTimeout(suspensaoRef.current); // vai falar: não suspenda agora
       setSpeakingBoth(true);
       setActiveSpeaker(speakerRole === "patient" ? "patient" : "platform");
+      const controle = new AbortController();
+      abortRef.current = controle;
       try {
         const entry = await fetchElevenAudio(text, {
           speakerRole,
@@ -367,6 +431,8 @@ export function useSpeech() {
           patientId,
           source: options?.source,
           grant: options?.grant,
+          signal: controle.signal,
+          aindaVale: () => genRef.current === gen,
         });
         // stop() chegou enquanto o áudio ainda era preparado — não toca
         if (genRef.current !== gen) {
@@ -425,6 +491,11 @@ export function useSpeech() {
               audio.pause();
             }, 2500);
             settleRef.current = settle;
+            // Enquanto tocar, esta entrada não é despejada nem revogada:
+            // liberar o ObjectURL de um áudio em reprodução o cortaria no
+            // meio. `setSpeakingBoth(false)` solta a fixação no fim de
+            // qualquer caminho.
+            cache.fixa(audioCacheKey(speakerRole, patientId, text));
             audio.src = entry.url;
             audio.muted = false;
             audio.volume = 1;
@@ -469,11 +540,28 @@ export function useSpeech() {
         return await speakBrowser(text);
       } finally {
         // Só a fala mais recente encerra o estado — uma fala antiga
-        // interrompida não desliga o "speaking" da que a substituiu
-        if (genRef.current === gen) setSpeakingBoth(false);
+        // interrompida não desliga o "speaking" da que a substituiu.
+        //
+        // Este bloco é o que impede `speaking` de ficar preso em true: ele
+        // roda em TODOS os caminhos de saída (áudio concluído, interrompido,
+        // bloqueado, erro, fallback, exceção), e `setSpeakingBoth(false)`
+        // zera junto activeSpeaker, activeVoiceSource e a fixação do cache.
+        if (abortRef.current === controle) abortRef.current = null;
+        if (genRef.current === gen) {
+          setSpeakingBoth(false);
+          suspendeQuandoOcioso();
+        }
       }
     },
-    [stop, speakBrowser, ensureAudio, setSpeakingBoth, fetchElevenAudio]
+    [
+      stop,
+      speakBrowser,
+      ensureAudio,
+      setSpeakingBoth,
+      fetchElevenAudio,
+      suspendeQuandoOcioso,
+      cache,
+    ]
   );
 
   // Pré-aquece o cache de áudio para frases conhecidas (ex.: as ações de
@@ -497,23 +585,48 @@ export function useSpeech() {
           : null;
       if (speakerRole === "patient" && patientId !== activePatientId()) return;
       if (speakerRole === "patient" && !patientCloneAllowed(speakerRole, confirmationStatus)) return;
-      for (const entry of entries) {
-        if (elevenAvailable.current === false) return;
-        if (!entry.text.trim()) continue;
-        if (speakerRole === "patient" && !entry.source) continue;
-        // Troca de paciente durante o aquecimento: para na hora — nenhum
-        // áudio é gerado (nem cacheado) fora do contexto ativo.
-        if (speakerRole === "patient" && patientId !== activePatientId()) return;
-        // Falhou (rede, 403 ou 503): o topo do laço decide se ainda vale insistir.
-        await fetchElevenAudio(entry.text, {
-          speakerRole,
-          confirmationStatus,
-          patientId,
-          source: entry.source,
-        });
+      // Dono de cancelamento PRÓPRIO, separado do da fala. Um aquecimento não
+      // é interrompido por stop() — ele não está tocando nada —, mas precisa
+      // morrer na desmontagem: sem isso, uma resposta que chegasse depois
+      // criaria um ObjectURL num hook que já não existe, e ninguém restaria
+      // para revogá-lo. Um aquecimento novo também substitui o anterior.
+      primeAbortRef.current?.abort();
+      const controle = new AbortController();
+      primeAbortRef.current = controle;
+      try {
+        for (const entry of entries) {
+          if (controle.signal.aborted) return;
+          // Prazo de indisponibilidade em curso: aquecer agora só gastaria
+          // tentativas. O toque real decide se insiste.
+          if (!disponibilidade.podeTentar()) return;
+          if (!entry.text.trim()) continue;
+          if (speakerRole === "patient" && !entry.source) continue;
+          // Troca de paciente durante o aquecimento: para na hora — nenhum
+          // áudio é gerado (nem cacheado) fora do contexto ativo.
+          if (speakerRole === "patient" && patientId !== activePatientId()) return;
+          // Falhou (rede, 403 ou 503): o topo do laço decide se ainda vale insistir.
+          await fetchElevenAudio(entry.text, {
+            speakerRole,
+            confirmationStatus,
+            patientId,
+            source: entry.source,
+            signal: controle.signal,
+            aindaVale: () => !controle.signal.aborted,
+          });
+          // O paciente mudou ENQUANTO esta entrada era sintetizada. A
+          // liberação da troca já passou por aqui e não viu este áudio, que
+          // chegou depois — então quem o recolhe é este laço, agora, para o
+          // paciente que acabou de sair.
+          if (speakerRole === "patient" && patientId !== activePatientId()) {
+            cache.purgePatient(patientId);
+            return;
+          }
+        }
+      } finally {
+        if (primeAbortRef.current === controle) primeAbortRef.current = null;
       }
     },
-    [fetchElevenAudio]
+    [fetchElevenAudio, disponibilidade, cache]
   );
 
   // Chamado a cada frame pelo orbe — usa refs, nunca estado React.

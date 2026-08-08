@@ -15,6 +15,7 @@ import { GESTURE_EMOJI_KEYS } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
 import { isHeloPersistentAssistantEnabled, PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { readSearchParams, safeReturnTo } from "@/lib/edit-link";
+import { usePreviewAudio } from "@/lib/voice/use-preview-audio";
 
 // Vozes visíveis ao usuário: SOMENTE o catálogo interno aprovado pelo Admin
 // (nomes amigáveis — nenhum voiceId técnico chega ao cliente) e, quando
@@ -105,7 +106,9 @@ export default function AjustesPage() {
   const [previewing, setPreviewing] = useState<"plataforma" | "paciente" | null>(
     null
   );
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Dono do áudio e do ObjectURL da prévia — libera na substituição, no fim e
+  // ao sair da tela (ver lib/voice/use-preview-audio.ts).
+  const previa = usePreviewAudio();
 
   // ——— Edição contextual (deep link) ———
   // ?editMode=<rotina|emergencia|conversa>&itemId=…&returnTo=… abre a seção
@@ -277,7 +280,7 @@ export default function AjustesPage() {
     async (which: "plataforma" | "paciente", payload: Record<string, unknown>, text: string) => {
       setPreviewing(which);
       try {
-        audioRef.current?.pause();
+        previa.stop();
         let spoken = text;
         let grant: string | undefined;
         if (which === "paciente") {
@@ -297,15 +300,12 @@ export default function AjustesPage() {
           body: JSON.stringify({ text: spoken, grant, ...payload }),
         });
         if (!res.ok) return;
-        const url = URL.createObjectURL(await res.blob());
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        await audio.play();
+        await previa.play(await res.blob());
       } finally {
         setPreviewing(null);
       }
     },
-    [patientId]
+    [patientId, previa]
   );
 
   const flashVoice = useCallback((msg: string) => {

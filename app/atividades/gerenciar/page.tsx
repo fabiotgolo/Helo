@@ -36,6 +36,7 @@ import {
 import type { Gesture } from "@/lib/types";
 import type { FavoritePhrase } from "@/lib/favorite-phrases";
 import { setPhraseAudioPlaying } from "@/lib/phrase-audio";
+import { usePreviewAudio } from "@/lib/voice/use-preview-audio";
 
 // Ordem canônica das respostas faladas no editor — SIM, TALVEZ, NÃO.
 const RESPONSE_GESTURES: { g: Gesture; label: string }[] = [
@@ -108,7 +109,8 @@ export default function GerenciarAtividadesPage() {
   const [editingPhraseId, setEditingPhraseId] = useState<string | null>(null);
   const [editingPhraseText, setEditingPhraseText] = useState("");
   const [previewingPhrase, setPreviewingPhrase] = useState(false);
-  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Dono do áudio e do ObjectURL da prévia (lib/voice/use-preview-audio.ts).
+  const previa = usePreviewAudio();
 
   const loadPhrases = useCallback(async () => {
     if (patientId == null) return;
@@ -193,10 +195,10 @@ export default function GerenciarAtividadesPage() {
     void loadPhrases().catch(() => setPhrases([]));
   }, [loadPhrases]);
 
-  useEffect(() => () => {
-    previewAudioRef.current?.pause();
-    setPhraseAudioPlaying(false);
-  }, []);
+  // Sair da tela no meio de uma prévia: o `usePreviewAudio` já para o áudio e
+  // libera o ObjectURL na desmontagem; aqui resta devolver a fala da
+  // plataforma, que a prévia havia suspendido.
+  useEffect(() => () => setPhraseAudioPlaying(false), []);
 
   const save = useCallback(async () => {
     if (!draft || patientId == null || saving) return;
@@ -299,7 +301,7 @@ export default function GerenciarAtividadesPage() {
     if (patientId == null || !text.trim() || previewingPhrase) return;
     setPreviewingPhrase(true);
     setErrorMsg(null);
-    previewAudioRef.current?.pause();
+    previa.stop();
     try {
       const response = await fetch("/api/tts", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -309,19 +311,21 @@ export default function GerenciarAtividadesPage() {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "não foi possível preparar a prévia da voz");
       }
-      const url = URL.createObjectURL(await response.blob());
-      const audio = new Audio(url);
-      previewAudioRef.current = audio;
-      audio.onended = () => { URL.revokeObjectURL(url); setPhraseAudioPlaying(false); setPreviewingPhrase(false); };
-      audio.onerror = () => { URL.revokeObjectURL(url); setPhraseAudioPlaying(false); setPreviewingPhrase(false); setErrorMsg("Não foi possível reproduzir a prévia."); };
       setPhraseAudioPlaying(true);
-      await audio.play();
+      await previa.play(await response.blob(), {
+        onEnded: () => { setPhraseAudioPlaying(false); setPreviewingPhrase(false); },
+        onError: () => {
+          setPhraseAudioPlaying(false);
+          setPreviewingPhrase(false);
+          setErrorMsg("Não foi possível reproduzir a prévia.");
+        },
+      });
     } catch (error) {
       setPhraseAudioPlaying(false);
       setPreviewingPhrase(false);
       setErrorMsg((error as Error).message);
     }
-  }, [patientId, previewingPhrase]);
+  }, [patientId, previewingPhrase, previa]);
 
   const saveEditedPhrase = useCallback(async () => {
     if (patientId == null || !editingPhraseId || !editingPhraseText.trim()) return;

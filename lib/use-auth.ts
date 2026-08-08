@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AppUser } from "@/lib/access-types";
 import { stopAllSpeech } from "@/lib/useSpeech";
+import { purgePlatformAudio } from "@/lib/audio-coordinator";
 import {
   contarPendenciasOffline,
   limparArmazenamentoOffline,
@@ -109,8 +110,13 @@ export function useAuthUser(): {
     }
 
     // 1. Nenhuma voz atravessa o logout: Helo, paciente ou emergência param já.
+    //    E parar não basta — o áudio já sintetizado continua na memória da aba
+    //    enquanto houver um ObjectURL apontando para ele. A voz clonada de um
+    //    paciente é dado dele; ela sai junto, sem depender de a navegação para
+    //    /login descartar o heap por acidente.
     window.dispatchEvent(new Event("helo-agent-stop"));
     stopAllSpeech();
+    purgePlatformAudio("todos");
     // 2. Sessões de modo em andamento (conversa, rotina, emergência, mensagem)
     //    tratam beforeunload como "encerre minha sessão com keepalive". O evento
     //    é disparado AQUI, antes de destruir a autenticação, porque o

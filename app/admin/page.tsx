@@ -5,7 +5,7 @@
 // com permissões granulares, e auditoria. A checagem de papel acontece no
 // SERVIDOR (toda rota /api/admin/* exige admin); esta tela só reflete.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { TopBar, PillLink } from "@/components/ui";
 import { Avatar } from "@/components/dashboard-ui";
 import AdminFeedbackTab from "@/components/admin-feedback-tab";
@@ -27,6 +27,7 @@ import {
   defaultPermissionsFor,
 } from "@/lib/access-types";
 import type { Patient } from "@/lib/types";
+import { usePreviewAudio } from "@/lib/voice/use-preview-audio";
 
 type UserWithLinks = AppUser & { links: AccessLink[] };
 type Tab = "usuarios" | "pacientes" | "acessos" | "vozes" | "feedback" | "auditoria";
@@ -951,7 +952,9 @@ function VoicesTab({
   // prévia interrompe a anterior. O cliente só referencia ids do catálogo
   // ou o clone de um paciente; o voiceId técnico segue no servidor.
   const [previewingId, setPreviewingId] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Dono do áudio e do ObjectURL — libera na substituição, no fim e ao sair da
+  // aba (ver lib/voice/use-preview-audio.ts).
+  const previa = usePreviewAudio();
 
   const preview = useCallback(
     // `text` vale para as prévias da voz da PLATAFORMA. Quando a prévia é da
@@ -962,7 +965,7 @@ function VoicesTab({
     async (key: string, payload: Record<string, unknown>, text: string) => {
       setPreviewingId(key);
       try {
-        audioRef.current?.pause();
+        previa.stop();
         let spoken = text;
         let grant: string | undefined;
         const patientPreview = payload.previewPatientVoice as
@@ -988,16 +991,14 @@ function VoicesTab({
           body: JSON.stringify({ text: spoken, grant, ...payload }),
         });
         if (!r.ok) return;
-        const audio = new Audio(URL.createObjectURL(await r.blob()));
-        audioRef.current = audio;
-        await audio.play();
+        await previa.play(await r.blob());
       } catch {
         /* prévia é melhor-esforço — a falha não interrompe a gestão */
       } finally {
         setPreviewingId(null);
       }
     },
-    []
+    [previa]
   );
 
   if (data === null) {

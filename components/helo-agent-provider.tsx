@@ -1501,7 +1501,19 @@ function HeloAgentSession({
     };
   }, [end]);
 
+  // Medição de amplitude do Agente — só enquanto existe sessão (R-13).
+  //
+  // Este laço rodava a 60 quadros por segundo desde a montagem do provider até
+  // a aba fechar, medindo o áudio de uma sessão que na maior parte do tempo
+  // não existe. O provider vive em toda a aplicação: era um trabalho contínuo
+  // em toda tela, inclusive nas que não têm nada a ver com o Agente.
+  //
+  // Agora ele nasce com a sessão e morre com ela. O `status` do SDK é a
+  // condição: "disconnected" não tem áudio para medir. Como o efeito depende
+  // dele, o React cancela o quadro pendente e reinicia o laço na transição —
+  // nunca há dois laços vivos.
   useEffect(() => {
+    if (status === "disconnected") return;
     let frame = 0;
     const measure = () => {
       const bytes = getOutputByteFrequencyData();
@@ -1518,8 +1530,17 @@ function HeloAgentSession({
       frame = requestAnimationFrame(measure);
     };
     frame = requestAnimationFrame(measure);
-    return () => cancelAnimationFrame(frame);
-  }, [getInputVolume, getOutputByteFrequencyData, setAgentAmplitude]);
+    return () => {
+      cancelAnimationFrame(frame);
+      // Sem sessão não há amplitude do Agente. `null` (e não 0) devolve o
+      // palco à amplitude da voz da PLATAFORMA — ver getStageAmplitude em
+      // lib/helo-state.tsx, que só cai no `getAmplitude()` do useSpeech
+      // quando este valor é nulo. Deixar 0 aqui congelaria o orbe mudo
+      // durante toda fala da plataforma.
+      setAgentAmplitude(null);
+      setMicLevel(0);
+    };
+  }, [status, getInputVolume, getOutputByteFrequencyData, setAgentAmplitude]);
 
   const sendActivity = useCallback((source: ActivitySource, immediate = false) => {
     if (!connectedRef.current) return;

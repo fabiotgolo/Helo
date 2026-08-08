@@ -21,6 +21,7 @@ import {
 } from "react";
 import type { HeloItemMode, ModeItem, Patient } from "@/lib/types";
 import { clearLocalMirrors, redirectToLogin } from "@/lib/use-auth";
+import { purgePlatformAudio } from "@/lib/audio-coordinator";
 
 export const ACTIVE_PATIENT_KEY = "helo.patientId";
 const PATIENTS_CACHE_KEY = "helo.patients";
@@ -152,6 +153,24 @@ export function PatientProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("pageshow", onPageShow);
     };
   }, [reloadPatients]);
+
+  // Trocar de paciente libera o áudio sintetizado do anterior. A validação de
+  // contexto em useSpeech já impedia a voz de UM paciente de sair pelo outro;
+  // o que faltava era soltar os Blobs — a voz clonada de alguém não fica
+  // guardada na aba depois que ele deixou de ser o paciente da tela.
+  //
+  // Só na TROCA, nunca na definição inicial. O motivo é a ordem em que o React
+  // roda efeitos: os dos filhos primeiro, o deste provider depois. Uma tela
+  // como a Emergência pré-aquece o áudio no próprio efeito, e uma liberação
+  // incondicional aqui jogaria fora, logo em seguida, exatamente o que a tela
+  // acabou de pedir.
+  const pacienteAnterior = useRef<number | null>(null);
+  useEffect(() => {
+    const anterior = pacienteAnterior.current;
+    pacienteAnterior.current = patientId;
+    if (anterior == null || anterior === patientId) return;
+    purgePlatformAudio("pacientes");
+  }, [patientId]);
 
   // Persistência do paciente ativo + carga das configurações dele.
   useEffect(() => {
