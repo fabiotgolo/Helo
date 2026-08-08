@@ -61,11 +61,15 @@ const ARQUIVOS = ["app", "components", "lib"]
 const PENDENCIAS = {
   "app/atividades/gerenciar/page.tsx":
     "Prévia da frase favorita: o botão fala o RASCUNHO digitado na voz clonada " +
-    "do paciente. Não existe grant possível — `speech-sources.ts` lista " +
-    "rascunho entre o que não deve virar origem. Hoje /api/tts recusa com 403 " +
-    "e o botão falha em silêncio: seguro, mas quebrado. Decidido em 2026-08-08 " +
-    "deixar em aberto e tratar numa fase seguinte. Saídas avaliadas: falar na " +
-    "voz da plataforma, salvar antes de ouvir, ou remover o botão. " +
+    "do paciente. Não existe grant possível — rascunho não é origem, e não deve " +
+    "virar uma. Auditado no fechamento da 5.1B: NÃO há bypass. Medido contra " +
+    "servidor real — rascunho sem grant 403, texto exato de frase salva sem " +
+    "grant 403, grant válido com outro texto 403. O Agent não alcança o botão " +
+    "(a tela não registra ação nenhuma). O que está quebrado é a TELA: o erro " +
+    "aparece num alerta vermelho com a mensagem crua do servidor (\"fala do " +
+    "paciente sem autorização válida\"), que um cuidador lê como perda de " +
+    "acesso ao paciente. Segue aberto por ser decisão de produto — falar na voz " +
+    "da plataforma, salvar antes de ouvir, ou remover o botão. " +
     "Ver docs/modelo-de-confianca-voz.md.",
 };
 

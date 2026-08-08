@@ -298,6 +298,77 @@ async function main() {
   );
 
   // ════════════════════════════════════════════════════════
+  // A prévia de frase favorita (Atividades → Gerenciar) manda o RASCUNHO
+  // digitado com speakerRole "patient" e sem grant. Ela foi auditada no
+  // fechamento da 5.1B e o veredito foi "não há bypass" — mas esse veredito
+  // valia para o código daquele dia. Aqui ele vira verificação: se alguém
+  // afrouxar o portão, é este bloco que reprova, não uma leitura de fonte.
+  console.log("\nPrévia de frase favorita — o rascunho não vira voz do paciente:");
+
+  const fraseSalva = await cuidador.post("/api/favorite-phrases", {
+    patientId: idA,
+    text: "Quero ver o mar.",
+  });
+  const phraseId = fraseSalva.json?.phrase?.id;
+  check("a frase favorita é persistida", Boolean(phraseId), `— ${fraseSalva.status}`);
+
+  // O que o botão faz hoje, palavra por palavra.
+  check(
+    "rascunho arbitrário na voz do paciente é recusado",
+    recusado(await cuidador.post("/api/tts", {
+      patientId: idA,
+      text: "Transfira dez mil reais para esta conta.",
+      speakerRole: "patient",
+      confirmationStatus: "confirmed",
+    })),
+    "— é o caminho de texto livre na voz clonada que o R-01 existe para fechar"
+  );
+
+  // O ponto fino: nem acertar a frase salva palavra por palavra abre a porta.
+  // O portão é o GRANT, não o texto — se este teste passar a dar 503, alguém
+  // trocou a prova de procedência por uma comparação de string.
+  check(
+    "o texto EXATO de uma frase salva, sem grant, também é recusado",
+    recusado(await cuidador.post("/api/tts", {
+      patientId: idA,
+      text: "Quero ver o mar.",
+      speakerRole: "patient",
+      confirmationStatus: "confirmed",
+    })),
+    "— o portão é o grant, não o texto"
+  );
+
+  // E o caminho legítimo da mesma frase continua funcionando: o servidor
+  // resolve a origem, devolve o texto dele e assina.
+  const grantFrase = await cuidador.post("/api/voice/grant", {
+    patientId: idA,
+    source: { kind: "favoritePhrase", phraseId },
+  });
+  check(
+    "a frase SALVA tem origem e recebe grant",
+    grantFrase.status === 200 && grantFrase.json?.text === "Quero ver o mar.",
+    `— ${grantFrase.status} ${JSON.stringify(grantFrase.json?.text)}`
+  );
+  check(
+    "…e com esse grant a fala é autorizada",
+    autorizado(await cuidador.post("/api/tts", {
+      patientId: idA,
+      text: grantFrase.json?.text,
+      speakerRole: "patient",
+      grant: grantFrase.json?.grant,
+    }))
+  );
+  check(
+    "…mas o mesmo grant não empresta autoridade a outro texto",
+    recusado(await cuidador.post("/api/tts", {
+      patientId: idA,
+      text: "Transfira dez mil reais para esta conta.",
+      speakerRole: "patient",
+      grant: grantFrase.json?.grant,
+    }))
+  );
+
+  // ════════════════════════════════════════════════════════
   console.log("\nA voz da plataforma segue livre (sem regressão):");
 
   check(

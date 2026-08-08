@@ -135,35 +135,90 @@ sabe. Seria custo sem prova nova.
 
 ---
 
-## Pendência conhecida — prévia de frase favorita
+## Prévia de frase favorita — veredito formal
+
+Verificado no fechamento da 5.1B, com o caminho inteiro mapeado e o
+comportamento medido contra um servidor real.
 
 **Onde:** Atividades → Gerenciar → frases → "🔊 Ouvir"
 ([app/atividades/gerenciar/page.tsx](../app/atividades/gerenciar/page.tsx), `previewPhrase`)
 
-O botão reproduz **o texto que o cuidador está digitando**, ainda não salvo, com
-`speakerRole: "patient"`. É o caminho de texto livre na voz clonada que o R-01
-existe para fechar, e não há grant possível para ele: rascunho não é origem, e
-não deve virar uma.
+### O caminho, ponta a ponta
 
-**Estado hoje:** `/api/tts` recusa com 403. Nada é falado sem autorização — mas
-o botão falha em silêncio, e o cuidador não recebe explicação.
+| | |
+|---|---|
+| **Quem aciona** | Dois botões, ambos ligados a campos de digitação: o da frase nova (`phraseText`) e o da edição (`editingPhraseText`) |
+| **Texto reproduzido** | O **rascunho ainda não salvo**. Não é uma frase persistida |
+| **Caminho** | `POST /api/tts` direto, com `speakerRole: "patient"`, `confirmationStatus: "confirmed"` e **sem grant** |
+| **Fonte de voz** | Resolvida pelo servidor (`resolvePatientVoice`): clone do paciente, voz do catálogo escolhida para ele, ou fallback aprovado |
+| **Autenticação** | Sessão obrigatória; `requirePatientAccess` exige vínculo ativo com aquele paciente |
+| **Alcançável pelo Agent** | **Não.** `app/atividades/gerenciar/page.tsx` não chama `useRegisterHeloUIActions` — não registra ação nenhuma. Nenhum `actionId` alcança este handler |
+| **URL direta** | Não se aplica: nada é persistido. O áudio nunca chega a existir |
 
-Vale notar como isto passou: a auditoria 5.0 inventariou as **origens do
-servidor**, e a 5.1A as implementou. Nenhuma das duas inventariou os **call
-sites do cliente**, que são uma lista diferente. Duas telas ficaram para trás;
-`app/admin` foi corrigida quando apareceu, esta ficou. Quem fecha essa
-categoria agora é
-[scripts/test-voice-call-sites.mjs](../scripts/test-voice-call-sites.mjs), que
-varre o cliente inteiro e reprova qualquer caso novo.
+### Veredito: não há bypass
 
-**Decisão (2026-08-08):** deixar em aberto, tratar numa fase seguinte. Saídas
-avaliadas:
+Medido, não deduzido — três casos contra `/api/tts`:
+
+| Pedido | Resposta |
+|---|---|
+| Rascunho arbitrário na voz do paciente, sem grant | **403** `missing` |
+| O texto **exato de uma frase salva**, sem grant | **403** `missing` |
+| Grant legítimo daquela frase, com **outro** texto | **403** |
+
+O portão está no grant, não no texto: nem acertar a frase salva palavra por
+palavra abre a porta. O invariante da 5.1A está de pé.
+
+### Mas isto não é uma "exceção segura"
+
+É importante não arredondar o veredito. O botão **não** é um caso benigno que
+merece dispensa: pela classificação pedida, ele é o tipo **C** — fala funcional
+na voz do paciente, com texto que o cliente escolhe. É exatamente o que o R-01
+existe para proibir, e por isso não existe grant possível para ele: **rascunho
+não é origem, e não deve virar uma.**
+
+O que está certo hoje é a **recusa**. O que está errado é a tela.
+
+**Correção de um registro anterior:** a documentação da 5.1A dizia que o botão
+"falha em silêncio". Está incorreto, e a diferença importa. Ele falha de forma
+**visível e enganosa**: o `catch` mostra num alerta vermelho a mensagem crua do
+servidor — *"fala do paciente sem autorização válida"* —, que soa como um
+problema de permissão do cuidador quando na verdade é o recurso não existir.
+Um cuidador lendo isso conclui que perdeu acesso ao paciente.
+
+### Por que segue em aberto
+
+Não por risco de autoria — esse está fechado. Por ser uma decisão de **produto**
+sobre o que o botão deve fazer, e as três saídas mudam o que o cuidador
+consegue conferir:
 
 | Saída | O que muda |
 |---|---|
-| Falar na voz da **plataforma** | O cuidador confere a redação, que é para o que o botão serve. A voz do paciente segue disponível para frases **salvas**, no modal "Frases para ouvir", que já pede grant |
-| **Salvar antes** de ouvir | Mantém a voz do paciente, com origem `favoritePhrase`. Cria registro de frase que o cuidador ainda podia descartar |
+| Falar na voz da **plataforma** | O cuidador confere a redação, que é para o que o botão serve. A voz do paciente segue disponível para frases **salvas**, no modal "Frases para ouvir" |
+| **Salvar antes** de ouvir | Mantém a voz do paciente, com origem `favoritePhrase`. Em troca, cria registro de uma frase que o cuidador ainda podia descartar |
 | **Remover** o botão | A escuta fica só no modal de frases salvas |
+
+Qualquer uma delas reaproveita arquitetura existente. **Nenhuma exige uma
+segunda arquitetura de autoria**, e nenhuma deve inventar uma origem para
+rascunho.
+
+### O que o gate NÃO cobre, e a quem pertence
+
+Duas coisas vizinhas, deliberadamente fora deste veredito:
+
+**Reprodução de áudio já persistido.** `phrases-to-listen-modal` toca
+`phrase.audioUrl` direto quando ele existe, sem pedir grant. Não é bypass de
+autoria: o conteúdo daquele arquivo foi fixado por `synthesizePhraseAudio`, que
+**relê a frase no Firestore e exige igualdade exata** com o texto pedido
+(`functions/index.js`) antes de sintetizar, depois de checar vínculo e
+permissão `createActivities`. Texto arbitrário não entra ali.
+
+O que sobra é **confidencialidade**, não autoria: o MP3 fica em
+`patients/{id}/phrases_audio/{phraseId}.mp3` com URL de download durável e
+`max-age=31536000, immutable`. Quem obtiver a URL busca o áudio sem
+autenticação. Isso é **R-04**, e continua aberto lá.
+
+**A ação `atividades.frases.ouvir`** (do modal) é classe `patientResponse` e
+segue inalcançável pelo Agent — verificado por `test:agent:invariants`.
 
 ## Como escrever sobre isto
 
