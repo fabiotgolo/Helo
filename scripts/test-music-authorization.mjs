@@ -34,7 +34,6 @@ function check(name, cond, detail = "") {
 }
 
 // ——— Firestore falso, só com o que a autorização lê ———
-const AGORA = new Date();
 const DEPOIS = new Date(Date.now() + 86_400_000).toISOString();
 const ANTES = new Date(Date.now() - 86_400_000).toISOString();
 

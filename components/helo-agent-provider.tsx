@@ -1727,7 +1727,7 @@ function HeloAgentSession({
       startingRef.current = false;
       setStarting(false);
     }
-  }, [clientTools, onError, refreshInputDevices, releaseSdkSession, startSession, stop]);
+  }, [clientTools, endSession, onError, refreshInputDevices, releaseSdkSession, startSession, stop]);
 
   const restartForVoiceChange = useCallback(async (targetPatientId: number) => {
     if (
