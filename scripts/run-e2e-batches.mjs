@@ -21,6 +21,7 @@
 // o dev server sozinho — não reaproveita nenhum que já esteja rodando, porque
 // um servidor herdado é exatamente a variável que queremos eliminar.
 
+import { assertEmuladorDescartavel } from "./emulator-guard.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -36,6 +37,8 @@ const EMU = process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080";
 const PROJETO = process.env.GCLOUD_PROJECT ?? "helo-app-7fbf8";
 /** Banco dedicado. NUNCA helo-db: o dev server do usuário vive lá. */
 const BANCO = process.env.HELO_E2E_DATABASE_ID ?? "e2e-lotes";
+// Guarda: esta suíte apaga o banco inteiro. Ver scripts/emulator-guard.mjs.
+assertEmuladorDescartavel(EMU, BANCO, "run-e2e-batches.mjs");
 const PORTA = Number(process.env.HELO_E2E_PORT ?? 3210);
 const DIST = process.env.HELO_E2E_DIST_DIR ?? ".next-e2e";
 const BASE_URL = `http://localhost:${PORTA}`;

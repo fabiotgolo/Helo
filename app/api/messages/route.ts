@@ -1,6 +1,6 @@
 import { insertMessage } from "@/lib/store";
 import { requirePatientAccess } from "@/lib/auth";
-import { issueSpeechGrant } from "@/lib/voice/speech-grant";
+import { SpeechGrantConfigError, issueSpeechGrant } from "@/lib/voice/speech-grant";
 import type { HeloMessage } from "@/lib/types";
 
 // Registrar comunicação exige vínculo com createSession no paciente.
@@ -30,13 +30,25 @@ export async function POST(request: Request) {
 
   if (!isConfirmedPatientSpeech) return Response.json({ id });
 
-  const { grant, expiresAt } = issueSpeechGrant({
-    patientId,
-    text: m.text,
-    origin: "confirmedMessage",
-  });
-  return Response.json(
-    { id, grant, expiresAt },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  // Se a configuração do grant estiver inválida, o REGISTRO continua valendo —
+  // ele já foi gravado, é o dado autoritativo e não pode ser desfeito por um
+  // problema de configuração de voz. O que não acontece é a fala: a resposta
+  // sai sem grant, e sem grant não há voz do paciente.
+  try {
+    const { grant, expiresAt } = issueSpeechGrant({
+      patientId,
+      text: m.text,
+      origin: "confirmedMessage",
+    });
+    return Response.json(
+      { id, grant, expiresAt },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch (caught) {
+    if (caught instanceof SpeechGrantConfigError) {
+      console.error("[VOZ] mensagem registrada sem grant:", caught.message);
+      return Response.json({ id }, { headers: { "Cache-Control": "no-store" } });
+    }
+    throw caught;
+  }
 }

@@ -5,10 +5,14 @@
 // FIRESTORE_DATABASE_ID=feedback-test \
 // node scripts/test-feedback.mjs http://localhost:3002
 
+import { assertEmuladorDescartavel } from "./emulator-guard.mjs";
+
 const BASE = process.argv[2] ?? "http://localhost:3002";
 const EMU = process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080";
 const PROJECT = process.env.GCLOUD_PROJECT ?? "helo-app-7fbf8";
 const DB = process.env.FIRESTORE_DATABASE_ID ?? "feedback-test";
+// Guarda: esta suíte apaga o banco inteiro. Ver scripts/emulator-guard.mjs.
+assertEmuladorDescartavel(EMU, DB, "test-feedback.mjs");
 
 let passed = 0;
 let failed = 0;

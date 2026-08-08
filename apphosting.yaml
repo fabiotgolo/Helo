@@ -41,3 +41,17 @@ env:
     secret: ANTHROPIC_API_KEY
     availability:
       - RUNTIME
+  # Assina os SpeechGrants — a autorização que o servidor emite para a voz do
+  # paciente. OBRIGATÓRIO: sem ele, /api/tts recusa toda fala do paciente (503)
+  # e o app segue funcionando sem a voz dela. Não é opcional nem tem fallback
+  # em produção, de propósito: um segredo por instância amarraria a autoria da
+  # fala ao valor de maxInstances.
+  #
+  #   openssl rand -base64 48 | firebase apphosting:secrets:set HELO_SPEECH_GRANT_SECRET --data-file -
+  #
+  # Trocar o valor invalida os grants em voo (validade de 2 min): o cliente
+  # pede outro e a fala segue. Não requer coordenação nem janela.
+  - variable: HELO_SPEECH_GRANT_SECRET
+    secret: HELO_SPEECH_GRANT_SECRET
+    availability:
+      - RUNTIME

@@ -60,6 +60,11 @@ Copie `.env.example` para `.env` e preencha. Os três papéis de voz são
 distintos e **nunca se misturam** (ver "Arquitetura de voz"):
 
 - `ELEVENLABS_API_KEY` — sem chave, o app usa a voz local do navegador em pt-BR.
+- `HELO_SPEECH_GRANT_SECRET` — assina a autorização que o servidor emite para
+  a voz do paciente (mínimo 32 caracteres). **Obrigatório em produção**: sem
+  ele, `/api/tts` recusa toda fala do paciente com 503 e registra o motivo no
+  log — o resto do app segue funcionando. Em desenvolvimento pode ficar
+  vazio; o processo usa uma chave efêmera que morre com ele.
 - `ELEVENLABS_HELO_VOICE_ID` — voz **oficial da plataforma** (apresentação,
   perguntas, instruções, Rotina). Identidade sonora da marca; nunca a voz de
   um paciente.
@@ -117,6 +122,12 @@ firebase apphosting:secrets:set ELEVENLABS_HELO_VOICE_OVERRIDE_ENABLED --project
 firebase apphosting:secrets:set ELEVENLABS_HELO_VOICE_FEMALE_ID --project helo-app-7fbf8
 firebase apphosting:secrets:set ELEVENLABS_HELO_VOICE_MALE_ID --project helo-app-7fbf8
 firebase apphosting:secrets:set ANTHROPIC_API_KEY --project helo-app-7fbf8
+```
+
+O segredo que assina os SpeechGrants não é digitado — é gerado:
+
+```bash
+openssl rand -base64 48 | firebase apphosting:secrets:set HELO_SPEECH_GRANT_SECRET --project helo-app-7fbf8 --data-file -
 ```
 
 Se um rollout falhar por acesso a secret:
@@ -602,6 +613,20 @@ do servidor de desenvolvimento, não do produto.
 Testes de integração rodam contra o **emulador** + dev server. Nunca contra
 produção — os scripts limpam o banco do emulador.
 
+E não contra o **seu** emulador: as suítes destrutivas recusam rodar quando o
+alvo é `helo-db` na porta 8080, que é o par que `npm run emu` + `npm run dev`
+usam. Suba o emulador isolado (portas 8090/4090) e aponte a suíte para ele:
+
+```bash
+npm run emu:test                                          # terminal 1
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 npm run dev        # terminal 2
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 npm run test:...   # terminal 3
+```
+
+Um banco dedicado no mesmo emulador (`FIRESTORE_DATABASE_ID=alguma-test`)
+também passa pela guarda. Para zerar o banco de trabalho de propósito:
+`HELO_EMULADOR_DESCARTAVEL=1`.
+
 ```bash
 npm run test:offline     # fila e projeção local (domínio puro, sem rede)
 npm run test:access      # autorização, vínculos e permissões
@@ -611,6 +636,24 @@ npm run test:realtime-questions  # Perguntas em tempo real (estados e auditoria)
 npm run test:option-conversation # Conversa por opções (as quatro suítes abaixo)
 npm run test:authorship  # invariável de autoria da fala confirmada (domínio puro)
 ```
+
+A voz e o Agent Helo (Fase 5.1A) têm suítes próprias, todas de domínio puro —
+sem rede, sem emulador e **sem chamada paga da ElevenLabs**:
+
+```bash
+npm run test:5.1a               # as seis abaixo, em sequência
+npm run test:voice:grant        # SpeechGrant: procedência, prazo e política do segredo
+npm run test:agent:gate         # o Agent não responde nem confirma pelo paciente
+npm run test:agent:invariants   # toda ação tem uma classe, e uma só
+npm run test:music:authorization # /generateMusic exige acesso ao paciente
+npm run test:agent:lifecycle    # teardown do WebRTC com o SDK simulado
+npm run test:agent:teardown     # defesa estática dos caminhos de saída do provider
+```
+
+`npm run test:voice:authorization` cobre os mesmos caminhos por HTTP e exige
+servidor + emulador. Rode-o com `ELEVENLABS_API_KEY` vazia: a autorização é
+decidida antes da chave, então uma fala proibida responde 403 e uma autorizada
+responde 503, ambas sem sair para a rede.
 
 O offline tem ainda duas suítes que **exigem servidor**, porque o que elas
 provam é o comportamento do servidor:

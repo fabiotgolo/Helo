@@ -18,10 +18,14 @@
 //   • que uma requisição sem origem offline não herda a da vizinha;
 //   • que o reenvio concorrente da mesma chave não duplica evento.
 
+import { assertEmuladorDescartavel } from "./emulator-guard.mjs";
+
 const BASE = process.argv[2] ?? "http://localhost:3000";
 const EMU = process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080";
 const PROJECT = process.env.GCLOUD_PROJECT ?? "helo-app-7fbf8";
 const DB = process.env.FIRESTORE_DATABASE_ID ?? "helo-db";
+// Guarda: esta suíte apaga o banco inteiro. Ver scripts/emulator-guard.mjs.
+assertEmuladorDescartavel(EMU, DB, "test-audit-concorrencia.mjs");
 
 /** Pares simultâneos. Mais que dois, para que o interleaving seja real. */
 const PARES = 8;

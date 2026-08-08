@@ -27,7 +27,9 @@
 // (R-02): o texto vem do servidor, e o toque só pode vir de humano.
 //
 // Não afirme, em código ou comentário, que um grant é prova de consentimento.
-// Ele é prova de PROCEDÊNCIA.
+// Ele é prova de PROCEDÊNCIA. O modelo de confiança inteiro — quem observa,
+// quem registra, o que o servidor sabe e onde termina a garantia — está em
+// docs/modelo-de-confianca-voz.md.
 //
 // ——— Forma ———
 //
@@ -81,7 +83,9 @@ export type SpeechGrantRejection =
   | "badSignature"
   | "expired"
   | "patientMismatch"
-  | "textMismatch";
+  | "textMismatch"
+  /** Produção sem `HELO_SPEECH_GRANT_SECRET`: nada é assinado nem aceito. */
+  | "misconfigured";
 
 export type SpeechGrantVerdict =
   | { ok: true; claims: SpeechGrantClaims }
@@ -89,19 +93,76 @@ export type SpeechGrantVerdict =
 
 // ——— Chave de assinatura ———
 //
-// `HELO_SPEECH_GRANT_SECRET` quando existir. Sem ela, uma chave aleatória por
-// PROCESSO — guardada em globalThis para sobreviver ao hot reload do `next
-// dev`, que recarrega módulos sem reiniciar o processo.
+// EM PRODUÇÃO: `HELO_SPEECH_GRANT_SECRET` é obrigatório. Sem ela nada é
+// assinado e nada é aceito — a voz do paciente simplesmente não sai.
 //
-// O fallback é seguro e é a razão de esta fase não exigir configuração nova:
-// o App Hosting roda com `maxInstances: 1`, então emissão e verificação
-// acontecem no mesmo processo. Ao escalar para mais de uma instância, defina
-// a variável — sem ela, um grant emitido por uma instância seria recusado por
-// outra. A falha, nesse caso, é FECHADA (403 e o cliente repete), nunca
-// aberta.
+// A versão anterior caía num segredo aleatório por processo também em
+// produção, apoiada em `maxInstances: 1`. Isso amarrava uma garantia de
+// autoria a um parâmetro de ESCALA: no dia em que alguém subisse
+// `maxInstances` para 2 — uma mudança de custo, decidida longe daqui — cada
+// instância passaria a assinar com uma chave própria. A falha seria fechada
+// (403 e repetição), mas o motivo ficaria invisível, e um invariante de
+// segurança não pode depender de ninguém lembrar de uma nota num YAML.
+//
+// FORA DE PRODUÇÃO: chave efêmera por processo, guardada em globalThis para
+// sobreviver ao hot reload do `next dev` (que recarrega módulos sem reiniciar
+// o processo). Ela nunca alcança produção porque a decisão é tomada por
+// `NODE_ENV`, que o build de produção fixa — não por ausência de configuração.
 const GRANT_SECRET_KEY = "__heloSpeechGrantSecret";
 
+const MIN_SECRET_LENGTH = 32;
+
+/**
+ * Falta ou insuficiência de configuração. Nunca carrega o valor do segredo:
+ * a mensagem é lida em log de servidor e o que ela precisa dizer é O QUE
+ * fazer, não qual é a chave.
+ */
+export class SpeechGrantConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SpeechGrantConfigError";
+  }
+}
+
+function isProduction(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+/**
+ * Diagnóstico da configuração, sem tocar no valor. Existe para que uma rota
+ * possa distinguir "recusa legítima" de "servidor mal configurado" e produzir
+ * o log certo — o cliente continua recebendo apenas a recusa.
+ */
+export function speechGrantConfigStatus():
+  | { ok: true; source: "environment" | "ephemeral" }
+  | { ok: false; error: string } {
+  const configured = process.env.HELO_SPEECH_GRANT_SECRET?.trim();
+  if (configured) {
+    if (configured.length < MIN_SECRET_LENGTH) {
+      return {
+        ok: false,
+        error:
+          `HELO_SPEECH_GRANT_SECRET tem menos de ${MIN_SECRET_LENGTH} caracteres. ` +
+          "Gere um valor novo com `openssl rand -base64 48` e regrave o segredo.",
+      };
+    }
+    return { ok: true, source: "environment" };
+  }
+  if (isProduction()) {
+    return {
+      ok: false,
+      error:
+        "HELO_SPEECH_GRANT_SECRET ausente em produção. A voz do paciente fica " +
+        "indisponível até o segredo ser configurado (ver apphosting.yaml e " +
+        "`firebase apphosting:secrets:set HELO_SPEECH_GRANT_SECRET`).",
+    };
+  }
+  return { ok: true, source: "ephemeral" };
+}
+
 function secret(): Buffer {
+  const status = speechGrantConfigStatus();
+  if (!status.ok) throw new SpeechGrantConfigError(status.error);
   const configured = process.env.HELO_SPEECH_GRANT_SECRET?.trim();
   if (configured) return Buffer.from(configured, "utf8");
   const store = globalThis as unknown as Record<string, Buffer | undefined>;
@@ -137,6 +198,11 @@ function sign(payload: string): string {
 /**
  * Emite o grant. `text` é o texto que o SERVIDOR resolveu — nunca o que o
  * cliente pediu para falar.
+ *
+ * Lança `SpeechGrantConfigError` quando a configuração é inválida. Falhar
+ * aqui é deliberado: um grant "emitido" sem chave confiável seria pior do que
+ * nenhum, porque pareceria funcionar. Quem chama traduz isso para 503 e
+ * registra o motivo no servidor.
  */
 export function issueSpeechGrant(input: {
   patientId: number;
@@ -189,7 +255,17 @@ export function verifySpeechGrant(
 
   // Comparação em tempo constante. Buffers de tamanhos diferentes fazem
   // `timingSafeEqual` lançar, então o tamanho é conferido antes.
-  const expectedSig = fromB64url(sign(payload));
+  //
+  // Sem chave confiável não existe verificação: recusar é a única resposta
+  // honesta. A recusa vem ANTES de qualquer leitura do conteúdo, para que um
+  // servidor mal configurado não chegue nem a interpretar o que recebeu.
+  let expectedSig: Buffer;
+  try {
+    expectedSig = fromB64url(sign(payload));
+  } catch (caught) {
+    if (caught instanceof SpeechGrantConfigError) return { ok: false, reason: "misconfigured" };
+    throw caught;
+  }
   const providedSig = fromB64url(signature);
   if (
     expectedSig.length !== providedSig.length ||

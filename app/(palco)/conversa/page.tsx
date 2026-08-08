@@ -628,7 +628,16 @@ export default function ConversaPage() {
           // Repetir a mensagem final na VOZ DO PACIENTE (mesma da comunicação
           // original) — nunca na voz da plataforma. O Agente não narra nada.
           // Faz a voz dele soar, portanto é do canal dele.
-          actionId: "conversa.repetir",
+          //
+          // Id PRÓPRIO, e não `conversa.repetir`. As duas ações moram em fases
+          // diferentes e nunca coexistem na tela, mas compartilhar o id fazia
+          // um mesmo identificador significar `operational` numa fase e
+          // `patientResponse` na outra — uma classe que dependia do contexto,
+          // exatamente o que a classificação existe para não ser. Quem lê o
+          // log, o teste ou o registry vê agora duas ações distintas, porque
+          // é isso que elas são: uma repete a pergunta da Helo, a outra faz a
+          // voz do paciente soar de novo.
+          actionId: "conversa.repetirMensagemPaciente",
           actionClass: "patientResponse",
           label: "Repetir mensagem",
           type: "activity",

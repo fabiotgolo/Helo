@@ -55,6 +55,11 @@ import {
 } from "@/lib/log";
 import type { Gesture } from "@/lib/types";
 import { PHRASE_AUDIO_EVENT } from "@/lib/phrase-audio";
+import {
+  createSdkSessionHandle,
+  openAgentSession,
+  type SdkSessionHandle,
+} from "@/lib/voice/agent-session-lifecycle";
 
 type HeloApiOverrides = { tts?: { voice_id?: string } };
 type HeloSessionOverrides = NonNullable<SessionConfig["overrides"]>;
@@ -314,13 +319,24 @@ function HeloAgentSession({
   const [isAgentMuted, setIsAgentMuted] = useState(false);
   const [musicPlayer, setMusicPlayer] = useState<MusicPlayerState>(INITIAL_MUSIC_PLAYER_STATE);
   // Dois fatos DIFERENTES, e confundi-los foi a origem do R-05:
-  //   sdkSessionOpenRef → o recurso externo existe (WebRTC aberto, microfone
-  //                       capturando). Quem decide o teardown.
-  //   startedRef        → a sessão de PRODUTO foi registrada (log, paciente,
-  //                       estado da tela). Quem decide o que a interface mostra.
+  //   sdkSession  → o recurso externo existe (WebRTC aberto, microfone
+  //                 capturando). Quem decide o teardown.
+  //   startedRef  → a sessão de PRODUTO foi registrada (log, paciente, estado
+  //                 da tela). Quem decide o que a interface mostra.
   // O primeiro pode ser verdadeiro com o segundo falso — é exatamente a janela
   // em que o microfone ficava aberto sem caminho de encerramento.
-  const sdkSessionOpenRef = useRef(false);
+  //
+  // O recurso vive em lib/voice/agent-session-lifecycle.ts, fora do React, e é
+  // de lá que vem também a sequência de abertura. Não é preferência de
+  // arquitetura: enquanto o ciclo de vida morava só aqui, testá-lo exigia
+  // reescrevê-lo no teste — e um teste que reescreve o código prova que a
+  // cópia está correta, não o produto.
+  const [sdkSession] = useState<SdkSessionHandle>(() =>
+    createSdkSessionHandle({
+      log: (message) => console.log(message),
+      warn: (message, detail) => console.warn(message, detail),
+    })
+  );
   const startedRef = useRef(false);
   const startingRef = useRef(false);
   const connectedRef = useRef(false);
@@ -1174,7 +1190,7 @@ function HeloAgentSession({
       console.log("[HELO AUDIO] agent disconnected", details);
       // O SDK fechou por conta própria: o recurso externo não existe mais, e
       // insistir em encerrá-lo depois só produziria ruído.
-      sdkSessionOpenRef.current = false;
+      sdkSession.markClosed();
       setConnectionStatus("offline");
       clearLocalSessionState();
       if (details.reason !== "user") {
@@ -1183,7 +1199,7 @@ function HeloAgentSession({
     },
     onError: (message, context) => {
       console.error("[HELO AUDIO] agent error", message, context);
-      sdkSessionOpenRef.current = false;
+      sdkSession.markClosed();
       setConnectionStatus("offline");
       clearLocalSessionState();
       onError(message || "A conversa foi interrompida. Verifique sua conexão e tente novamente.");
@@ -1287,6 +1303,14 @@ function HeloAgentSession({
     conversationTextControlsRef.current = { sendContextualUpdate };
   }, [sendContextualUpdate]);
 
+  // O handle foi criado uma vez; `endSession` vem do hook e troca de
+  // identidade a cada render. Ligar por efeito é seguro aqui: o handle só
+  // precisa de `endSession` depois de `markOpen`, que só acontece dentro de
+  // uma abertura iniciada por uma pessoa — muito depois deste efeito.
+  useEffect(() => {
+    sdkSession.bindEndSession(endSession);
+  }, [endSession, sdkSession]);
+
   /**
    * Fecha o recurso EXTERNO — WebRTC, microfone, captura — se ele estiver
    * aberto. Deliberadamente independente de `startedRef`: um recurso aberto
@@ -1295,16 +1319,8 @@ function HeloAgentSession({
    * de saída, inclusive nos que não sabem em que ponto a falha ocorreu.
    */
   const releaseSdkSession = useCallback(() => {
-    if (!sdkSessionOpenRef.current) return;
-    sdkSessionOpenRef.current = false;
-    try {
-      endSession();
-      console.log("[HELO AUDIO] sessão do SDK encerrada (microfone liberado)");
-    } catch (caught) {
-      // A sessão pode já ter caído sozinha; o estado local segue limpo.
-      console.warn("[HELO AUDIO] endSession falhou no teardown", caught);
-    }
-  }, [endSession]);
+    sdkSession.release();
+  }, [sdkSession]);
 
   const end = useCallback(() => {
     stopGeneratedMusic();
@@ -1456,13 +1472,13 @@ function HeloAgentSession({
     // A condição olha o RECURSO aberto, não só a sessão registrada: navegar
     // para longe com o microfone aberto e o registro ausente deixaria a
     // captura viva numa tela que nem mostra que há conversa.
-    if (!persistentEnabled && pathname !== "/helo" && (startedRef.current || sdkSessionOpenRef.current)) {
+    if (!persistentEnabled && pathname !== "/helo" && (startedRef.current || sdkSession.isOpen())) {
       end();
     }
-  }, [end, pathname, persistentEnabled]);
+  }, [end, pathname, persistentEnabled, sdkSession]);
 
   useEffect(() => {
-    if (!startedRef.current && !sdkSessionOpenRef.current) return;
+    if (!startedRef.current && !sdkSession.isOpen()) return;
     if (sessionPatientIdRef.current === patientId) return;
     setLastGesture(null);
     setCaregiverMessage("");
@@ -1470,7 +1486,7 @@ function HeloAgentSession({
     setGesturesHighlighted(false);
     end();
     onError("A conversa foi encerrada porque o paciente ativo foi alterado.");
-  }, [end, onError, patientId]);
+  }, [end, onError, patientId, sdkSession]);
 
   useEffect(() => {
     const stopAgent = () => end();
@@ -1632,7 +1648,7 @@ function HeloAgentSession({
     if (
       startingRef.current ||
       startedRef.current ||
-      sdkSessionOpenRef.current ||
+      sdkSession.isOpen() ||
       statusRef.current !== "disconnected"
     ) return false;
     startingRef.current = true;
@@ -1666,36 +1682,25 @@ function HeloAgentSession({
           overrides: toSessionOverrides(data.overrides),
         });
       };
-      // O LiveKit aceita a sessão, mas derruba o socket poucos segundos depois
-      // quando recebe o override de voz remoto. A voz oficial configurada no
-      // próprio Agent continua sendo usada; não enviamos override por sessão.
-      let data = await requestToken(true);
-      try {
-        await startConversation(data);
-      } catch (caught) {
-        if (!data.voiceOverrideApplied) throw caught;
-        console.warn("[HELO AUDIO] agent start failed with voice override; retrying without override", caught);
-        try {
-          endSession();
-        } catch {
-          // A primeira tentativa pode falhar antes de abrir uma sessão WebRTC completa.
-        }
-        sdkSessionOpenRef.current = false;
-        data = await requestToken(true);
-        await startConversation(data);
-      }
-      // A PARTIR DAQUI o recurso externo existe: WebRTC aberto, microfone
-      // capturando. Tudo o que vem abaixo pode falhar, e o teardown não pode
-      // depender de nada que venha depois. Marcar aqui é a correção do R-05.
-      sdkSessionOpenRef.current = true;
-      if (patientIdRef.current !== requestedPatientId) {
-        // Paciente trocou durante a abertura: a sessão que abriu é de outro
-        // contexto e precisa morrer aqui.
-        releaseSdkSession();
+      // A abertura em si — token, WebRTC, retry sem override, troca de
+      // paciente no meio, registro da sessão — vive em
+      // lib/voice/agent-session-lifecycle.ts. É a sequência do R-05, e ela sai
+      // daqui para poder ser exercitada por teste com o SDK simulado. Nunca
+      // lança: todo caminho de saída já passou pelo teardown.
+      const aberta = await openAgentSession({
+        session: sdkSession,
+        requestToken,
+        startConversation,
+        requestedPatientId,
+        currentPatientId: () => patientIdRef.current,
+        startLoggedSession: (id) => startLoggedSession("helo", id),
+      });
+      if (!aberta.ok) {
+        startedRef.current = false;
+        if (aberta.reason === "failed") onError(describeConversationError(aberta.error));
         return false;
       }
-      const logged = await startLoggedSession("helo", requestedPatientId);
-      loggedSessionIdRef.current = logged.id;
+      loggedSessionIdRef.current = aberta.loggedSessionId;
       sessionPatientIdRef.current = requestedPatientId;
       setActiveSessionPatientId(requestedPatientId);
       startedRef.current = true;
@@ -1709,16 +1714,12 @@ function HeloAgentSession({
     } catch (caught) {
       // ——— Invariante de teardown (R-05) ———
       //
-      // O caminho que existia antes: startSession resolvia, o WebRTC abria e o
-      // microfone começava a capturar; startLoggedSession então falhava (rede,
-      // 500) e caíamos aqui. `startedRef` era zerado e `endSession()` nunca era
-      // chamado — e como `end()` só encerrava `if (wasStarted)`, nem o botão
-      // "Encerrar conversa" fechava. O microfone ficava aberto até o usuário
-      // recarregar a página, sem nenhum caminho de interface para pará-lo.
-      //
-      // Agora quem decide o teardown é o FATO de o recurso externo estar
-      // aberto, não o registro da sessão de produto. São coisas diferentes, e
-      // tratá-las como a mesma foi a origem do defeito.
+      // `openAgentSession` já libera o recurso nos seus próprios caminhos de
+      // falha. Este catch cobre o que acontece FORA dela — permissão de
+      // microfone, enumeração de dispositivos, paciente ausente — e o que vier
+      // depois da abertura. Chamar o teardown aqui também é deliberado e
+      // barato: ele é idempotente, e o custo de esquecê-lo é um microfone
+      // aberto sem caminho de interface para fechá-lo, que foi o defeito.
       releaseSdkSession();
       startedRef.current = false;
       onError(describeConversationError(caught));
@@ -1727,7 +1728,7 @@ function HeloAgentSession({
       startingRef.current = false;
       setStarting(false);
     }
-  }, [clientTools, endSession, onError, refreshInputDevices, releaseSdkSession, startSession, stop]);
+  }, [clientTools, onError, refreshInputDevices, releaseSdkSession, sdkSession, startSession, stop]);
 
   const restartForVoiceChange = useCallback(async (targetPatientId: number) => {
     if (

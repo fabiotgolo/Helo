@@ -17,6 +17,8 @@ const {
   verifySpeechGrant,
   speechTextHash,
   canonicalSpeechText,
+  speechGrantConfigStatus,
+  SpeechGrantConfigError,
   SPEECH_GRANT_TTL_MS,
 } = await import("../lib/voice/speech-grant.ts");
 
@@ -184,6 +186,136 @@ console.log("\n— Um grant não vira credencial —");
     "nenhuma variação do texto passa",
     outros.every((t) => verifySpeechGrant(grant, { patientId: PACIENTE, text: t }).ok === false)
   );
+}
+
+// ——— A chave de assinatura (checkpoint 1 do fechamento da 5.1A) ———
+//
+// A versão anterior caía numa chave aleatória por processo TAMBÉM em
+// produção, apoiada em `maxInstances: 1`. Isso fazia uma garantia de autoria
+// depender de um parâmetro de escala: subir para duas instâncias — decisão de
+// custo, tomada longe deste arquivo — daria a cada uma sua própria chave.
+// Aqui a regra passa a ser explícita, e estes casos existem para que ela não
+// possa ser afrouxada em silêncio.
+console.log("\n— Configuração da chave em produção —");
+{
+  const NODE_ENV_ORIGINAL = process.env.NODE_ENV;
+  const SECRET_ORIGINAL = process.env.HELO_SPEECH_GRANT_SECRET;
+  const SEGREDO_A = "s".repeat(48);
+  const SEGREDO_B = "z".repeat(48);
+
+  const ambiente = (env, segredo) => {
+    if (env === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = env;
+    if (segredo === undefined) delete process.env.HELO_SPEECH_GRANT_SECRET;
+    else process.env.HELO_SPEECH_GRANT_SECRET = segredo;
+  };
+
+  const emitir = () => {
+    try {
+      return { ok: true, ...issueSpeechGrant({ patientId: PACIENTE, text: TEXTO, origin: "routineAnswer" }) };
+    } catch (caught) {
+      return { ok: false, erro: caught };
+    }
+  };
+
+  // 1. Produção SEM segredo: nada é emitido.
+  ambiente("production", undefined);
+  const semSegredo = emitir();
+  check(
+    "produção sem segredo não emite grant",
+    semSegredo.ok === false && semSegredo.erro instanceof SpeechGrantConfigError,
+    `— veio ${semSegredo.ok ? "um grant" : semSegredo.erro?.name}`
+  );
+  check(
+    "…e o diagnóstico diz o que fazer",
+    speechGrantConfigStatus().ok === false &&
+      /HELO_SPEECH_GRANT_SECRET/.test(speechGrantConfigStatus().error)
+  );
+  // Fail-closed dos dois lados: sem chave, verificar também é impossível.
+  ambiente(undefined, SEGREDO_A);
+  const { grant: grantValido } = issueSpeechGrant({
+    patientId: PACIENTE,
+    text: TEXTO,
+    origin: "routineAnswer",
+  });
+  ambiente("production", undefined);
+  rejects(
+    "produção sem segredo também não ACEITA um grant",
+    verifySpeechGrant(grantValido, { patientId: PACIENTE, text: TEXTO }),
+    "misconfigured"
+  );
+
+  // 2. Produção COM segredo: emite e verifica normalmente.
+  ambiente("production", SEGREDO_A);
+  const comSegredo = emitir();
+  check("produção com segredo emite", comSegredo.ok === true);
+  check(
+    "…e o grant emitido é aceito",
+    comSegredo.ok &&
+      verifySpeechGrant(comSegredo.grant, { patientId: PACIENTE, text: TEXTO }).ok === true
+  );
+  check(
+    "…e a fonte da chave é o ambiente, não uma efêmera",
+    speechGrantConfigStatus().ok === true && speechGrantConfigStatus().source === "environment"
+  );
+
+  // 3. Chave trocada: o grant antigo morre. É o que garante que dois processos
+  //    com chaves diferentes NÃO se aceitam mutuamente — o cenário que a
+  //    versão anterior deixava passar silenciosamente ao escalar.
+  ambiente("production", SEGREDO_B);
+  rejects(
+    "grant assinado por outro segredo é recusado",
+    verifySpeechGrant(comSegredo.ok ? comSegredo.grant : "", { patientId: PACIENTE, text: TEXTO }),
+    "badSignature"
+  );
+
+  // 4. Segredo curto demais é tratado como ausente, não como aceitável.
+  ambiente("production", "curto");
+  const curto = emitir();
+  check(
+    "segredo curto não passa por segredo",
+    curto.ok === false && curto.erro instanceof SpeechGrantConfigError
+  );
+
+  // 5. Reinício com configuração válida mantém o contrato: mesma chave, mesmo
+  //    grant. Um SpeechGrant é stateless de propósito, e é isto que faz um
+  //    deploy no meio de uma fala não derrubá-la.
+  ambiente("production", SEGREDO_A);
+  const antes = issueSpeechGrant({ patientId: PACIENTE, text: TEXTO, origin: "routineAnswer", now: 1_000 });
+  const depois = issueSpeechGrant({ patientId: PACIENTE, text: TEXTO, origin: "routineAnswer", now: 1_000 });
+  check("mesma chave e mesmas claims produzem o mesmo grant", antes.grant === depois.grant);
+  check(
+    "e um grant emitido antes continua válido depois",
+    verifySpeechGrant(antes.grant, { patientId: PACIENTE, text: TEXTO, now: 1_000 }).ok === true
+  );
+
+  // 6. O segredo não vaza — nem em mensagem de erro, nem no grant, nem no
+  //    diagnóstico. Tudo isso vai parar em log de servidor.
+  ambiente("production", undefined);
+  const vazamento = emitir();
+  const textos = [
+    vazamento.ok ? "" : String(vazamento.erro?.message ?? ""),
+    speechGrantConfigStatus().ok ? "" : speechGrantConfigStatus().error,
+    comSegredo.ok ? comSegredo.grant : "",
+    antes.grant,
+  ].join(" | ");
+  check(
+    "nenhuma mensagem, diagnóstico ou grant contém o segredo",
+    !textos.includes(SEGREDO_A) && !textos.includes(SEGREDO_B),
+    "— o valor da chave apareceu em texto exposto"
+  );
+
+  // 7. Fora de produção a chave efêmera continua existindo — é o que permite
+  //    rodar `next dev` sem configurar nada.
+  ambiente("development", undefined);
+  const dev = emitir();
+  check("desenvolvimento sem segredo continua funcionando", dev.ok === true);
+  check(
+    "…com chave efêmera, declarada como tal",
+    speechGrantConfigStatus().ok === true && speechGrantConfigStatus().source === "ephemeral"
+  );
+
+  ambiente(NODE_ENV_ORIGINAL, SECRET_ORIGINAL);
 }
 
 console.log(`\n${failed === 0 ? "✓" : "✗"} ${passed} passaram, ${failed} falharam\n`);

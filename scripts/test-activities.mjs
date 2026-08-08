@@ -6,10 +6,14 @@
 //   npm run dev          (terminal 2)
 //   node scripts/test-activities.mjs http://localhost:3000
 
+import { assertEmuladorDescartavel } from "./emulator-guard.mjs";
+
 const BASE = process.argv[2] ?? "http://localhost:3000";
 const EMU = process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080";
 const PROJECT = process.env.GCLOUD_PROJECT ?? "helo-app-7fbf8";
 const DB = process.env.FIRESTORE_DATABASE_ID ?? "helo-db";
+// Guarda: esta suíte apaga o banco inteiro. Ver scripts/emulator-guard.mjs.
+assertEmuladorDescartavel(EMU, DB, "test-activities.mjs");
 
 // PNG 1×1 válido — suficiente para o fluxo de upload/serviço de mídia.
 const PNG_BASE64 =

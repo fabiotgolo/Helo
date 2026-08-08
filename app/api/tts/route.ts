@@ -103,9 +103,14 @@ export async function POST(request: Request) {
     const verdict = verifySpeechGrant(body.grant, { patientId, text });
     if (!verdict.ok) {
       console.warn("[VOZ] fala do paciente recusada:", verdict.reason);
+      // "misconfigured" é a única recusa que não é sobre QUEM pediu: o
+      // servidor não tem chave para verificar coisa alguma. Sai como 503 para
+      // não mandar quem opera procurar um problema de autorização que não
+      // existe. Nos dois casos, nenhuma voz do paciente é sintetizada.
+      const status = verdict.reason === "misconfigured" ? 503 : 403;
       return Response.json(
         { error: "fala do paciente sem autorização válida", reason: verdict.reason },
-        { status: 403 }
+        { status }
       );
     }
 

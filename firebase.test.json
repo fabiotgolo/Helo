@@ -1,0 +1,27 @@
+{
+  "_comentario": [
+    "Emulador ISOLADO para as suítes de integração, em portas próprias.",
+    "Existe porque as suítes começam apagando o banco inteiro: rodá-las contra",
+    "o emulador de `npm run emu` (8080/helo-db) apaga os pacientes e rotinas",
+    "montados à mão para desenvolver. A guarda em scripts/emulator-guard.mjs",
+    "recusa esse par e aponta para cá.",
+    "",
+    "  npm run emu:test                                          (terminal 1)",
+    "  FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 npm run dev        (terminal 2)",
+    "  FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 npm run test:...   (terminal 3)"
+  ],
+  "firestore": {
+    "database": "helo-db",
+    "rules": "firestore.rules"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8090
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4090
+    },
+    "singleProjectMode": true
+  }
+}

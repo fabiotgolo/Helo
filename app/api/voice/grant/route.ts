@@ -1,5 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
-import { issueSpeechGrant } from "@/lib/voice/speech-grant";
+import { SpeechGrantConfigError, issueSpeechGrant } from "@/lib/voice/speech-grant";
 import { parseSpeechSource, resolveSpeechSource } from "@/lib/voice/speech-sources";
 
 // Emissão de autorização para a voz do paciente.
@@ -42,11 +42,24 @@ export async function POST(request: Request) {
     return Response.json({ error: resolved.error }, { status: resolved.status });
   }
 
-  const { grant, expiresAt } = issueSpeechGrant({
-    patientId,
-    text: resolved.text,
-    origin: resolved.origin,
-  });
+  // Configuração inválida vira 503 e um log no servidor. O cliente recebe uma
+  // indisponibilidade genérica: o motivo detalhado é para quem opera, e nada
+  // do segredo aparece em nenhum dos dois lados.
+  let issued: { grant: string; expiresAt: number };
+  try {
+    issued = issueSpeechGrant({
+      patientId,
+      text: resolved.text,
+      origin: resolved.origin,
+    });
+  } catch (caught) {
+    if (caught instanceof SpeechGrantConfigError) {
+      console.error("[VOZ] SpeechGrant indisponível:", caught.message);
+      return Response.json({ error: "voz do paciente indisponível" }, { status: 503 });
+    }
+    throw caught;
+  }
+  const { grant, expiresAt } = issued;
 
   return Response.json(
     { grant, text: resolved.text, origin: resolved.origin, expiresAt },

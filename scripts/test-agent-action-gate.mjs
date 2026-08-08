@@ -114,7 +114,7 @@ console.log("\n13–17. O Agent não aciona resposta do paciente:");
     "atividades.resposta.pergunta",
     "conversa.opcao.1",
     "conversa.gestoIncerto",
-    "conversa.repetir", // na tela final, repete a fala DELE
+    "conversa.repetirMensagemPaciente", // na tela final, repete a fala DELE
     "atividades.frases.ouvir",
   ];
   for (const actionId of doPaciente) {
