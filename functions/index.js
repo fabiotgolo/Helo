@@ -19,6 +19,16 @@ const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || "helo-db";
 const MAX_PHRASE_LENGTH = 500;
 const MIN_MUSIC_DURATION_SECONDS = 10;
 const MAX_MUSIC_DURATION_SECONDS = 300;
+// Prazo da síntese de frase (R-10). A Function não repassa o áudio em fluxo —
+// ela o carrega inteiro para salvar no Storage —, então o prazo cobre a
+// chamada toda. Sem ele, uma ElevenLabs lenta prendia a Function até o limite
+// da plataforma.
+//
+// A composição de MÚSICA não recebe prazo nesta fase, de propósito: ela
+// demora minutos por natureza (até 300 segundos de áudio), e um prazo mal
+// calibrado abortaria uma geração legítima. Fica registrado como pendência em
+// docs/robustez-da-voz.md.
+const PHRASE_TTS_TIMEOUT_MS = 20_000;
 
 function sessionToken(req) {
   const cookie = String(req.headers.cookie || "");
@@ -99,12 +109,26 @@ async function synthesizePhraseAudioHandler(req, res) {
     }
     if (!voiceId) return res.status(503).json({ error: "Nenhuma voz padrão está configurada." });
 
-    const eleven = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
-      method: "POST", headers: { "Content-Type": "application/json", "xi-api-key": apiKey },
-      body: JSON.stringify({ text: requestedText, model_id: "eleven_multilingual_v2" }),
-    });
+    let eleven;
+    try {
+      eleven = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+        method: "POST", headers: { "Content-Type": "application/json", "xi-api-key": apiKey },
+        body: JSON.stringify({ text: requestedText, model_id: "eleven_multilingual_v2" }),
+        signal: AbortSignal.timeout(PHRASE_TTS_TIMEOUT_MS),
+      });
+    } catch (caught) {
+      // Timeout e falha de rede são estados transitórios: 503 diz ao cliente
+      // que tentar de novo faz sentido. Um 502 diria que o pedido é que está
+      // errado, e não está.
+      const timeout = caught?.name === "TimeoutError" || caught?.name === "AbortError";
+      console.error("[HELO PHRASES] síntese não completou", { falha: timeout ? "timeout" : "network" });
+      return res.status(503).json({ error: "A ElevenLabs não respondeu a tempo." });
+    }
     if (!eleven.ok) {
-      console.error("[HELO PHRASES] ElevenLabs recusou síntese", eleven.status, (await eleven.text()).slice(0, 500));
+      // O corpo devolvido pela ElevenLabs NÃO entra no log: ele ecoa o texto
+      // enviado, e o texto de uma frase é conteúdo do paciente. Status basta
+      // para diagnosticar.
+      console.error("[HELO PHRASES] ElevenLabs recusou síntese", { status: eleven.status });
       return res.status(502).json({ error: "A ElevenLabs não conseguiu gerar o áudio." });
     }
     const buffer = Buffer.from(await eleven.arrayBuffer());

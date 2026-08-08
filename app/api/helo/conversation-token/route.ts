@@ -1,6 +1,11 @@
 import { requirePatientAccess } from "@/lib/auth";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { getPatient, getPatientSettings } from "@/lib/store";
+import {
+  chamaElevenLabsJson,
+  PRAZOS_ELEVENLABS,
+  statusParaCliente,
+} from "@/lib/voice/eleven-fetch";
 import type { HeloVoicePreference } from "@/lib/access-types";
 
 type HeloDynamicVariables = Record<string, string | number | boolean>;
@@ -114,15 +119,24 @@ export async function POST(request: Request) {
     });
 
     const params = new URLSearchParams({ agent_id: agentId });
-    const response = await fetch(
+    // Prazo TOTAL: o corpo é um JSON curto. Um token que demora mais que isso
+    // não vai abrir uma sessão utilizável — e sem prazo a requisição prendia o
+    // handler indefinidamente.
+    const chamada = await chamaElevenLabsJson<{ token?: unknown }>(
       `https://api.elevenlabs.io/v1/convai/conversation/token?${params}`,
-      { headers: { "xi-api-key": apiKey }, cache: "no-store" }
+      { headers: { "xi-api-key": apiKey }, cache: "no-store" },
+      { prazoMs: PRAZOS_ELEVENLABS.conversationToken, rotulo: "conversationToken" }
     );
-    if (!response.ok) {
-      console.error("Falha ao obter token temporário do Agent Helo:", response.status);
-      return Response.json({ error: "Não foi possível conectar com a Helo" }, { status: 502 });
+    if (!chamada.ok) {
+      // A categoria já foi registrada em chamaElevenLabsJson. Aqui ela vira o
+      // status que o cliente entende — e "timeout" nunca vira 401: quem opera
+      // precisa distinguir "demorou" de "credencial recusada".
+      return Response.json(
+        { error: "Não foi possível conectar com a Helo", reason: chamada.falha },
+        { status: statusParaCliente(chamada.falha) }
+      );
     }
-    const tokenBody = (await response.json()) as { token?: unknown };
+    const tokenBody = chamada.dados;
     if (typeof tokenBody.token !== "string" || !tokenBody.token) {
       return Response.json({ error: "Resposta inválida do serviço de voz" }, { status: 502 });
     }

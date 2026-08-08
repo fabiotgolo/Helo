@@ -7,6 +7,11 @@ import {
   resolvePlatformVoiceForUser,
 } from "@/lib/voice-catalog";
 import { verifySpeechGrant } from "@/lib/voice/speech-grant";
+import {
+  chamaElevenLabsStream,
+  PRAZOS_ELEVENLABS,
+  statusParaCliente,
+} from "@/lib/voice/eleven-fetch";
 import type { SpeakerRole } from "@/lib/types";
 
 // Síntese de voz via ElevenLabs — provedor obrigatório dos DOIS papéis:
@@ -191,7 +196,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "sem chave ElevenLabs" }, { status: 503 });
   }
 
-  const res = await fetch(
+  // Prazo até os cabeçalhos: o áudio é repassado ao navegador enquanto chega,
+  // e um prazo total cortaria a fala no meio (ver lib/voice/eleven-fetch.ts).
+  const chamada = await chamaElevenLabsStream(
     `https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_128`,
     {
       method: "POST",
@@ -209,16 +216,25 @@ export async function POST(request: Request) {
           speed: 0.92,
         },
       }),
-    }
+    },
+    { prazoMs: PRAZOS_ELEVENLABS.tts, rotulo: "tts" }
   );
 
-  if (!res.ok) {
-    const detail = await res.text();
-    console.error("ElevenLabs TTS falhou:", res.status, detail);
-    return Response.json({ error: "falha na síntese" }, { status: 502 });
+  if (!chamada.ok) {
+    // O corpo devolvido pela ElevenLabs NÃO é registrado: ele ecoa o texto
+    // enviado, e o texto de uma fala do paciente é conteúdo clínico. O log da
+    // categoria já saiu em chamaElevenLabsStream.
+    //
+    // A categoria vira o status que o cliente entende: 503 para o que é
+    // transitório (timeout, 5xx, limite de taxa, rede) — e só esse abre o
+    // prazo de espera do lado do navegador —, 502 para o que é recusa.
+    return Response.json(
+      { error: "falha na síntese", reason: chamada.falha },
+      { status: statusParaCliente(chamada.falha) }
+    );
   }
 
-  return new Response(res.body, {
+  return new Response(chamada.resposta.body, {
     headers: {
       "Content-Type": "audio/mpeg",
       "Cache-Control": "no-store",

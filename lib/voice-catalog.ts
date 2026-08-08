@@ -17,6 +17,7 @@
 import { firestore } from "@/lib/firestore";
 import { getPatientSetting, getPatientSettings } from "@/lib/store";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
+import { chamaElevenLabsJson, PRAZOS_ELEVENLABS } from "@/lib/voice/eleven-fetch";
 import type { AppUser } from "@/lib/access-types";
 
 export interface PlatformVoice {
@@ -307,20 +308,18 @@ export async function validateElevenLabsVoice(
 ): Promise<VoiceValidation> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) return { status: "unknown" };
-  try {
-    const res = await fetch(
-      `https://api.elevenlabs.io/v1/voices/${encodeURIComponent(voiceId)}`,
-      { headers: { "xi-api-key": apiKey } }
-    );
-    if (res.ok) {
-      const data = (await res.json()) as { name?: string };
-      return { status: "valid", name: data.name ?? null };
-    }
-    if (res.status === 404 || res.status === 400 || res.status === 422) {
-      return { status: "invalid" };
-    }
-    return { status: "unknown" };
-  } catch {
-    return { status: "unknown" };
-  }
+  // Sem prazo, o Admin ficava esperando o formulário de cadastro responder
+  // enquanto o handler segurava a instância. Aqui o prazo é total: o corpo é
+  // um JSON curto, e a tela é interativa.
+  const chamada = await chamaElevenLabsJson<{ name?: string }>(
+    `https://api.elevenlabs.io/v1/voices/${encodeURIComponent(voiceId)}`,
+    { headers: { "xi-api-key": apiKey } },
+    { prazoMs: PRAZOS_ELEVENLABS.voiceLookup, rotulo: "voiceLookup" }
+  );
+  if (chamada.ok) return { status: "valid", name: chamada.dados.name ?? null };
+  // Só uma recusa sobre o PEDIDO diz que o id não existe. Timeout, rede,
+  // credencial e 5xx deixam a validação "unknown" — o cadastro segue
+  // sinalizado, como antes, em vez de acusar um id válido de inválido.
+  if (chamada.falha === "rejected") return { status: "invalid" };
+  return { status: "unknown" };
 }
