@@ -129,10 +129,18 @@ Tarefas longas demais para o request do app vivem em `functions/index.js`,
 expostas por rewrites do Hosting (`firebase.json`):
 
 - `/generateMusic` → `generateMusic` — geração de música da playlist do
-  paciente (até 300 s).
+  paciente (até 300 s). Exige sessão autenticada e vínculo com `createSession`
+  no paciente informado; o `patientId` do corpo não vale por si.
 - `/synthesizePhraseAudio` → `synthesizePhraseAudio` — pré-síntese do áudio
-  das frases favoritas.
-- `/webhook/**` → `api` — compatibilidade com a integração anterior de música.
+  das frases favoritas. Exige vínculo com `createActivities`.
+- `/webhook/**` → `api` — **depreciado**. Compatibilidade com a integração
+  anterior de música, de quando a ElevenLabs chamava o webhook direto. Usa o
+  mesmo handler de `/generateMusic` e, portanto, a mesma autenticação — deixou
+  de ser um caminho anônimo. Remover quando estiver confirmado que nenhuma
+  server tool do painel aponta para ele.
+
+Nenhuma rota que gaste quota paga, use `ELEVENLABS_API_KEY` ou escreva em
+dados de um paciente responde sem autenticação.
 
 ## Estrutura
 

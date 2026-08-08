@@ -17,6 +17,8 @@ const MAX_PROMPT_LENGTH = 4100;
 const MAX_GENRE_LENGTH = 100;
 const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || "helo-db";
 const MAX_PHRASE_LENGTH = 500;
+const MIN_MUSIC_DURATION_SECONDS = 10;
+const MAX_MUSIC_DURATION_SECONDS = 300;
 
 function sessionToken(req) {
   const cookie = String(req.headers.cookie || "");
@@ -24,18 +26,41 @@ function sessionToken(req) {
   return match ? decodeURIComponent(match.slice("__session=".length)) : "";
 }
 
-async function canSynthesizePhrase(req, patientId) {
+/**
+ * Vínculo ativo com ESTE paciente, com a permissão pedida. Mesma checagem que
+ * requirePatientAccess faz no app Next; repetida aqui porque as Functions não
+ * compartilham código com ele.
+ *
+ * Devolve o motivo além do veredito: uma requisição sem sessão é 401 (falta
+ * autenticar) e uma com sessão sem acesso é 403 (autenticou, não pode) — a
+ * distinção importa para o cliente saber se refazer login resolve.
+ */
+async function patientAccess(req, patientId, permission) {
   const token = sessionToken(req);
-  if (!/^[a-f0-9]{64}$/.test(token)) return false;
+  if (!/^[a-f0-9]{64}$/.test(token)) return { ok: false, status: 401, error: "autenticação obrigatória" };
   const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
   const session = await db.collection("authSessions").doc(token).get();
-  if (!session.exists || String(session.data().expiresAt) < new Date().toISOString()) return false;
+  if (!session.exists || String(session.data().expiresAt) < new Date().toISOString()) {
+    return { ok: false, status: 401, error: "sessão expirada" };
+  }
   const userId = String(session.data().userId || "");
   const user = await db.collection("users").doc(userId).get();
-  if (!user.exists || user.data().status !== "active") return false;
-  if (user.data().role === "admin") return true;
+  if (!user.exists || user.data().status !== "active") {
+    return { ok: false, status: 401, error: "usuário inativo" };
+  }
+  if (user.data().role === "admin") return { ok: true, userId };
+  // O patientId do corpo NÃO é confiado: é exatamente o que esta busca
+  // desmente. Sem vínculo ativo com ele, não há acesso — nem para gastar
+  // crédito, nem para escrever na playlist dele.
   const link = await db.collection("userPatientAccess").doc(`${userId}_${patientId}`).get();
-  return Boolean(link.exists && link.data().status === "active" && Array.isArray(link.data().permissions) && link.data().permissions.includes("createActivities"));
+  const permitido =
+    link.exists &&
+    link.data().status === "active" &&
+    Array.isArray(link.data().permissions) &&
+    link.data().permissions.includes(permission);
+  return permitido
+    ? { ok: true, userId }
+    : { ok: false, status: 403, error: "acesso negado" };
 }
 
 async function synthesizePhraseAudioHandler(req, res) {
@@ -50,7 +75,8 @@ async function synthesizePhraseAudioHandler(req, res) {
     if (!Number.isSafeInteger(patientId) || patientId <= 0 || !phraseId || !requestedText || requestedText.length > MAX_PHRASE_LENGTH) {
       return res.status(400).json({ error: "patientId, phraseId e text válidos são obrigatórios." });
     }
-    if (!await canSynthesizePhrase(req, patientId)) return res.status(403).json({ error: "acesso negado" });
+    const acesso = await patientAccess(req, patientId, "createActivities");
+    if (!acesso.ok) return res.status(acesso.status).json({ error: acesso.error });
     const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
     const phraseRef = db.collection("patients").doc(String(patientId)).collection("favoritePhrases").doc(phraseId);
     const phrase = await phraseRef.get();
@@ -133,9 +159,17 @@ async function generateMusicHandler(req, res) {
   try {
     const prompt = textParameter(req.body?.prompt);
     const genre = textParameter(req.body?.genre);
-    const durationSeconds = req.body?.duration_seconds
-      ? parseInt(req.body.duration_seconds, 10)
-      : 240;
+    // Duração com teto: sem ele, um único pedido podia encomendar uma hora de
+    // composição. O padrão continua 240s; valores fora da faixa são cortados
+    // para o limite em vez de recusar o pedido — a diferença é de custo, não
+    // de segurança, e recusar aqui só produziria uma falha confusa na conversa.
+    const durationSeconds = Math.min(
+      MAX_MUSIC_DURATION_SECONDS,
+      Math.max(
+        MIN_MUSIC_DURATION_SECONDS,
+        parseInt(req.body?.duration_seconds, 10) || 240
+      )
+    );
     const patientId = Number(req.body?.patientId);
     const apiKey = process.env.ELEVENLABS_API_KEY;
 
@@ -147,6 +181,22 @@ async function generateMusicHandler(req, res) {
     if (!Number.isSafeInteger(patientId) || patientId <= 0) {
       return res.status(400).json({ error: "O parâmetro 'patientId' é obrigatório." });
     }
+
+    // ——— Autenticação e autorização (Fase 5.1A / R-03) ———
+    //
+    // Esta rota gasta crédito pago da ElevenLabs, grava um MP3 no Storage e
+    // escreve na playlist de um paciente. Até aqui não pedia nada: bastava
+    // conhecer a URL para compor música na conta da Helo e inserir faixas no
+    // histórico de qualquer paciente, pelo id.
+    //
+    // A verificação vem ANTES de qualquer chamada externa — recusar é de
+    // graça, e um pedido não autorizado não deve nem tocar no provedor.
+    const acesso = await patientAccess(req, patientId, "createSession");
+    if (!acesso.ok) {
+      console.warn("[HELO MUSIC] pedido sem acesso ao paciente", { patientId, status: acesso.status });
+      return res.status(acesso.status).json({ error: acesso.error });
+    }
+
     if (prompt.length > MAX_PROMPT_LENGTH) {
       return res.status(400).json({ error: `O prompt deve ter no máximo ${MAX_PROMPT_LENGTH} caracteres.` });
     }
@@ -275,10 +325,28 @@ exports.synthesizePhraseAudio = onRequest(
   synthesizePhraseAudioHandler
 );
 
-// Compatibilidade com a integração anterior em /webhook/generate_music.
+// ——— Endpoint legado (DEPRECIADO) ———
+//
+// Veio da primeira integração de música, quando a ElevenLabs chamava o webhook
+// direto como server tool (commit e607109). Hoje quem chama é o cliente, em
+// /generateMusic, com o cookie de sessão do cuidador — nenhum código do
+// aplicativo aponta para cá.
+//
+// Ele NÃO é removido nesta fase: uma configuração no painel da ElevenLabs pode
+// ainda apontar para cá, e apagar a rota trocaria uma falha silenciosa por
+// outra. Mas ele deixou de ser um bypass — passa pelo MESMO handler, com a
+// mesma autenticação. Uma server tool que chame daqui sem cookie de sessão
+// agora recebe 401, e é isso que se quer: era exatamente o caminho anônimo
+// para gastar crédito e escrever na playlist de qualquer paciente.
+//
+// Próximo passo (fora da 5.1A): confirmar no painel que nenhuma server tool
+// aponta para /webhook/** e então remover a rota.
 app.post(
   ["/generate_music", "/generateMusic", "/webhook/generate_music"],
-  generateMusicHandler
+  (req, res) => {
+    console.warn("[HELO MUSIC] rota legada /webhook usada — depreciada, ver functions/index.js");
+    return generateMusicHandler(req, res);
+  }
 );
 exports.api = onRequest(
   {

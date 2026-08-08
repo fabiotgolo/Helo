@@ -658,9 +658,15 @@ function HeloAgentSession({
     });
 
     try {
+      // `same-origin` (o padrão, aqui explícito): o cookie de sessão é
+      // SameSite=Lax e o app publicado chama /generateMusic no PRÓPRIO domínio
+      // pelo rewrite do Hosting. Em desenvolvimento local, apontar esta URL
+      // para heloapp.web.app é cross-site — o cookie não viaja e a resposta é
+      // 401. É o efeito esperado de a rota ter deixado de ser anônima.
       const response = await fetch(GENERATE_MUSIC_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify({
           patientId: patientIdRef.current,
           prompt,
@@ -689,10 +695,17 @@ function HeloAgentSession({
             : "Música especial da Helo";
 
       if (!response.ok || !audioUrl) {
+        // 401/403 têm causa própria e conserto próprio: não é falha do serviço
+        // de música, é falta de acesso ao paciente. Dizer "não retornou a
+        // música" mandaria o cuidador tentar de novo para sempre.
         const reason =
-          typeof data?.error === "string"
-            ? data.error
-            : "O servidor não retornou a música gerada.";
+          response.status === 401
+            ? "A sessão expirou. Entre novamente para gerar música."
+            : response.status === 403
+              ? "Você não tem acesso para gerar música para este paciente."
+              : typeof data?.error === "string"
+                ? data.error
+                : "O servidor não retornou a música gerada.";
         throw new Error(reason);
       }
 
