@@ -38,8 +38,11 @@ import {
   type HeloClientToolAction,
 } from "@/lib/helo-client-tools";
 import {
+  agentDenialReason,
   findHeloUIAction,
+  isActionAllowedFor,
   listHeloUIActions,
+  resolveRequestedUIAction,
   useRegisterHeloUIActions,
   type HeloUIAction,
 } from "@/lib/helo-action-registry";
@@ -94,6 +97,10 @@ const SCREEN_BY_PATH: Record<string, string> = {
   "/dashboard": "dashboard",
 };
 
+// Rotas globais — navegação pura, por construção: cada entrada é um caminho
+// de uma tabela fechada, e nenhuma delas executa handler de tela. Por isso são
+// tratadas antes do Action Registry no dispatcher e não carregam
+// `actionClass`: não há ação a classificar, só um destino.
 const GLOBAL_HELO_ROUTES = [
   { actionId: "navigate-home", label: "Ir para Home", path: "/" },
   { actionId: "navigate-helo", label: "Ir para Helo", path: "/helo", area: "helo" },
@@ -271,84 +278,6 @@ function describeConversationError(caught: unknown): string {
     }
   }
   return "Não foi possível iniciar a conversa.";
-}
-
-function canonicalAgentText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9👍✋✊]+/g, " ")
-    .trim();
-}
-
-function resolveGestureIntent(value: unknown): Gesture | undefined {
-  if (typeof value !== "string") return undefined;
-  const text = canonicalAgentText(value);
-  if (!text) return undefined;
-  if (text.includes("👍") || /\b(sim|yes|positivo|confirmar|confirma|joinha|polegar)\b/.test(text)) return "sim";
-  if (text.includes("✋") || /\b(talvez|maybe|reformular|mao aberta|meio termo)\b/.test(text)) return "talvez";
-  if (text.includes("✊") || /\b(nao|no|negativo|recusar|recusa|punho)\b/.test(text)) return "nao";
-  return undefined;
-}
-
-function stringFromFields(source: Record<string, unknown> | undefined, fields: readonly string[]): string | undefined {
-  if (!source) return undefined;
-  for (const field of fields) {
-    const value = source[field];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return undefined;
-}
-
-function collectRequestStrings(source: Record<string, unknown> | undefined): string[] {
-  if (!source) return [];
-  const values: string[] = [];
-  for (const value of Object.values(source)) {
-    if (typeof value === "string" && value.trim()) values.push(value.trim());
-  }
-  return values;
-}
-
-function resolveRequestedUIAction(
-  actionId: string,
-  parameters: Record<string, unknown>,
-  payload?: Record<string, unknown>
-): HeloUIAction | undefined {
-  const direct = findHeloUIAction(actionId);
-  if (direct) return direct;
-
-  const allStrings = [
-    actionId,
-    ...collectRequestStrings(parameters),
-    ...collectRequestStrings(payload),
-  ].filter(Boolean);
-  const gesture =
-    resolveGestureIntent(stringFromFields(payload, ["gesto", "gesture", "resposta", "answer", "response", "choice", "value"])) ??
-    resolveGestureIntent(stringFromFields(parameters, ["gesto", "gesture", "resposta", "answer", "response", "choice", "value"])) ??
-    allStrings.map(resolveGestureIntent).find(Boolean);
-  const option =
-    stringFromFields(payload, ["opcao", "option", "alternativa", "alternative", "item", "itemLabel", "targetLabel", "label"]) ??
-    stringFromFields(parameters, ["opcao", "option", "alternativa", "alternative", "item", "itemLabel", "targetLabel"]);
-
-  const candidates = new Set<string>();
-  if (gesture) {
-    candidates.add(`${actionId}.${gesture}`);
-    if (option) {
-      candidates.add(`${gesture} de ${option}`);
-      candidates.add(`${gesture} em ${option}`);
-      candidates.add(`clique em ${gesture} em ${option}`);
-      candidates.add(`clique em ${gesture} de ${option}`);
-      candidates.add(`${actionId} ${gesture} ${option}`);
-    }
-  }
-  for (const text of allStrings) candidates.add(text);
-
-  for (const candidate of candidates) {
-    const action = findHeloUIAction(candidate);
-    if (action) return action;
-  }
-  return undefined;
 }
 
 function HeloAgentSession({
@@ -908,7 +837,9 @@ function HeloAgentSession({
     if (!access.ok) return toolResult(access);
     if (resolved === "atividades") {
       const activityMenuAction = findHeloUIAction("activity.goToActivityMenu");
-      if (activityMenuAction?.enabled) {
+      // Mesmo gate do dispatcher: esta é a segunda porta por onde o Agent
+      // executa um handler da tela, e uma porta sem tranca anula a outra.
+      if (activityMenuAction?.enabled && isActionAllowedFor(activityMenuAction, "agent")) {
         await activityMenuAction.run({ __source: "agent" });
         return toolResult({
           ok: true,
@@ -941,7 +872,11 @@ function HeloAgentSession({
         activePatientId == null
           ? "debug"
           : screenContext?.screen ?? SCREEN_BY_PATH[pathname] ?? pathname;
-      const uiActions = listHeloUIActions();
+      // Descoberta pela ótica do Agent: cada ação vem marcada com
+      // agentExecutable, e as que ele não pode executar trazem o motivo. Ele
+      // continua VENDO tudo — precisa saber que a ação existe para dizer ao
+      // cuidador "isso é você quem faz", em vez de fingir que não achou.
+      const uiActions = listHeloUIActions("agent");
       const localElements = typeof document === "undefined"
         ? []
         : Array.from(document.querySelectorAll<HTMLElement>("button, a"))
@@ -1015,6 +950,29 @@ function HeloAgentSession({
       const action = resolveRequestedUIAction(actionId, parameters, payload);
       if (!action) {
         return toolResult({ ok: false, reason: "Ação não encontrada na tela atual." });
+      }
+      // ——— O gate de origem (R-02) ———
+      //
+      // Toda chamada que chega aqui vem das client tools da ElevenLabs, e
+      // portanto tem origem "agent". A decisão é tomada sobre a CLASSE da
+      // ação, nunca sobre o texto do pedido — é o que faz a proteção
+      // sobreviver a sinônimo, alias, emoji, idioma e ao actionId literal,
+      // todos caminhos que `resolveRequestedUIAction` acima sabe construir.
+      //
+      // Fica DEPOIS de resolver a ação de propósito: assim o Agent recebe o
+      // motivo certo e pode explicá-lo ao cuidador, em vez de um "não
+      // encontrei" que o faria tentar de novo com outras palavras.
+      if (!isActionAllowedFor(action, "agent")) {
+        console.warn("[HELO TOOL] ação bloqueada para o Agent:", action.actionId, action.actionClass ?? "(sem classe)");
+        return toolResult({
+          ok: false,
+          blocked: true,
+          actionId: action.actionId,
+          actionClass: action.actionClass ?? "unclassified",
+          reason: agentDenialReason(action),
+          requiresHumanAction: true,
+          suppressAssistantNarration: false,
+        });
       }
       if (!action.enabled) {
         return toolResult({ ok: false, reason: `A ação "${action.label}" está indisponível agora.` });
@@ -1762,6 +1720,7 @@ function HeloAgentSession({
     return [
       {
         actionId: "helo.conectar",
+        actionClass: "operational",
         label: "Conectar com Helo",
         type: "connect",
         enabled: status === "disconnected" && !starting && !restarting,
@@ -1772,6 +1731,7 @@ function HeloAgentSession({
       },
       {
         actionId: "helo.solicitarMicrofone",
+        actionClass: "operational",
         label: "Solicitar acesso ao microfone",
         type: "connect",
         enabled: status === "disconnected",
@@ -1785,6 +1745,7 @@ function HeloAgentSession({
       },
       {
         actionId: "helo.encerrar",
+        actionClass: "sensitive",
         label: "Encerrar conversa",
         type: "connect",
         enabled: connected,
@@ -1794,6 +1755,7 @@ function HeloAgentSession({
         ? [
             {
               actionId: "gesto.confirmar",
+              actionClass: "patientResponse",
               label: "Registrar gesto do paciente: sim",
               type: "gesture",
               enabled: !gesturePending,
@@ -1801,6 +1763,7 @@ function HeloAgentSession({
             },
             {
               actionId: "gesto.reformular",
+              actionClass: "patientResponse",
               label: "Registrar gesto do paciente: não é bem isso",
               type: "gesture",
               enabled: !gesturePending,
@@ -1808,6 +1771,7 @@ function HeloAgentSession({
             },
             {
               actionId: "gesto.recusar",
+              actionClass: "patientResponse",
               label: "Registrar gesto do paciente: não",
               type: "gesture",
               enabled: !gesturePending,

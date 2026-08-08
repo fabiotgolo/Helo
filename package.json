@@ -16,6 +16,7 @@
     "test:authorship": "node scripts/test-confirmed-patient-statement.mjs",
     "test:voice:grant": "node scripts/test-speech-grant.mjs",
     "test:voice:authorization": "node scripts/test-voice-authorization.mjs",
+    "test:agent:gate": "node scripts/test-agent-action-gate.mjs",
     "test:session-context": "node scripts/test-session-context.mjs",
     "test:interpretation": "node scripts/test-caregiver-interpretation.mjs",
     "test:patient-controls": "node scripts/test-patient-controls.mjs",

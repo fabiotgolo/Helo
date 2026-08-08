@@ -195,6 +195,7 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
     if (isConfirm) {
       actions.push({
         actionId: "dialog.cancel",
+        actionClass: "sensitive",
         label: `${cancelLabel} — ${title}`,
         aliases: [
           cancelLabel,
@@ -215,6 +216,7 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
     }
     actions.push({
       actionId: "dialog.confirm",
+      actionClass: "sensitive",
       label: `${confirmLabel} — ${title}`,
       aliases: [
         confirmLabel,

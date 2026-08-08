@@ -156,6 +156,7 @@ export default function AtividadesPage() {
     if (view.kind === "fim") {
       return [{
         actionId: "atividades.voltarLista",
+        actionClass: "navigation",
         label: "Voltar às atividades",
         type: "activity",
         enabled: true,
@@ -165,6 +166,7 @@ export default function AtividadesPage() {
     if (phrasesOpen) {
       return [{
         actionId: "atividades.frases.fechar",
+        actionClass: "navigation",
         label: "Fechar frases para se ouvir",
         aliases: ["fechar frases", "voltar para atividades", "fechar atividade de frases"],
         type: "navigation",
@@ -180,6 +182,7 @@ export default function AtividadesPage() {
     if (caps?.create || caps?.edit) {
       list.push({
         actionId: "atividades.gerenciar",
+        actionClass: "sensitive",
         label: "Gerenciar atividades",
         type: "activity",
         enabled: true,
@@ -189,6 +192,7 @@ export default function AtividadesPage() {
     if (caps?.create) {
       list.push({
         actionId: "atividades.criar",
+        actionClass: "sensitive",
         label: "Criar sessão",
         type: "activity",
         enabled: true,
@@ -199,6 +203,7 @@ export default function AtividadesPage() {
     if (phrases.length > 0) {
       list.push({
         actionId: "atividades.frases.abrir",
+        actionClass: "operational",
         label: "Frases para se ouvir",
         aliases: [
           "abrir frases para se ouvir",
@@ -225,6 +230,7 @@ export default function AtividadesPage() {
         // automaticamente; o label casa com o card. Abrir por tool executa o
         // MESMO handler do clique manual (start), abrindo a sessão de verdade.
         actionId: `atividades.iniciar.${t.id}`,
+        actionClass: "operational",
         label: t.title,
         aliases: [
           `abrir ${t.title}`,
@@ -251,6 +257,7 @@ export default function AtividadesPage() {
       if (caps?.edit) {
         list.push({
           actionId: `atividades.editar.${t.id}`,
+          actionClass: "sensitive",
           label: `Editar ${t.title}`,
           aliases: [`editar ${t.title}`, `gerenciar ${t.title}`, `editar atividade ${t.title}`],
           type: "edit",

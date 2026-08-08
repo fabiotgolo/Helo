@@ -671,6 +671,7 @@ export function SessionPlayer({
         // "Gerenciar atividades". Passa pela confirmação de conclusão — quem
         // decide concluir é o usuário no modal, não o Agente.
         actionId: "activity.goToActivityMenu",
+        actionClass: "navigation",
         label: "Menu de atividades",
         aliases: [
           "menu de atividades",
@@ -700,6 +701,7 @@ export function SessionPlayer({
       {
         // Volta ao gerenciamento das atividades — o Agente também executa.
         actionId: "activity.goToManageActivities",
+        actionClass: "sensitive",
         label: "Gerenciar atividades",
         aliases: ["gerenciar atividades", "editar atividades", "gestão de atividades"],
         type: "navigation",
@@ -722,6 +724,7 @@ export function SessionPlayer({
       },
       {
         actionId: "atividades.anterior",
+        actionClass: "operational",
         label: "Item anterior",
         type: "activity",
         enabled: idx > 0,
@@ -729,6 +732,7 @@ export function SessionPlayer({
       },
       {
         actionId: "atividades.proxima",
+        actionClass: "operational",
         label: "Próximo item",
         type: "activity",
         enabled: !lastItem,
@@ -736,6 +740,7 @@ export function SessionPlayer({
       },
       {
         actionId: "atividades.concluir",
+        actionClass: "sensitive",
         label: visualOnly ? "Fechar atividade" : "Concluir sessão",
         type: "activity",
         enabled: lastItem,
@@ -745,6 +750,7 @@ export function SessionPlayer({
         // Encerrar sessão: também passa pela regra de saída (modal só se houver
         // resposta; sem resposta, sai direto). Vai para o Menu de atividades.
         actionId: "atividades.encerrar",
+        actionClass: "sensitive",
         label: "Fechar atividade",
         type: "activity",
         enabled: true,
@@ -779,6 +785,7 @@ export function SessionPlayer({
           const optionLabel = o.label.trim();
           list.push({
             actionId: `atividades.resposta.${n + 1}.${gesture}`,
+            actionClass: "patientResponse",
             label: `${optionLabel}: clicar emoji ${command.emoji} ${command.label}`,
             aliases: [
               `${optionLabel} ${command.label}`,
@@ -817,6 +824,7 @@ export function SessionPlayer({
     } else if (gesturesOn && question) {
       list.push({
         actionId: "atividades.resposta.pergunta",
+        actionClass: "patientResponse",
         label: "Registrar gesto do paciente para a pergunta",
         type: "gesture",
         enabled: true,

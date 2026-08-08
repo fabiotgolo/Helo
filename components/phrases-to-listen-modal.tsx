@@ -121,6 +121,7 @@ export function PhrasesToListenModal({
     () => {
       const actions: HeloUIAction[] = [{
         actionId: "atividades.frases.ouvir",
+        actionClass: "patientResponse",
         label: "Ouvir frase",
         aliases: [
           "ouvir a frase",
@@ -143,6 +144,7 @@ export function PhrasesToListenModal({
         actions.push(
           {
             actionId: "atividades.frases.anterior",
+            actionClass: "navigation",
             label: "Seta da esquerda — frase anterior",
             aliases: [
               "clique na seta da esquerda",
@@ -157,6 +159,7 @@ export function PhrasesToListenModal({
           },
           {
             actionId: "atividades.frases.proxima",
+            actionClass: "navigation",
             label: "Seta da direita — próxima frase",
             aliases: [
               "clique na seta da direita",

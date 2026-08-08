@@ -608,12 +608,14 @@ export default function ConversaPage() {
 
   // Action Registry da Conversa guiada — espelha os botões visíveis por fase,
   // com os MESMOS handlers do toque manual. Os gestos são o sinal do paciente
-  // relatado pelo operador; o Agent os aciona pela mesma semântica.
+  // relatado pelo operador, e por isso vêm classificados como
+  // "patientResponse": o Agent os ENXERGA, mas não os aciona (R-02).
   const registryActions = useMemo<HeloUIAction[]>(() => {
     if (phase === "intro") {
       const ready = !authLoading && !patientLoading && user != null && patientId != null;
       return [{
         actionId: "conversa.comecar",
+        actionClass: "operational",
         label: "Começar",
         type: "activity",
         enabled: ready && !starting,
@@ -625,7 +627,9 @@ export default function ConversaPage() {
         {
           // Repetir a mensagem final na VOZ DO PACIENTE (mesma da comunicação
           // original) — nunca na voz da plataforma. O Agente não narra nada.
+          // Faz a voz dele soar, portanto é do canal dele.
           actionId: "conversa.repetir",
+          actionClass: "patientResponse",
           label: "Repetir mensagem",
           type: "activity",
           enabled: confirm != null && !speaking,
@@ -643,6 +647,7 @@ export default function ConversaPage() {
         },
         {
           actionId: "conversa.continuar",
+          actionClass: "operational",
           label: "Continuar a conversa",
           type: "activity",
           enabled: true,
@@ -650,6 +655,7 @@ export default function ConversaPage() {
         },
         {
           actionId: "conversa.encerrar",
+          actionClass: "sensitive",
           label: "Encerrar",
           type: "activity",
           enabled: true,
@@ -662,20 +668,23 @@ export default function ConversaPage() {
     // é a mesma dos três botões de gesto na tela.
     if (phase === "confirm" && confirm) {
       list.push(
-        { actionId: "gesto.confirmar", label: "Confirmar mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("sim") },
-        { actionId: "gesto.reformular", label: "Reformular mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("talvez") },
-        { actionId: "gesto.recusar", label: "Descartar mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("nao") },
+        { actionId: "gesto.confirmar", actionClass: "patientResponse", label: "Confirmar mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("sim") },
+        { actionId: "gesto.reformular", actionClass: "patientResponse", label: "Reformular mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("talvez") },
+        { actionId: "gesto.recusar", actionClass: "patientResponse", label: "Descartar mensagem", type: "gesture", enabled: !paused, run: () => onConfirmGesture("nao") },
       );
     } else if (phase === "node" && node.kind === "pergunta") {
       list.push(
-        { actionId: "gesto.confirmar", label: "Responder sim", type: "gesture", enabled: !paused, run: () => onQuestionGesture("sim") },
-        { actionId: "gesto.reformular", label: "Responder talvez", type: "gesture", enabled: !paused, run: () => onQuestionGesture("talvez") },
-        { actionId: "gesto.recusar", label: "Responder não", type: "gesture", enabled: !paused, run: () => onQuestionGesture("nao") },
+        { actionId: "gesto.confirmar", actionClass: "patientResponse", label: "Responder sim", type: "gesture", enabled: !paused, run: () => onQuestionGesture("sim") },
+        { actionId: "gesto.reformular", actionClass: "patientResponse", label: "Responder talvez", type: "gesture", enabled: !paused, run: () => onQuestionGesture("talvez") },
+        { actionId: "gesto.recusar", actionClass: "patientResponse", label: "Responder não", type: "gesture", enabled: !paused, run: () => onQuestionGesture("nao") },
       );
     } else if (phase === "node" && node.kind === "opcoes") {
       displayOptions.forEach((option, idx) => {
         list.push({
           actionId: `conversa.opcao.${idx + 1}`,
+          // Escolher a opção É a resposta do paciente — e leva à frase que
+          // sairá na voz dele. Nunca do Agent.
+          actionClass: "patientResponse",
           label: `Opção: ${option.label}`,
           type: "gesture",
           enabled: !paused && !aiLoading && !marks[idx],
@@ -688,11 +697,13 @@ export default function ConversaPage() {
     }
     // Controles do assistente, sempre presentes nas fases ativas.
     list.push(
-      { actionId: "conversa.repetir", label: "Repetir", type: "activity", enabled: !speaking, run: () => repeat() },
-      { actionId: "conversa.gestoIncerto", label: "Gesto incerto", type: "activity", enabled: true, run: () => uncertain() },
-      { actionId: paused ? "conversa.retomar" : "conversa.pausar", label: paused ? "Retomar" : "Pausar", type: "activity", enabled: true, run: () => togglePause() },
-      { actionId: "conversa.voltar", label: "Voltar", type: "activity", enabled: history.length > 0, run: () => goBack() },
-      { actionId: "conversa.encerrar", label: "Encerrar sessão", type: "activity", enabled: true, run: () => { finish(); router.push("/"); } },
+      { actionId: "conversa.repetir", actionClass: "operational", label: "Repetir", type: "activity", enabled: !speaking, run: () => repeat() },
+      // "Gesto incerto" registra uma observação SOBRE a resposta do paciente:
+      // é do canal dele, não do Agent.
+      { actionId: "conversa.gestoIncerto", actionClass: "patientResponse", label: "Gesto incerto", type: "activity", enabled: true, run: () => uncertain() },
+      { actionId: paused ? "conversa.retomar" : "conversa.pausar", actionClass: "operational", label: paused ? "Retomar" : "Pausar", type: "activity", enabled: true, run: () => togglePause() },
+      { actionId: "conversa.voltar", actionClass: "navigation", label: "Voltar", type: "activity", enabled: history.length > 0, run: () => goBack() },
+      { actionId: "conversa.encerrar", actionClass: "sensitive", label: "Encerrar sessão", type: "activity", enabled: true, run: () => { finish(); router.push("/"); } },
     );
     return list;
   }, [phase, authLoading, patientLoading, user, patientId, starting, begin, confirm, paused, node, displayOptions, aiLoading, marks, onConfirmGesture, onQuestionGesture, onOptionGesture, speaking, speakPatientPhrase, repeat, uncertain, togglePause, goBack, finish, history, enterNode, router]);

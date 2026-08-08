@@ -224,6 +224,7 @@ export default function EmergenciaPage() {
     for (const item of actions) {
       list.push({
         actionId: `emergencia.item.${item.actionKey}`,
+        actionClass: "sensitive",
         label: item.label,
         type: "modeItem",
         enabled: true,
@@ -244,6 +245,7 @@ export default function EmergenciaPage() {
         const itemId = item.itemId;
         list.push({
           actionId: `emergencia.editar.${itemId}`,
+          actionClass: "sensitive",
           label: `Editar ${item.label}`,
           type: "edit",
           enabled: true,

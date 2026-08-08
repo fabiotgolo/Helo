@@ -257,6 +257,8 @@ export default function RotinaPage() {
       const q = openQuestion;
       const answerActions = ROUTINE_ANSWER_ORDER.map((ans) => ({
         actionId: `routine.answer.${q.key}.${ans}`,
+        // A resposta É do paciente: o Agent nunca a aciona (R-02).
+        actionClass: "patientResponse" as const,
         label:
           ans === "yes"
             ? "Clicar emoji 👍 SIM"
@@ -287,6 +289,7 @@ export default function RotinaPage() {
         ...answerActions,
         {
           actionId: "routine.backToMenu",
+          actionClass: "navigation",
           label: "Voltar para as Rotinas",
           aliases: [
             "voltar",
@@ -305,6 +308,7 @@ export default function RotinaPage() {
     }
     return ROUTINE_QUESTIONS.map((q) => ({
       actionId: `routine.open.${q.key}`,
+      actionClass: "operational",
       label: q.question,
       type: "routineQuestion" as const,
       enabled: true,
