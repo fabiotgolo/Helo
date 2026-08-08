@@ -18,6 +18,8 @@
     "test:voice:authorization": "node scripts/test-voice-authorization.mjs",
     "test:agent:gate": "node scripts/test-agent-action-gate.mjs",
     "test:music:authorization": "node scripts/test-music-authorization.mjs",
+    "test:agent:teardown": "node scripts/test-agent-session-teardown.mjs",
+    "test:5.1a": "npm run test:voice:grant && npm run test:agent:gate && npm run test:music:authorization && npm run test:agent:teardown",
     "test:session-context": "node scripts/test-session-context.mjs",
     "test:interpretation": "node scripts/test-caregiver-interpretation.mjs",
     "test:patient-controls": "node scripts/test-patient-controls.mjs",
