@@ -135,6 +135,36 @@ sabe. Seria custo sem prova nova.
 
 ---
 
+## Pendência conhecida — prévia de frase favorita
+
+**Onde:** Atividades → Gerenciar → frases → "🔊 Ouvir"
+([app/atividades/gerenciar/page.tsx](../app/atividades/gerenciar/page.tsx), `previewPhrase`)
+
+O botão reproduz **o texto que o cuidador está digitando**, ainda não salvo, com
+`speakerRole: "patient"`. É o caminho de texto livre na voz clonada que o R-01
+existe para fechar, e não há grant possível para ele: rascunho não é origem, e
+não deve virar uma.
+
+**Estado hoje:** `/api/tts` recusa com 403. Nada é falado sem autorização — mas
+o botão falha em silêncio, e o cuidador não recebe explicação.
+
+Vale notar como isto passou: a auditoria 5.0 inventariou as **origens do
+servidor**, e a 5.1A as implementou. Nenhuma das duas inventariou os **call
+sites do cliente**, que são uma lista diferente. Duas telas ficaram para trás;
+`app/admin` foi corrigida quando apareceu, esta ficou. Quem fecha essa
+categoria agora é
+[scripts/test-voice-call-sites.mjs](../scripts/test-voice-call-sites.mjs), que
+varre o cliente inteiro e reprova qualquer caso novo.
+
+**Decisão (2026-08-08):** deixar em aberto, tratar numa fase seguinte. Saídas
+avaliadas:
+
+| Saída | O que muda |
+|---|---|
+| Falar na voz da **plataforma** | O cuidador confere a redação, que é para o que o botão serve. A voz do paciente segue disponível para frases **salvas**, no modal "Frases para ouvir", que já pede grant |
+| **Salvar antes** de ouvir | Mantém a voz do paciente, com origem `favoritePhrase`. Cria registro de frase que o cuidador ainda podia descartar |
+| **Remover** o botão | A escuta fica só no modal de frases salvas |
+
 ## Como escrever sobre isto
 
 | Não escreva | Escreva |

@@ -641,8 +641,9 @@ A voz e o Agent Helo (Fase 5.1A) têm suítes próprias, todas de domínio puro 
 sem rede, sem emulador e **sem chamada paga da ElevenLabs**:
 
 ```bash
-npm run test:5.1a               # as seis abaixo, em sequência
+npm run test:5.1a               # as sete abaixo, em sequência
 npm run test:voice:grant        # SpeechGrant: procedência, prazo e política do segredo
+npm run test:voice:callsites    # todo caminho até a voz do paciente pede grant
 npm run test:agent:gate         # o Agent não responde nem confirma pelo paciente
 npm run test:agent:invariants   # toda ação tem uma classe, e uma só
 npm run test:music:authorization # /generateMusic exige acesso ao paciente

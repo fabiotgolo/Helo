@@ -954,14 +954,38 @@ function VoicesTab({
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const preview = useCallback(
+    // `text` vale para as prévias da voz da PLATAFORMA. Quando a prévia é da
+    // voz do paciente (`previewPatientVoice`), o texto é descartado: quem
+    // decide a frase é o servidor, e é sobre a frase dele que o grant é
+    // emitido. Sem grant, /api/tts recusa com 403 — que foi exatamente o que
+    // esta tela passou a receber quando a 5.1A entrou sem migrar este ponto.
     async (key: string, payload: Record<string, unknown>, text: string) => {
       setPreviewingId(key);
       try {
         audioRef.current?.pause();
+        let spoken = text;
+        let grant: string | undefined;
+        const patientPreview = payload.previewPatientVoice as
+          | { patientId?: number }
+          | undefined;
+        if (patientPreview?.patientId != null) {
+          const authorization = await fetch("/api/voice/grant", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              patientId: patientPreview.patientId,
+              source: { kind: "patientVoicePreview" },
+            }),
+          });
+          if (!authorization.ok) return;
+          const granted = (await authorization.json()) as { grant: string; text: string };
+          spoken = granted.text;
+          grant = granted.grant;
+        }
         const r = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, ...payload }),
+          body: JSON.stringify({ text: spoken, grant, ...payload }),
         });
         if (!r.ok) return;
         const audio = new Audio(URL.createObjectURL(await r.blob()));
@@ -1087,7 +1111,10 @@ function VoicesTab({
                       source: "clone",
                     },
                   },
-                  `Olá, esta é a voz configurada para as mensagens de ${p.name}.`
+                  // Ignorado: a frase da prévia é composta pelo servidor, a
+                  // partir do nome que ELE tem para o paciente. O cliente não
+                  // escolhe o que a voz clonada de alguém diz.
+                  ""
                 )
               }
             />
