@@ -1749,3 +1749,59 @@ produzem **um** evento, não quatro.
 
 Passou com a implementação atual. `writeAudit` e as funções de domínio **não
 foram alteradas**.
+
+---
+
+## E.6 Fechamento — a regressão final, sobre o conjunto completo
+
+HEAD `e157b10`, com a 4.9.5 dentro.
+
+**Estáticas** — `tsc --noEmit` 0 erros · build de produção limpo · `eslint` 61
+problemas, a baseline exata.
+
+**Domínio e HTTP** — 13 suítes com 793 asserções, 0 falhas · offline puro 515
+(48 novas em `test-offline-origem`) · `conflict-codes` 42/42 ·
+`sync-preflight` 15/15 · `offline-idempotency` 34/34 · `audit-origem` 33/33 ·
+`audit-concorrencia` 17/17.
+
+**App shell e R9, em build de produção** — 17/17.
+
+**Os 7 lotes** — primeira rodada: 188 aprovados, 3 falhos, 191 testes, 107:26.
+Reexecução do lote afetado, com dev server e emulador novos:
+
+| lote | 1ª rodada | reexecução limpa |
+| --- | --- | --- |
+| `base` | **31 · 0** | — |
+| `conversa-por-opcoes` | 29 · 3 falhas | **32 · 0** |
+| `fases-4x` | **33 · 0** | — |
+| `controles-do-paciente` | **12 · 0** | — |
+| `offline` | **45 · 0** | — |
+| `responsivo-base` | **10 · 0** | — |
+| `responsivo-fases` | **28 · 0** | — |
+
+**Os 191 testes passaram em execução limpa.** O lote `offline` — que carrega a
+4.9 inteira, agora com os quatro cenários de origem — fechou verde na primeira
+rodada, sem reexecução.
+
+As três falhas foram tratadas pelo protocolo, e o que as condena continua sendo
+a medida, não o "rodei de novo e passou":
+
+1. **Todas timeout de 90s**, em três arquivos diferentes, nenhuma asserção
+   errada, nenhum deles importando `lib/offline`.
+2. **A margem.** `option-conversation-flow` #5 rodou sozinho quatro vezes:
+   58,5s · 66s · 72s · 78s — contra um teto de 90s. Ele é naturalmente longo, e
+   nesta máquina, sob carga 18–27, a folga acabou. Não é um teste que falha; é
+   um teste sem margem num computador ocupado.
+3. **O relógio da rodada.** 107 minutos para 191 testes. O lote
+   `conversa-por-opcoes` levou 26,1 minutos na reexecução limpa contra os 32,6
+   da rodada vermelha anterior.
+
+Nenhuma linha de produto foi alterada e nenhuma asserção enfraquecida para
+produzir esses verdes.
+
+### A Fase 4.9 está concluída
+
+Os treze riscos fechados com prova nominal (§E.1), o plano de testes §15
+percorrido item a item (§E.2), a lacuna que a Fase E encontrou fechada na 4.9.5
+com o defeito que a verificação adicional revelou junto — e a regressão
+completa verde sobre o conjunto final.
