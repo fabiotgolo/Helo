@@ -56,6 +56,9 @@ const state = {
   // O Agente está efetivamente FALANDO agora (não só conectado). Mantido para
   // diagnóstico/telemetria do orbe — não gateia mais a emergência.
   agentSpeaking: false,
+  // O cuidador está com o microfone aberto para ditar (Fase 5.2A). Não é voz
+  // que soa: é captura. Fica aqui porque o dispositivo é um só.
+  dictationActive: false,
   platformMuted: false,
   // Só lê o localStorage uma vez, do lado do cliente, para não divergir entre
   // SSR e hidratação (o servidor sempre renderiza "não mutado").
@@ -132,6 +135,54 @@ export function registerPlatformAudioPurge(
 export function purgePlatformAudio(escopo: EscopoLiberacaoAudio): void {
   console.log("[HELO AUDIO] released cached audio:", escopo);
   for (const purge of platformAudioPurges) purge(escopo);
+}
+
+// ——— Ditado do cuidador (Fase 5.2A) ———
+//
+// O microfone tem um dono de cada vez. O Agente Helo abre um stream WebRTC e o
+// mantém aberto pela conversa inteira; o ditado abre um stream curto e o fecha.
+// Dois donos ao mesmo tempo não é só desperdício: em boa parte dos aparelhos o
+// segundo `getUserMedia` reconfigura o dispositivo, e quem perde é a captura
+// que já estava em curso — a do Agente, no meio de uma frase do paciente.
+//
+// A arbitragem aqui é a mínima que impede isso: quem chegou primeiro fica, e o
+// segundo é recusado com uma frase que o cuidador entende. A coordenação fina
+// (enfileirar, retomar, ceder a vez) é da 5.2B; o que não pode é a 5.2A nascer
+// permitindo dois donos concorrentes.
+//
+// O transcript NÃO passa por aqui. Este módulo arbitra dispositivo, não
+// conteúdo — e o texto do ditado nunca chega perto da conversa do Agente.
+
+const dictationStops = new Set<() => void>();
+
+/** Registra como abortar a captura de uma instância de ditado. */
+export function registerDictationStop(stop: () => void): () => void {
+  dictationStops.add(stop);
+  return () => {
+    dictationStops.delete(stop);
+  };
+}
+
+/**
+ * Encerra qualquer captura de ditado em curso, em qualquer árvore React.
+ * Chamado no logout e na troca de paciente: um microfone aberto não pode
+ * atravessar a fronteira de nenhum dos dois.
+ */
+export function stopAllDictation(): void {
+  if (dictationStops.size > 0) console.log("[HELO AUDIO] dictation stopped");
+  for (const stop of dictationStops) stop();
+}
+
+export function isDictationActive(): boolean {
+  return state.dictationActive;
+}
+
+/** O ditado assumiu (ou soltou) o microfone. Idempotente. */
+export function setDictationActive(active: boolean): void {
+  if (state.dictationActive === active) return;
+  state.dictationActive = active;
+  console.log(active ? "[HELO AUDIO] dictation active" : "[HELO AUDIO] dictation ended");
+  emit();
 }
 
 export function isPlatformMuted(): boolean {
@@ -324,5 +375,7 @@ if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
     beginPatientVoiceOverride,
     endPatientVoiceOverride,
     isPatientVoiceActive,
+    isDictationActive,
+    setDictationActive,
   };
 }

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AppUser } from "@/lib/access-types";
 import { stopAllSpeech } from "@/lib/useSpeech";
-import { purgePlatformAudio } from "@/lib/audio-coordinator";
+import { purgePlatformAudio, stopAllDictation } from "@/lib/audio-coordinator";
 import {
   contarPendenciasOffline,
   limparArmazenamentoOffline,
@@ -117,6 +117,10 @@ export function useAuthUser(): {
     window.dispatchEvent(new Event("helo-agent-stop"));
     stopAllSpeech();
     purgePlatformAudio("todos");
+    //    O microfone também não atravessa: uma captura de ditado em curso é
+    //    descartada aqui, com as trilhas paradas. Sair da conta com o
+    //    indicador de gravação aceso seria o pior jeito de sair dela.
+    stopAllDictation();
     // 2. Sessões de modo em andamento (conversa, rotina, emergência, mensagem)
     //    tratam beforeunload como "encerre minha sessão com keepalive". O evento
     //    é disparado AQUI, antes de destruir a autenticação, porque o

@@ -21,7 +21,7 @@ import {
 } from "react";
 import type { HeloItemMode, ModeItem, Patient } from "@/lib/types";
 import { clearLocalMirrors, redirectToLogin } from "@/lib/use-auth";
-import { purgePlatformAudio } from "@/lib/audio-coordinator";
+import { purgePlatformAudio, stopAllDictation } from "@/lib/audio-coordinator";
 
 export const ACTIVE_PATIENT_KEY = "helo.patientId";
 const PATIENTS_CACHE_KEY = "helo.patients";
@@ -170,6 +170,9 @@ export function PatientProvider({ children }: { children: ReactNode }) {
     pacienteAnterior.current = patientId;
     if (anterior == null || anterior === patientId) return;
     purgePlatformAudio("pacientes");
+    // E o microfone junto: o áudio que estava sendo ditado foi falado sobre a
+    // pessoa que acabou de sair da tela.
+    stopAllDictation();
   }, [patientId]);
 
   // Persistência do paciente ativo + carga das configurações dele.

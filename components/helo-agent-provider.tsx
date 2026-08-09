@@ -25,6 +25,7 @@ import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { GESTURE_SEMANTIC_INTENTS, GESTURE_SEMANTIC_MESSAGES, useGestures } from "@/lib/gestures";
 import { useHelo } from "@/lib/helo-state";
 import {
+  isDictationActive,
   registerAgentSuppressor,
   setAgentConversationActive,
   setAgentSpeaking,
@@ -1672,6 +1673,14 @@ function HeloAgentSession({
       sdkSession.isOpen() ||
       statusRef.current !== "disconnected"
     ) return false;
+    // O outro lado da arbitragem da 5.2A: o ditado abriu o microfone primeiro
+    // e fica com ele. Conectar por cima reconfiguraria o dispositivo e a
+    // captura em curso perderia o áudio já falado — sem nenhum aviso a quem
+    // estava falando.
+    if (isDictationActive()) {
+      onError("O ditado está usando o microfone. Conclua ou descarte o ditado para conversar com a Helo.");
+      return false;
+    }
     startingRef.current = true;
     setStarting(true);
     onError(null);
