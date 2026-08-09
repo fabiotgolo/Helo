@@ -58,20 +58,7 @@ const ARQUIVOS = ["app", "components", "lib"]
 //
 // Enquanto uma entrada existir, a suíte imprime o aviso e o resumo final —
 // passar não pode parecer "está tudo certo".
-const PENDENCIAS = {
-  "app/atividades/gerenciar/page.tsx":
-    "Prévia da frase favorita: o botão fala o RASCUNHO digitado na voz clonada " +
-    "do paciente. Não existe grant possível — rascunho não é origem, e não deve " +
-    "virar uma. Auditado no fechamento da 5.1B: NÃO há bypass. Medido contra " +
-    "servidor real — rascunho sem grant 403, texto exato de frase salva sem " +
-    "grant 403, grant válido com outro texto 403. O Agent não alcança o botão " +
-    "(a tela não registra ação nenhuma). O que está quebrado é a TELA: o erro " +
-    "aparece num alerta vermelho com a mensagem crua do servidor (\"fala do " +
-    "paciente sem autorização válida\"), que um cuidador lê como perda de " +
-    "acesso ao paciente. Segue aberto por ser decisão de produto — falar na voz " +
-    "da plataforma, salvar antes de ouvir, ou remover o botão. " +
-    "Ver docs/modelo-de-confianca-voz.md.",
-};
+const PENDENCIAS = {};
 
 /**
  * Recorta a função que contém uma posição: do `const nome = ` mais próximo
@@ -159,6 +146,56 @@ console.log("\n— Quem pode produzir voz do paciente pede o grant —");
     "a lista de pendências não tem entrada obsoleta",
     resolvidas.length === 0,
     `— já corrigido, remova de PENDENCIAS: ${resolvidas.join(", ")}`
+  );
+}
+
+console.log("\n— Rascunho não vira fala do paciente —");
+{
+  // A regra de produto: texto ainda não salvo não é pronunciado na voz do
+  // paciente. Ela não é imposta por uma checagem — é imposta pela AUSÊNCIA do
+  // caminho. O gerenciador de frases não pede síntese nenhuma; a frase é
+  // ouvida depois de salva, no modal, onde o servidor resolve a origem.
+  //
+  // Esta verificação existe porque a versão anterior desta tela mandava o
+  // texto sendo digitado para /api/tts como fala do paciente. O servidor
+  // recusava (403), e o cuidador recebia um alerta técnico por uma operação
+  // que nunca mais ia funcionar.
+  const gerenciador = readFileSync("app/atividades/gerenciar/page.tsx", "utf8");
+  check(
+    "o gerenciador de frases não chama /api/tts",
+    !/fetch\(\s*["'`]\/api\/tts/.test(gerenciador),
+    "— o texto do formulário é rascunho, e rascunho não tem origem para autorizar"
+  );
+  check(
+    "…nem pede grant para o que ainda não foi salvo",
+    !/\/api\/voice\/grant/.test(gerenciador),
+    "— criar origem para rascunho seria contornar o R-01 por dentro"
+  );
+  check(
+    "e o botão de prévia do rascunho não voltou",
+    !/previewPhrase/.test(gerenciador),
+    "— ele só podia falar texto não persistido; não havia o que consertar nele"
+  );
+  check(
+    "a tela diz ao cuidador onde a frase é ouvida",
+    /Frases para se ouvir/.test(gerenciador) && /Depois de salva/.test(gerenciador),
+    "— remover o botão sem explicar deixaria a pergunta 'e como eu ouço?' sem resposta"
+  );
+  // A linguagem da tela é do cuidador, não da arquitetura.
+  const copyDaTela = gerenciador.match(/<p className="mt-1 text-sm text-ink-soft">([^<]*)<\/p>/)?.[1] ?? "";
+  check(
+    "sem jargão técnico na explicação",
+    copyDaTela.length > 0 &&
+      !/(SpeechGrant|403|autoriza|confirmationStatus|token|grant)/i.test(copyDaTela),
+    `— "${copyDaTela}"`
+  );
+
+  // O caminho seguro que já existia continua de pé.
+  const modal = readFileSync("components/phrases-to-listen-modal.tsx", "utf8");
+  check(
+    "o modal de frases SALVAS segue pedindo grant por frase",
+    /kind: "favoritePhrase", phraseId: phrase\.id/.test(modal),
+    "— é ele o caminho de ouvir a frase na voz do paciente"
   );
 }
 

@@ -35,8 +35,6 @@ import {
 } from "@/lib/activity-types";
 import type { Gesture } from "@/lib/types";
 import type { FavoritePhrase } from "@/lib/favorite-phrases";
-import { setPhraseAudioPlaying } from "@/lib/phrase-audio";
-import { usePreviewAudio } from "@/lib/voice/use-preview-audio";
 
 // Ordem canônica das respostas faladas no editor — SIM, TALVEZ, NÃO.
 const RESPONSE_GESTURES: { g: Gesture; label: string }[] = [
@@ -108,9 +106,6 @@ export default function GerenciarAtividadesPage() {
   const [phrases, setPhrases] = useState<FavoritePhrase[]>([]);
   const [editingPhraseId, setEditingPhraseId] = useState<string | null>(null);
   const [editingPhraseText, setEditingPhraseText] = useState("");
-  const [previewingPhrase, setPreviewingPhrase] = useState(false);
-  // Dono do áudio e do ObjectURL da prévia (lib/voice/use-preview-audio.ts).
-  const previa = usePreviewAudio();
 
   const loadPhrases = useCallback(async () => {
     if (patientId == null) return;
@@ -194,11 +189,6 @@ export default function GerenciarAtividadesPage() {
   useEffect(() => {
     void loadPhrases().catch(() => setPhrases([]));
   }, [loadPhrases]);
-
-  // Sair da tela no meio de uma prévia: o `usePreviewAudio` já para o áudio e
-  // libera o ObjectURL na desmontagem; aqui resta devolver a fala da
-  // plataforma, que a prévia havia suspendido.
-  useEffect(() => () => setPhraseAudioPlaying(false), []);
 
   const save = useCallback(async () => {
     if (!draft || patientId == null || saving) return;
@@ -297,35 +287,21 @@ export default function GerenciarAtividadesPage() {
     } finally { setSavingPhrase(false); }
   }, [patientId, phraseText, savingPhrase, loadPhrases]);
 
-  const previewPhrase = useCallback(async (text: string) => {
-    if (patientId == null || !text.trim() || previewingPhrase) return;
-    setPreviewingPhrase(true);
-    setErrorMsg(null);
-    previa.stop();
-    try {
-      const response = await fetch("/api/tts", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId, text: text.trim(), speakerRole: "patient", confirmationStatus: "confirmed" }),
-      });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "não foi possível preparar a prévia da voz");
-      }
-      setPhraseAudioPlaying(true);
-      await previa.play(await response.blob(), {
-        onEnded: () => { setPhraseAudioPlaying(false); setPreviewingPhrase(false); },
-        onError: () => {
-          setPhraseAudioPlaying(false);
-          setPreviewingPhrase(false);
-          setErrorMsg("Não foi possível reproduzir a prévia.");
-        },
-      });
-    } catch (error) {
-      setPhraseAudioPlaying(false);
-      setPreviewingPhrase(false);
-      setErrorMsg((error as Error).message);
-    }
-  }, [patientId, previewingPhrase, previa]);
+  // ——— Onde havia um "Ouvir" para o rascunho ———
+  //
+  // Os dois botões de prévia mandavam o texto que estava sendo DIGITADO para
+  // /api/tts na voz do paciente. Desde a Fase 5.1A o servidor recusa isso, e
+  // recusa com razão: rascunho não é fala autorizada de ninguém. O que o
+  // cuidador via era um alerta vermelho dizendo "fala do paciente sem
+  // autorização válida" — uma frase técnica que se lê como perda de acesso ao
+  // paciente, para uma operação que nunca mais vai funcionar.
+  //
+  // Os botões saíram. Não há prévia de rascunho a "consertar": a frase é
+  // ouvida depois de salva, em "Frases para se ouvir", onde o servidor resolve
+  // a origem e autoriza. O texto acima do formulário passou a dizer isso.
+  //
+  // Se um dia fizer sentido conferir a redação antes de salvar, o caminho é a
+  // voz da PLATAFORMA — não a do paciente. Ver docs/modelo-de-confianca-voz.md.
 
   const saveEditedPhrase = useCallback(async () => {
     if (patientId == null || !editingPhraseId || !editingPhraseText.trim()) return;
@@ -430,10 +406,11 @@ export default function GerenciarAtividadesPage() {
         {state === "ok" && caps?.create && (
           <section className="rounded-3xl border border-line bg-card p-5 sm:p-6">
             <h2 className="text-xl font-medium">Adicionar Frase Favorita do Paciente</h2>
-            <p className="mt-1 text-sm text-ink-soft">Ela ficará disponível em “Frases para se ouvir”, com áudio preparado antecipadamente.</p>
+            {/* O texto diz onde a frase é ouvida, porque não se ouve aqui: a
+                voz do paciente só empresta a fala a uma frase já salva. */}
+            <p className="mt-1 text-sm text-ink-soft">Depois de salva, ela fica disponível em “Frases para se ouvir”, já na voz do paciente e com o áudio preparado antes.</p>
             <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               <input value={phraseText} onChange={(event) => setPhraseText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void savePhrase(); }} maxLength={500} placeholder="Ex: A Vida me Interessa" className="min-w-0 flex-1 rounded-2xl border border-line bg-page px-4 py-3 outline-none focus:border-accent" />
-              <button type="button" onClick={() => void previewPhrase(phraseText)} disabled={!phraseText.trim() || previewingPhrase} className="rounded-full border border-line px-5 py-3 font-medium hover:border-accent disabled:opacity-60">{previewingPhrase ? "Ouvindo…" : "🔊 Ouvir"}</button>
               <button type="button" onClick={() => void savePhrase()} disabled={!phraseText.trim() || savingPhrase} className="rounded-full bg-accent px-6 py-3 font-medium text-on-accent disabled:opacity-60">{savingPhrase ? "Preparando…" : "Salvar Frase"}</button>
             </div>
             {phrases.length > 0 && (
@@ -445,7 +422,6 @@ export default function GerenciarAtividadesPage() {
                       {editingPhraseId === phrase.id ? (
                         <div className="flex flex-col gap-2 sm:flex-row">
                           <input value={editingPhraseText} onChange={(event) => setEditingPhraseText(event.target.value)} maxLength={500} className="min-w-0 flex-1 rounded-xl border border-line bg-card px-3 py-2 outline-none focus:border-accent" />
-                          <button type="button" onClick={() => void previewPhrase(editingPhraseText)} disabled={!editingPhraseText.trim() || previewingPhrase} className="rounded-full border border-line px-4 py-2 text-sm disabled:opacity-60">Ouvir</button>
                           <button type="button" onClick={() => void saveEditedPhrase()} disabled={!editingPhraseText.trim() || savingPhrase} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-on-accent disabled:opacity-60">Salvar</button>
                           <button type="button" onClick={() => { setEditingPhraseId(null); setEditingPhraseText(""); }} className="px-3 py-2 text-sm text-ink-soft">Cancelar</button>
                         </div>

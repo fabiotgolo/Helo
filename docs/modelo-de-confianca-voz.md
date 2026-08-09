@@ -135,25 +135,26 @@ sabe. Seria custo sem prova nova.
 
 ---
 
-## Prévia de frase favorita — veredito formal
+## Prévia de frase favorita — auditada e resolvida
 
-Verificado no fechamento da 5.1B, com o caminho inteiro mapeado e o
-comportamento medido contra um servidor real.
+Auditada no fechamento da 5.1B, com o caminho inteiro mapeado e o
+comportamento medido contra um servidor real. **Conclusão: não havia bypass —
+havia uma tela morta.** Os botões foram removidos.
 
-**Onde:** Atividades → Gerenciar → frases → "🔊 Ouvir"
+**Onde era:** Atividades → Gerenciar → frases → "🔊 Ouvir"
 ([app/atividades/gerenciar/page.tsx](../app/atividades/gerenciar/page.tsx), `previewPhrase`)
 
-### O caminho, ponta a ponta
+### O caminho que existia, ponta a ponta
 
 | | |
 |---|---|
-| **Quem aciona** | Dois botões, ambos ligados a campos de digitação: o da frase nova (`phraseText`) e o da edição (`editingPhraseText`) |
-| **Texto reproduzido** | O **rascunho ainda não salvo**. Não é uma frase persistida |
+| **Quem acionava** | Dois botões, ambos ligados a campos de digitação: o da frase nova (`phraseText`) e o da edição (`editingPhraseText`) |
+| **Texto reproduzido** | O **rascunho ainda não salvo**. Não era uma frase persistida |
 | **Caminho** | `POST /api/tts` direto, com `speakerRole: "patient"`, `confirmationStatus: "confirmed"` e **sem grant** |
 | **Fonte de voz** | Resolvida pelo servidor (`resolvePatientVoice`): clone do paciente, voz do catálogo escolhida para ele, ou fallback aprovado |
 | **Autenticação** | Sessão obrigatória; `requirePatientAccess` exige vínculo ativo com aquele paciente |
-| **Alcançável pelo Agent** | **Não.** `app/atividades/gerenciar/page.tsx` não chama `useRegisterHeloUIActions` — não registra ação nenhuma. Nenhum `actionId` alcança este handler |
-| **URL direta** | Não se aplica: nada é persistido. O áudio nunca chega a existir |
+| **Alcançável pelo Agent** | **Não.** `app/atividades/gerenciar/page.tsx` não chama `useRegisterHeloUIActions` — não registra ação nenhuma. Nenhum `actionId` alcançava este handler |
+| **URL direta** | Não se aplicava: nada era persistido. O áudio nunca chegava a existir |
 
 ### Veredito: não há bypass
 
@@ -168,38 +169,52 @@ Medido, não deduzido — três casos contra `/api/tts`:
 O portão está no grant, não no texto: nem acertar a frase salva palavra por
 palavra abre a porta. O invariante da 5.1A está de pé.
 
-### Mas isto não é uma "exceção segura"
+### Mas não era uma "exceção segura"
 
-É importante não arredondar o veredito. O botão **não** é um caso benigno que
-merece dispensa: pela classificação pedida, ele é o tipo **C** — fala funcional
-na voz do paciente, com texto que o cliente escolhe. É exatamente o que o R-01
+É importante não arredondar o veredito. O botão **não** era um caso benigno que
+merecia dispensa: pela classificação, ele era o tipo **C** — fala funcional na
+voz do paciente, com texto que o cliente escolhe. É exatamente o que o R-01
 existe para proibir, e por isso não existe grant possível para ele: **rascunho
 não é origem, e não deve virar uma.**
 
-O que está certo hoje é a **recusa**. O que está errado é a tela.
+O que estava certo era a **recusa**. O que estava errado era a tela — e foi a
+tela que mudou.
 
 **Correção de um registro anterior:** a documentação da 5.1A dizia que o botão
-"falha em silêncio". Está incorreto, e a diferença importa. Ele falha de forma
-**visível e enganosa**: o `catch` mostra num alerta vermelho a mensagem crua do
-servidor — *"fala do paciente sem autorização válida"* —, que soa como um
-problema de permissão do cuidador quando na verdade é o recurso não existir.
-Um cuidador lendo isso conclui que perdeu acesso ao paciente.
+"falha em silêncio". Está incorreto, e a diferença importa. Ele falhava de
+forma **visível e enganosa**: o `catch` mostrava num alerta vermelho a mensagem
+crua do servidor — *"fala do paciente sem autorização válida"* —, que soa como
+um problema de permissão do cuidador quando na verdade era o recurso não
+existir. Um cuidador lendo isso concluiria que perdeu acesso ao paciente.
 
-### Por que segue em aberto
+### Resolução: os botões saíram
 
-Não por risco de autoria — esse está fechado. Por ser uma decisão de **produto**
-sobre o que o botão deve fazer, e as três saídas mudam o que o cuidador
-consegue conferir:
+Das três saídas avaliadas — falar na voz da plataforma, salvar antes de ouvir,
+ou remover —, a escolhida foi **remover**, por ser a menor mudança que resolve
+o problema real. Não havia prévia a consertar: por construção, os dois botões
+estavam ligados a campos de digitação, então o texto era **sempre** rascunho.
+Desabilitar "enquanto for rascunho" seria desabilitar para sempre.
 
-| Saída | O que muda |
+O que ficou:
+
+| Antes | Agora |
 |---|---|
-| Falar na voz da **plataforma** | O cuidador confere a redação, que é para o que o botão serve. A voz do paciente segue disponível para frases **salvas**, no modal "Frases para ouvir" |
-| **Salvar antes** de ouvir | Mantém a voz do paciente, com origem `favoritePhrase`. Em troca, cria registro de uma frase que o cuidador ainda podia descartar |
-| **Remover** o botão | A escuta fica só no modal de frases salvas |
+| "🔊 Ouvir" ao lado do campo, e "Ouvir" na edição | Nenhum dos dois |
+| `POST /api/tts` com o rascunho, `speakerRole: "patient"` | Nenhuma chamada de síntese parte desta tela |
+| Alerta vermelho: *"fala do paciente sem autorização válida"* | Nenhuma tentativa inválida, logo nenhum 403 |
+| "Ela ficará disponível em 'Frases para se ouvir'…" | "**Depois de salva**, ela fica disponível em 'Frases para se ouvir', já na voz do paciente e com o áudio preparado antes." |
 
-Qualquer uma delas reaproveita arquitetura existente. **Nenhuma exige uma
-segunda arquitetura de autoria**, e nenhuma deve inventar uma origem para
-rascunho.
+A frase é ouvida onde sempre foi seguro ouvi-la: **depois de salva**, no modal
+"Frases para se ouvir", que pede grant de origem `favoritePhrase` por frase.
+Esse caminho não foi tocado.
+
+**Nenhuma arquitetura nova.** Não se criou grant para rascunho, nem exceção de
+prévia, nem reuso de `patientVoicePreview` para texto livre. `/api/tts`
+continua exatamente como estava — a prova disso são os seis casos de
+`test:voice:authorization`, que seguem devolvendo 403.
+
+Se um dia fizer sentido conferir a redação antes de salvar, o caminho é a voz
+da **plataforma** — não a do paciente.
 
 ### O que o gate NÃO cobre, e a quem pertence
 

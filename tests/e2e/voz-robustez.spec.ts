@@ -334,6 +334,122 @@ test("o botão de socorro continua utilizável depois de uma falha", async ({ pa
   await expect(botao).toBeEnabled();
 });
 
+test("salvar uma frase favorita não pede voz do paciente nem mostra erro", async ({ page, request }) => {
+  // A tela tinha um "🔊 Ouvir" que mandava o texto SENDO DIGITADO para
+  // /api/tts na voz do paciente. Desde a 5.1A o servidor recusa — com razão,
+  // rascunho não é fala autorizada de ninguém — e o cuidador levava um alerta
+  // vermelho com a mensagem crua do servidor por uma operação que nunca mais
+  // ia funcionar.
+  //
+  // O botão saiu. Este teste prova as duas metades: salvar continua
+  // funcionando, e nenhuma síntese é sequer tentada.
+  const acesso = await request.post("/api/admin/access", {
+    data: {
+      userId: semente.assistente.id,
+      patientId: semente.pacienteId,
+      permissions: [
+        "viewDashboard", "viewSessions", "viewMetrics", "createSession", "editGestures",
+        "viewActivities", "createActivities", "editActivities",
+      ],
+    },
+  });
+  expect(acesso.ok(), "conceder as permissões de Atividades").toBeTruthy();
+
+  const provedor: Provedor = { modo: "ok", atrasoMs: 0, chamadas: 0, abortadas: 0 };
+  await interceptarTts(page, provedor);
+  const grants: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/voice/grant")) grants.push(r.url());
+  });
+
+  await page.goto("/atividades/gerenciar");
+  const campo = page.getByPlaceholder(/A Vida me Interessa/i);
+  await expect(campo).toBeVisible();
+
+  // Nenhum "Ouvir" ao lado do campo de rascunho.
+  await expect(
+    page.getByRole("button", { name: /Ouvir/i }),
+    "não há botão de prévia do rascunho"
+  ).toHaveCount(0);
+
+  await campo.fill("Quero ver o mar hoje.");
+  await page.getByRole("button", { name: /Salvar Frase/i }).click();
+
+  // A frase aparece na lista de salvas — o caminho principal segue inteiro.
+  await expect(
+    page.getByText("Quero ver o mar hoje.", { exact: false }),
+    "a frase salva aparece na lista"
+  ).toBeVisible({ timeout: 20_000 });
+
+  // Nenhuma tentativa inválida saiu, logo nenhum 403 pôde acontecer.
+  expect(provedor.chamadas, "nenhuma síntese foi pedida ao salvar").toBe(0);
+  expect(grants.length, "nenhum grant foi pedido para rascunho").toBe(0);
+
+  // E nada técnico na tela.
+  //
+  // A asserção é sobre o CONTEÚDO, não sobre a ausência de qualquer alerta.
+  // Neste ambiente `/synthesizePhraseAudio` é uma Cloud Function que não está
+  // no ar, então a tela mostra "A frase foi salva, mas o áudio será preparado
+  // novamente ao abrir a atividade" — uma frase em português claro, sobre
+  // outro assunto, e pré-existente. Exigir zero alertas transformaria essa
+  // condição de ambiente numa falha de teste.
+  const corpo = (await page.locator("body").innerText()).toLowerCase();
+  for (const vazamento of ["403", "autorização válida", "speechgrant", "confirmationstatus", "grant"]) {
+    expect(corpo, `a tela não mostra "${vazamento}"`).not.toContain(vazamento);
+  }
+});
+
+test("editar uma frase salva também não pede voz do paciente", async ({ page, request }) => {
+  await request.post("/api/admin/access", {
+    data: {
+      userId: semente.assistente.id,
+      patientId: semente.pacienteId,
+      permissions: [
+        "viewDashboard", "viewSessions", "viewMetrics", "createSession", "editGestures",
+        "viewActivities", "createActivities", "editActivities",
+      ],
+    },
+  });
+  const provedor: Provedor = { modo: "ok", atrasoMs: 0, chamadas: 0, abortadas: 0 };
+  await interceptarTts(page, provedor);
+
+  await page.goto("/atividades/gerenciar");
+  const campo = page.getByPlaceholder(/A Vida me Interessa/i);
+  await expect(campo).toBeVisible();
+  await campo.fill("Quero ouvir música.");
+  await page.getByRole("button", { name: /Salvar Frase/i }).click();
+  await expect(page.getByText("Quero ouvir música.", { exact: false })).toBeVisible({ timeout: 20_000 });
+
+  await page.getByRole("button", { name: /^Editar$/ }).first().click();
+  // Em edição, o texto no campo também é rascunho — e também não tem "Ouvir".
+  await expect(
+    page.getByRole("button", { name: /Ouvir/i }),
+    "a edição não oferece prévia do texto em digitação"
+  ).toHaveCount(0);
+
+  // O campo de edição é o input que carrega o texto atual da frase.
+  const emEdicao = page.getByRole("textbox").filter({ hasNot: campo }).last();
+  await emEdicao.fill("Quero ouvir música clássica.");
+
+  // A confirmação da edição é a resposta do PATCH, e não a lista atualizada:
+  // `saveEditedPhrase` só recarrega a lista DEPOIS de chamar
+  // `/synthesizePhraseAudio`, que é uma Cloud Function fora do ar neste
+  // ambiente. Esperar pela lista seria testar o emulador de Functions, não o
+  // que esta suíte existe para provar.
+  const patch = page.waitForResponse(
+    (r) => r.url().includes("/api/favorite-phrases") && r.request().method() === "PATCH"
+  );
+  await page.getByRole("button", { name: /^Salvar$/ }).first().click();
+  const resposta = await patch;
+  expect(resposta.ok(), "a edição é gravada").toBeTruthy();
+
+  expect(provedor.chamadas, "editar não pede síntese de rascunho").toBe(0);
+  const corpo = (await page.locator("body").innerText()).toLowerCase();
+  for (const vazamento of ["403", "autorização válida", "speechgrant", "grant"]) {
+    expect(corpo, `a tela não mostra "${vazamento}"`).not.toContain(vazamento);
+  }
+});
+
 test("uma fala nova aborta a síntese da anterior", async ({ page }) => {
   // 6s de atraso: a primeira síntese continua no ar quando a segunda começa.
   // É a situação real da Rotina — o cuidador toca uma resposta e logo a

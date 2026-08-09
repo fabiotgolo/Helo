@@ -278,4 +278,4 @@ navegador existir, dita por um caso concreto em vez de por princípio.
 | Corpo de resposta travado no meio da transmissão do TTS | Exigiria watchdog por chunk; errar o número corta a fala de alguém |
 | Prazo na composição de música (Functions) | Demora minutos por natureza; falta medir a distribuição real antes de escolher |
 | Corpo cru da ElevenLabs no log da geração de música | R-07 fora do recorte de TTS desta fase |
-| Prévia de frase favorita | **Sem bypass de autoria** (auditada e medida no fechamento da 5.1B); o que segue aberto é a decisão de produto e a mensagem de erro que a tela mostra ao cuidador — ver [modelo-de-confianca-voz.md](modelo-de-confianca-voz.md) |
+| ~~Prévia de frase favorita~~ | **Fechada.** Sem bypass de autoria (auditada e medida); os botões de prévia de rascunho foram removidos — ver [modelo-de-confianca-voz.md](modelo-de-confianca-voz.md) |
