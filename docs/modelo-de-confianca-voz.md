@@ -235,6 +235,28 @@ autenticação. Isso é **R-04**, e continua aberto lá.
 **A ação `atividades.frases.ouvir`** (do modal) é classe `patientResponse` e
 segue inalcançável pelo Agent — verificado por `test:agent:invariants`.
 
+## Ditado do cuidador (Fase 5.2A)
+
+A voz entrou no produto por um segundo caminho, e ele **não** mexe neste
+modelo de confiança. O cuidador pode falar para preencher quatro campos de
+texto; o que sai disso é rascunho, e rascunho não tem autoria de ninguém até
+alguém apertar o botão que já existia.
+
+`QuestionSource = "VOICE_TRANSCRIPTION"` descreve **como o texto entrou** —
+falado em vez de digitado. Não é autoria do paciente, não é confirmação, não
+é consentimento e não vale como maior confiança. Uma pergunta ditada percorre
+exatamente o mesmo caminho de uma digitada.
+
+Estruturalmente: o portão de autoria só aceita
+`OptionConversationFinalStatement`, e o tipo que carrega `questionSource` nem
+é avaliável por ele. Não há como um transcript virar fala confirmada, nem
+forjado.
+
+O recurso está **desligado em produção** enquanto o workspace ElevenLabs do
+Helo (Grant Tier 2) não suportar Zero Retention Mode — retenção normal não é
+fallback permitido. Detalhes em
+[`docs/ditado-do-cuidador.md`](ditado-do-cuidador.md).
+
 ## Como escrever sobre isto
 
 | Não escreva | Escreva |
@@ -253,3 +275,4 @@ segue inalcançável pelo Agent — verificado por `test:agent:invariants`.
 | [`lib/voice/speech-sources.ts`](../lib/voice/speech-sources.ts) | As seis origens legítimas e como cada uma é resolvida |
 | [`lib/helo-action-registry.ts`](../lib/helo-action-registry.ts) | `HeloActionClass`, `isActionAllowedFor` |
 | [`docs/fase-5.0-voz-auditoria.md`](fase-5.0-voz-auditoria.md) | A auditoria que originou R-01 a R-05 |
+| [`docs/ditado-do-cuidador.md`](ditado-do-cuidador.md) | O ditado da Fase 5.2A e a política de retenção zero |

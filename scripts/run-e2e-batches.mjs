@@ -93,6 +93,24 @@ const LOTES = [
     arquivos: ["tests/e2e/voz-robustez.spec.ts"],
   },
   {
+    nome: "voz-ditado",
+    titulo: "Ditado do cuidador: transcrição vira rascunho e nada mais (5.2A)",
+    arquivos: ["tests/e2e/voz-ditado.spec.ts"],
+    // O ditado nasce DESLIGADO — é assim que ele vai para produção enquanto o
+    // workspace da ElevenLabs não suportar retenção zero. Aqui ele é ligado de
+    // propósito, para que o `GET /api/voice/dictation` percorra o código real
+    // do servidor e devolva `available: true`.
+    //
+    // A chave é intencionalmente inválida: `POST /api/voice/dictation` é
+    // interceptado na aba pelo próprio teste e nunca chega ao servidor. Se
+    // algum dia chegar, a chamada morre num 401 da ElevenLabs — sem custo, e
+    // com o teste falhando, que é o que se quer.
+    env: {
+      HELO_VOICE_DICTATION_ENABLED: "true",
+      ELEVENLABS_API_KEY: "chave-invalida-de-teste-5-2a",
+    },
+  },
+  {
     nome: "offline",
     titulo: "Continuidade sem conexão e armazenamento local",
     // `offline-app-shell.spec.ts` NÃO entra aqui, e não é esquecimento: ele
@@ -168,9 +186,10 @@ async function limparBanco() {
 
 // ---------- Dev server por lote ----------
 
-function ambienteDoServidor() {
+function ambienteDoServidor(extra = {}) {
   return {
     ...process.env,
+    ...extra,
     PORT: String(PORTA),
     NEXT_DIST_DIR: DIST,
     FIRESTORE_EMULATOR_HOST: EMU,
@@ -181,7 +200,12 @@ function ambienteDoServidor() {
   };
 }
 
-async function subirServidor() {
+/**
+ * `extra` são variáveis do LOTE. Existe porque a 5.2A precisa de um servidor
+ * com o ditado ligado, e ligá-lo para a suíte inteira mudaria o comportamento
+ * de lotes que não têm nada a ver com isso.
+ */
+async function subirServidor(extra) {
   if (await alcancavel(BASE_URL, 1500)) {
     throw new Error(
       `a porta ${PORTA} já está ocupada. Cada lote precisa de um dev server ` +
@@ -193,7 +217,7 @@ async function subirServidor() {
   // filho sobrevive ao pai e a porta fica presa para o lote seguinte.
   const proc = spawn("npx", ["next", "dev", "--webpack"], {
     cwd: RAIZ,
-    env: ambienteDoServidor(),
+    env: ambienteDoServidor(extra),
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -327,7 +351,7 @@ async function rodarLote(lote) {
   await limparBanco();
 
   log(`   subindo dev server novo em ${BASE_URL}…`);
-  const servidor = await subirServidor();
+  const servidor = await subirServidor(lote.env);
   try {
     log("   pré-compilando rotas…");
     await aquecerRotas();
