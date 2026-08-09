@@ -1,4 +1,5 @@
 import { requirePatientAccess, requireUser } from "@/lib/auth";
+import { BYTES_DE_ASSINATURA, verificaContainer } from "@/lib/voice/audio-container";
 import { TAMANHO_MAXIMO_BYTES, tipoDeAudioAceito } from "@/lib/voice/dictation";
 import { ditadoDisponivel, transcreve } from "@/lib/voice/dictation-server";
 import { statusParaCliente } from "@/lib/voice/eleven-fetch";
@@ -75,15 +76,36 @@ export async function POST(request: Request) {
   // O `type` é o que o navegador declarou; o `name` é o que o cliente
   // escolheu. Conferimos o primeiro contra a allowlist e ignoramos o segundo
   // por completo — um nome de arquivo nunca foi evidência de formato.
-  if (!tipoDeAudioAceito(audio.type)) {
+  const tipo = tipoDeAudioAceito(audio.type);
+  if (!tipo) {
     return recusa(415, "formato de áudio não suportado", "formato");
   }
-  // O tamanho REAL, agora que ele é conhecido. Independente do cronômetro de
-  // 60s, que vive no navegador e por isso não conta como garantia.
+  if (audio.size === 0) return recusa(400, "áudio vazio", "corpo");
+  // O tamanho REAL, agora que ele é conhecido. Independente do `Content-Length`
+  // (que o cliente escreve) e do cronômetro de 60s (que vive no navegador) —
+  // nenhum dos dois é garantia, e é este que vale.
   if (audio.size > TAMANHO_MAXIMO_BYTES) {
     return recusa(413, "áudio longo demais", "tamanho");
   }
-  if (audio.size === 0) return recusa(400, "áudio vazio", "corpo");
+
+  // ——— E o que ele É ———
+  //
+  // Doze bytes, antes de qualquer coisa sair daqui. O `Content-Type` do
+  // multipart é texto escrito pelo cliente; a assinatura do contêiner não é.
+  // Os dois têm de concordar — um WebM legítimo declarado como `audio/mp4`
+  // não é um navegador confuso, é alguém procurando qual dos dois lados o
+  // Helo usa para decidir.
+  const cabeca = new Uint8Array(await audio.slice(0, BYTES_DE_ASSINATURA).arrayBuffer());
+  const veredicto = verificaContainer(cabeca, tipo);
+  if (!veredicto.ok) {
+    // O motivo vai para o log do servidor; o cliente recebe a mesma recusa nos
+    // dois casos. Nada do conteúdo é registrado — nem os bytes, nem o nome.
+    console.error("[DITADO] conteúdo recusado", {
+      motivo: veredicto.motivo,
+      declarado: tipo,
+    });
+    return recusa(415, "formato de áudio não suportado", "formato");
+  }
 
   const resultado = await transcreve(audio);
   if (!resultado.ok) {

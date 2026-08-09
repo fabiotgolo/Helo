@@ -8,11 +8,12 @@
 // servidor, e recebe de volta um booleano — nunca a configuração.
 
 import {
+  BASE_SCRIBE,
   IDIOMA_SCRIBE,
   MODELO_SCRIBE,
   PRAZO_TRANSCRICAO_MS,
-  limpaTranscricao,
   urlDoScribe,
+  validaTranscricao,
 } from "@/lib/voice/dictation";
 import {
   chamaElevenLabsJson,
@@ -39,6 +40,26 @@ export function provedorConfigurado(): boolean {
 
 export function ditadoDisponivel(): boolean {
   return ditadoHabilitado() && provedorConfigurado();
+}
+
+/**
+ * Endereço do provedor. Em produção é a ElevenLabs, e ponto.
+ *
+ * Fora de produção, `HELO_DICTATION_PROVIDER_BASE` aponta para um servidor de
+ * mentira — é o que permite exercitar o endpoint inteiro (autorização, tipo,
+ * assinatura, tamanho, prazo, 429, 500, corpo inválido) sem uma chamada real e
+ * sem um centavo gasto, que é exigência desta fase e da anterior.
+ *
+ * A checagem de `NODE_ENV` é o ponto todo: uma variável de ambiente que
+ * redirecionasse o áudio de um cuidador em produção seria uma exfiltração com
+ * uma linha de configuração. Aqui ela simplesmente não é lida.
+ *
+ * O que este desvio NÃO faz é montar a URL de outro jeito: `urlDoScribe` é a
+ * única forma de construí-la, e ela sempre acrescenta `enable_logging=false`.
+ */
+function baseDoProvedor(): string {
+  if (process.env.NODE_ENV === "production") return BASE_SCRIBE;
+  return process.env.HELO_DICTATION_PROVIDER_BASE || BASE_SCRIBE;
 }
 
 export type ResultadoDaTranscricao =
@@ -78,7 +99,7 @@ export async function transcreve(audio: Blob): Promise<ResultadoDaTranscricao> {
   // `enable_logging=false` vai na QUERY (é onde o endpoint o lê) e não no
   // multipart. Não há caminho neste arquivo que monte a URL sem ele.
   const chamada = await chamaElevenLabsJson<RespostaDoScribe>(
-    urlDoScribe(),
+    urlDoScribe(baseDoProvedor()),
     { method: "POST", headers: { "xi-api-key": apiKey }, body: form, cache: "no-store" },
     { prazoMs: PRAZO_TRANSCRICAO_MS, rotulo: "dictation" }
   );
@@ -98,8 +119,20 @@ export async function transcreve(audio: Blob): Promise<ResultadoDaTranscricao> {
   // Só o texto. `words`, `language_probability` e o resto da resposta não
   // entram no Helo — nem em variável, nem em log.
   //
+  // E o texto é CONFERIDO como estrutura antes de virar transcrição. Um 200
+  // com corpo inesperado — objeto onde devia haver string, resposta de outro
+  // endpoint, página de erro de um proxy no meio do caminho — não pode
+  // atravessar daqui e aparecer no campo do cuidador como `[object Object]`,
+  // como um JSON, ou como um texto de dez mil caracteres. Corpo que não serve
+  // é falha de resposta, e é tratado como o provedor estar fora.
+  const transcript = validaTranscricao(chamada.dados?.text);
+  if (transcript === null) {
+    console.error("[DITADO] resposta do provedor sem transcrição utilizável");
+    return { ok: false, falha: "badResponse", status: null };
+  }
+
   // Texto vazio é sucesso, não falha: o provedor ouviu e não havia fala. Quem
   // decide o que fazer com isso é a interface, que não mexe no campo e diz
   // "não consegui entender" — bem diferente de "o serviço está fora".
-  return { ok: true, transcript: limpaTranscricao(chamada.dados.text) };
+  return { ok: true, transcript };
 }
