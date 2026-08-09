@@ -61,12 +61,38 @@ const LOTES = [
       "tests/e2e/conversa-regressao.spec.ts",
     ],
   },
+  // ——— A conversa por opções vem em DOIS lotes, e não em um ———
+  //
+  // Ela era um lote só, com os 32 testes dos quatro arquivos. Passava, mas com
+  // pouca folga, e por um motivo que é da natureza dessas jornadas: um caminho
+  // por opções desce vários níveis, apresenta ao paciente, registra o gesto e
+  // volta — são muitas idas e vindas ao servidor, e em modo dev cada uma delas
+  // compila. Os casos mais longos medem ~52 s numa máquina ociosa, contra um
+  // teto de 90 s por teste. Sobra menos de duas vezes.
+  //
+  // Somados, os 32 mantinham um único `next dev` no ar por 30 a 40 minutos. É
+  // exatamente a situação que este runner existe para evitar — está escrito no
+  // cabeçalho — e o teto de ~30 testes por lote é a régua que ele mesmo
+  // declara. Este era o único lote acima dela, e o único que encostava no
+  // orçamento: sob carga de desenvolvimento, os casos longos cruzavam os 90 s e
+  // falhavam por tempo, nunca por asserção.
+  //
+  // A divisão é por ESTRUTURA das specs, não por quem falhou — as falhas
+  // apareceram nos quatro arquivos. Nenhum teste foi alterado, removido,
+  // duplicado ou pulado; nenhum orçamento foi aumentado. O que muda é só
+  // quantos deles compartilham um mesmo servidor.
   {
-    nome: "conversa-por-opcoes",
-    titulo: "Conversa por opções: fluxo, navegação, edição e recuperação",
+    nome: "conversa-por-opcoes-fluxo",
+    titulo: "Conversa por opções: fluxo principal, aprofundamento e navegação",
     arquivos: [
       "tests/e2e/option-conversation-flow.spec.ts",
       "tests/e2e/option-conversation-navigation.spec.ts",
+    ],
+  },
+  {
+    nome: "conversa-por-opcoes-edicao",
+    titulo: "Conversa por opções: histórico, reutilização, edição e recuperação",
+    arquivos: [
       "tests/e2e/option-conversation-editing-history.spec.ts",
       "tests/e2e/option-conversation-recovery.spec.ts",
     ],

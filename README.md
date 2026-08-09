@@ -733,8 +733,17 @@ novo e rotas pré-compiladas, sem retry nenhum; ao final imprime um resultado
 agregado único com aprovados, falhos e ignorados por lote.
 
 Nesse arranjo a suíte fecha **187 aprovados, 0 falhos, 0 ignorados** — `base` 31,
-`conversa-por-opcoes` 32, `fases-4x` 33, `controles-do-paciente` 12, `offline` 41,
-`responsivo-base` 10, `responsivo-fases` 28.
+`conversa-por-opcoes-fluxo` 17, `conversa-por-opcoes-edicao` 15, `fases-4x` 33,
+`controles-do-paciente` 12, `offline` 41, `responsivo-base` 10,
+`responsivo-fases` 28.
+
+A conversa por opções vem em **dois** lotes desde a Fase 5.2B, e não em um. As
+jornadas dela descem vários níveis, apresentam ao paciente e voltam — muitas
+idas e vindas ao servidor, cada uma compilando em modo dev —, e os casos mais
+longos medem ~52 s numa máquina ociosa contra um teto de 90 s por teste. Os 32
+juntos mantinham um único `next dev` no ar por 30 a 40 minutos, que é
+precisamente o arranjo que este runner existe para evitar. Nenhum teste mudou:
+o que mudou foi quantos deles compartilham um servidor.
 
 A duração depende da máquina, e mais do que parece: numa estação ocupada
 (*load average* acima de 20) lotes individuais já levaram **cinco vezes** o
