@@ -728,22 +728,39 @@ npm run test:ui:oc                # só a conversa por opções
 fica quase uma hora no ar produzia falhas que não eram do produto: o servidor
 degradava e testes variados quebravam ao *carregar a página* — os mesmos que
 passavam quando rodados por arquivo. `scripts/run-e2e-batches.mjs` corta a
-suíte em sete lotes por domínio e dá a cada um banco de teste vazio, dev server
+suíte em lotes por domínio e dá a cada um banco de teste vazio, dev server
 novo e rotas pré-compiladas, sem retry nenhum; ao final imprime um resultado
 agregado único com aprovados, falhos e ignorados por lote.
 
 Nesse arranjo a suíte fecha **187 aprovados, 0 falhos, 0 ignorados** — `base` 31,
-`conversa-por-opcoes-fluxo` 17, `conversa-por-opcoes-edicao` 15, `fases-4x` 33,
-`controles-do-paciente` 12, `offline` 41, `responsivo-base` 10,
+`conversa-por-opcoes-flow` 11, `conversa-por-opcoes-navigation` 6,
+`conversa-por-opcoes-editing-history` 9, `conversa-por-opcoes-recovery` 6,
+`fases-4x` 33, `controles-do-paciente` 12, `offline` 41, `responsivo-base` 10,
 `responsivo-fases` 28.
 
-A conversa por opções vem em **dois** lotes desde a Fase 5.2B, e não em um. As
-jornadas dela descem vários níveis, apresentam ao paciente e voltam — muitas
-idas e vindas ao servidor, cada uma compilando em modo dev —, e os casos mais
-longos medem ~52 s numa máquina ociosa contra um teto de 90 s por teste. Os 32
-juntos mantinham um único `next dev` no ar por 30 a 40 minutos, que é
-precisamente o arranjo que este runner existe para evitar. Nenhum teste mudou:
-o que mudou foi quantos deles compartilham um servidor.
+A conversa por opções mudou duas coisas na Fase 5.2B, e nenhuma delas é teste.
+
+Primeiro, **um servidor por spec**: são quatro lotes, um por arquivo, e não um
+lote com os 32 testes. Juntos eles mantinham um único servidor no ar por 30 a
+40 minutos — o arranjo que este runner existe para evitar.
+
+Segundo, esses quatro rodam sobre **build de produção**, não sobre `next dev`.
+As jornadas descem vários níveis, apresentam ao paciente e voltam; a mais longa
+gasta ~60 s em 68 ações de interface numa máquina ociosa, contra um teto de
+90 s por teste. O trace não mostra gargalo — a ação mais cara são 4,2 s, o
+resto são dezenas de passos de ~1 s —, e contra o dev server parte de cada
+passo é o compilador respondendo sob demanda. Sob carga essa parcela cresce em
+todos os passos ao mesmo tempo, e a soma cruza o teto.
+
+```bash
+npm run test:ui:build     # uma build isolada em .next-e2e-prod, reaproveitada
+```
+
+A build é feita **uma vez por rodada**; o que não se reaproveita é o processo,
+porque cada spec continua recebendo um `next start` novo. O `distDir` é
+separado: nem o preview nem os outros lotes são sobrescritos. Nenhum teste
+mudou, nenhuma jornada encurtou, nenhum orçamento subiu. Esta é a única
+configuração oficial da regressão dessas specs.
 
 A duração depende da máquina, e mais do que parece: numa estação ocupada
 (*load average* acima de 20) lotes individuais já levaram **cinco vezes** o

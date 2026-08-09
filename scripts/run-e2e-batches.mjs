@@ -24,7 +24,7 @@
 import { assertEmuladorDescartavel } from "./emulator-guard.mjs";
 import { ambienteSemProvedorReal } from "./eleven-guard.mjs";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -61,41 +61,55 @@ const LOTES = [
       "tests/e2e/conversa-regressao.spec.ts",
     ],
   },
-  // ——— A conversa por opções vem em DOIS lotes, e não em um ———
+  // ——— A conversa por opções: um servidor por spec, e sobre uma BUILD ———
   //
-  // Ela era um lote só, com os 32 testes dos quatro arquivos. Passava, mas com
-  // pouca folga, e por um motivo que é da natureza dessas jornadas: um caminho
-  // por opções desce vários níveis, apresenta ao paciente, registra o gesto e
-  // volta — são muitas idas e vindas ao servidor, e em modo dev cada uma delas
-  // compila. Os casos mais longos medem ~52 s numa máquina ociosa, contra um
-  // teto de 90 s por teste. Sobra menos de duas vezes.
+  // Era um lote só, com os 32 testes dos quatro arquivos, contra `next dev`.
+  // Falhava sob carga, e nunca por asserção: sempre por tempo. Duas medições
+  // explicam o porquê, e cada uma levou a uma das duas decisões abaixo.
   //
-  // Somados, os 32 mantinham um único `next dev` no ar por 30 a 40 minutos. É
-  // exatamente a situação que este runner existe para evitar — está escrito no
-  // cabeçalho — e o teto de ~30 testes por lote é a régua que ele mesmo
-  // declara. Este era o único lote acima dela, e o único que encostava no
-  // orçamento: sob carga de desenvolvimento, os casos longos cruzavam os 90 s e
-  // falhavam por tempo, nunca por asserção.
+  // 1. GRANULARIDADE. Os 32 juntos mantinham um único servidor no ar por 30 a
+  //    40 minutos — exatamente o arranjo que este runner existe para evitar, e
+  //    acima do teto de ~30 testes por lote que ele mesmo declara. A divisão é
+  //    uma spec por lote, a fronteira que as próprias specs já desenham. Não é
+  //    distribuição por quem falhou: as falhas apareceram nos quatro arquivos.
   //
-  // A divisão é por ESTRUTURA das specs, não por quem falhou — as falhas
-  // apareceram nos quatro arquivos. Nenhum teste foi alterado, removido,
-  // duplicado ou pulado; nenhum orçamento foi aumentado. O que muda é só
-  // quantos deles compartilham um mesmo servidor.
+  // 2. MODO DE EXECUÇÃO. A jornada mais longa gasta ~60s em 68 ações de
+  //    interface com a máquina quase ociosa, contra um teto de 90s por teste.
+  //    O trace não mostra gargalo: a ação mais cara são 4,2s, o resto são
+  //    dezenas de passos de ~1s. Contra `next dev`, parte de cada passo é o
+  //    compilador respondendo sob demanda — e sob carga essa parcela cresce em
+  //    todos os passos ao mesmo tempo, até a soma passar dos 90s.
+  //
+  //    Por isso estes quatro rodam sobre `next start`, com uma build feita uma
+  //    vez por rodada. Não é para "fazer o teste passar": é o modo mais próximo
+  //    do que o cuidador usa, e o único em que o tempo medido pela suíte é o
+  //    custo do produto e não o do compilador.
+  //
+  // Nenhum teste foi alterado, removido, duplicado ou pulado; nenhuma jornada
+  // encurtada; nenhum orçamento aumentado; nenhuma asserção mexida.
   {
-    nome: "conversa-por-opcoes-fluxo",
-    titulo: "Conversa por opções: fluxo principal, aprofundamento e navegação",
-    arquivos: [
-      "tests/e2e/option-conversation-flow.spec.ts",
-      "tests/e2e/option-conversation-navigation.spec.ts",
-    ],
+    nome: "conversa-por-opcoes-flow",
+    titulo: "Conversa por opções: fluxo principal e aprofundamento",
+    arquivos: ["tests/e2e/option-conversation-flow.spec.ts"],
+    producao: true,
   },
   {
-    nome: "conversa-por-opcoes-edicao",
-    titulo: "Conversa por opções: histórico, reutilização, edição e recuperação",
-    arquivos: [
-      "tests/e2e/option-conversation-editing-history.spec.ts",
-      "tests/e2e/option-conversation-recovery.spec.ts",
-    ],
+    nome: "conversa-por-opcoes-navigation",
+    titulo: "Conversa por opções: breadcrumb, troca de ramo e reinício",
+    arquivos: ["tests/e2e/option-conversation-navigation.spec.ts"],
+    producao: true,
+  },
+  {
+    nome: "conversa-por-opcoes-editing-history",
+    titulo: "Conversa por opções: histórico, reutilização e edição",
+    arquivos: ["tests/e2e/option-conversation-editing-history.spec.ts"],
+    producao: true,
+  },
+  {
+    nome: "conversa-por-opcoes-recovery",
+    titulo: "Conversa por opções: recuperação e persistência",
+    arquivos: ["tests/e2e/option-conversation-recovery.spec.ts"],
+    producao: true,
   },
   {
     nome: "fases-4x",
@@ -237,11 +251,47 @@ function ambienteDoServidor(extra = {}) {
 }
 
 /**
+ * O mesmo ambiente, para um servidor que roda em modo produção.
+ *
+ * Modo produção muda três coisas que importam aqui, e todas as três são
+ * conferidas em vez de presumidas:
+ *
+ *  1. Sem `FIRESTORE_EMULATOR_HOST`, o Admin SDK cai em credencial padrão e
+ *     fala com o Firestore DE VERDADE. Em `next dev` isso já seria ruim; num
+ *     servidor que se anuncia como produção é um acidente esperando acontecer.
+ *     Aqui a ausência é erro, não omissão silenciosa.
+ *  2. `HELO_SPEECH_GRANT_SECRET` passa a ser obrigatório (lib/voice/speech-grant.ts):
+ *     fora de produção o processo usa chave efêmera, em produção exige a
+ *     configurada. Damos uma de teste, explícita no nome — é configurar o
+ *     servidor corretamente, não contornar a regra.
+ *  3. O app shell registra o Service Worker, que em `next dev` não registra.
+ *     Isso é comportamento de produção legítimo e fica ligado.
+ */
+function ambienteDeProducao(extra = {}) {
+  const base = ambienteDoServidor(extra);
+  if (!base.FIRESTORE_EMULATOR_HOST) {
+    throw new Error(
+      "servidor de regressão em modo produção sem FIRESTORE_EMULATOR_HOST: " +
+        "sem ele o Admin SDK usaria credencial padrão e falaria com o " +
+        "Firestore real. Recusando subir."
+    );
+  }
+  return {
+    ...base,
+    NODE_ENV: "production",
+    // ≥32 caracteres, e o nome diz o que é. Nunca sai daqui para lugar nenhum.
+    HELO_SPEECH_GRANT_SECRET:
+      base.HELO_SPEECH_GRANT_SECRET ??
+      "segredo-de-teste-sem-valor-para-a-regressao-e2e",
+  };
+}
+
+/**
  * `extra` são variáveis do LOTE. Existe porque a 5.2A precisa de um servidor
  * com o ditado ligado, e ligá-lo para a suíte inteira mudaria o comportamento
  * de lotes que não têm nada a ver com isso.
  */
-async function subirServidor(extra) {
+async function subirServidor(extra, producao = false) {
   if (await alcancavel(BASE_URL, 1500)) {
     throw new Error(
       `a porta ${PORTA} já está ocupada. Cada lote precisa de um dev server ` +
@@ -249,14 +299,31 @@ async function subirServidor(extra) {
     );
   }
 
+  const ambiente = producao
+    ? ambienteDeProducao(extra)
+    : ambienteDoServidor(extra);
+
+  if (producao && !existsSync(resolve(RAIZ, DIST, "BUILD_ID"))) {
+    throw new Error(
+      `não há build em ${DIST}. Rode \`npm run test:ui:build\` antes — a build ` +
+        `é feita uma vez e reaproveitada pelos lotes que rodam em produção.`
+    );
+  }
+
   // detached: o `next dev` gera um next-server filho. Sem grupo próprio, o
   // filho sobrevive ao pai e a porta fica presa para o lote seguinte.
-  const proc = spawn("npx", ["next", "dev", "--webpack"], {
-    cwd: RAIZ,
-    env: ambienteDoServidor(extra),
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const proc = spawn(
+    "npx",
+    producao
+      ? ["next", "start", "-p", String(PORTA)]
+      : ["next", "dev", "--webpack"],
+    {
+      cwd: RAIZ,
+      env: ambiente,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
 
   let saida = "";
   proc.stdout.on("data", (d) => (saida += d));
@@ -391,7 +458,7 @@ async function rodarLote(lote) {
   await limparBanco();
 
   log(`   subindo dev server novo em ${BASE_URL}…`);
-  const servidor = await subirServidor(lote.env);
+  const servidor = await subirServidor(lote.env, lote.producao === true);
   try {
     log("   pré-compilando rotas…");
     await aquecerRotas();
