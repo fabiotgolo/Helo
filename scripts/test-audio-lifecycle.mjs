@@ -150,16 +150,31 @@ console.log("\n— Inventário: todo createObjectURL do cliente tem dono —");
   );
 
   // As telas de prévia usam o hook; nenhuma volta a escrever a sequência à mão.
-  for (const tela of [
-    "app/ajustes/page.tsx",
-    "app/admin/page.tsx",
-    "app/atividades/gerenciar/page.tsx",
-  ]) {
+  //
+  // Eram TRÊS quando esta verificação nasceu. O gerenciador de frases saiu da
+  // lista porque a prévia dele deixou de existir (commit 3f18221): o botão só
+  // conseguia falar texto ainda não salvo, e não havia o que consertar nele.
+  // A lista ficou desatualizada por uma fase inteira — a suíte não foi
+  // reexecutada depois daquele commit, e passou a acusar a ausência de um hook
+  // que o arquivo tinha deixado de precisar.
+  for (const tela of ["app/ajustes/page.tsx", "app/admin/page.tsx"]) {
     const fonte = readFileSync(tela, "utf8");
     check(
       `${tela} usa o player com dono`,
       /usePreviewAudio\(\)/.test(fonte) && !/URL\.createObjectURL/.test(fonte),
       "— era a sequência create/new Audio/play sem revoke, repetida nas três"
+    );
+  }
+  // E a afirmação sobre o gerenciador ficou mais forte: em vez de "usa o hook",
+  // agora é "não cria áudio nenhum". Rascunho não é pronunciado.
+  {
+    const gerenciador = readFileSync("app/atividades/gerenciar/page.tsx", "utf8");
+    check(
+      "o gerenciador de frases não cria áudio nenhum",
+      !/URL\.createObjectURL/.test(gerenciador) &&
+        !/usePreviewAudio/.test(gerenciador) &&
+        !/new Audio\(/.test(gerenciador),
+      "— a prévia de rascunho voltou; texto não salvo não vira voz do paciente"
     );
   }
   check(
@@ -240,8 +255,16 @@ console.log("\n— Trocar de paciente remove o áudio do anterior —");
   );
   check(
     "num efeito que depende do patientId",
-    /purgePlatformAudio\("pacientes"\);\s*\n\s*\}, \[patientId\]\)/.test(patient),
+    // Não exige que a liberação seja a ÚLTIMA linha do efeito: a 5.2A
+    // acrescentou `stopAllDictation()` logo abaixo, e o que precisa ser
+    // verdade é a dependência, não a posição.
+    /purgePlatformAudio\("pacientes"\);[\s\S]{0,200}?\}, \[patientId\]\)/.test(patient),
     "— sem a dependência, roda uma vez e nunca mais"
+  );
+  check(
+    "e o microfone do ditado para junto",
+    /stopAllDictation\(\);[\s\S]{0,200}?\}, \[patientId\]\)/.test(patient),
+    "— o áudio que estava sendo ditado foi falado sobre quem saiu da tela"
   );
   check(
     "e useSpeech tem a defesa de baixo, independente do provider",
