@@ -51,7 +51,11 @@ export function DictationButton({
             pulsando não chega a quem usa leitor de tela, e saber que o
             microfone está ligado não é um detalhe estético. */}
         <span aria-hidden="true">{ouvindo ? "⏺" : "🎙"}</span>
-        {ouvindo ? "Parar" : processando ? "Transcrevendo…" : pedindo ? "Aguardando…" : "Ditar"}
+        {/* O rótulo do botão diz o que ele FAZ. Quem diz o que está
+            acontecendo é a região viva ao lado — se os dois dissessem
+            "Transcrevendo…", o leitor de tela leria duas vezes e o nome
+            acessível do controle mudaria para um estado, que ele não é. */}
+        {ouvindo ? "Parar" : "Ditar"}
       </button>
       )}
 

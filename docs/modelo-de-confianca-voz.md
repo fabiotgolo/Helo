@@ -235,7 +235,7 @@ autenticação. Isso é **R-04**, e continua aberto lá.
 **A ação `atividades.frases.ouvir`** (do modal) é classe `patientResponse` e
 segue inalcançável pelo Agent — verificado por `test:agent:invariants`.
 
-## Ditado do cuidador (Fase 5.2A)
+## Ditado do cuidador (Fases 5.2A e 5.2B)
 
 A voz entrou no produto por um segundo caminho, e ele **não** mexe neste
 modelo de confiança. O cuidador pode falar para preencher quatro campos de
@@ -254,8 +254,30 @@ forjado.
 
 O recurso está **desligado em produção** enquanto o workspace ElevenLabs do
 Helo (Grant Tier 2) não suportar Zero Retention Mode — retenção normal não é
-fallback permitido. Detalhes em
-[`docs/ditado-do-cuidador.md`](ditado-do-cuidador.md).
+fallback permitido.
+
+### O que a 5.2B acrescentou a este modelo
+
+Nada sobre autoria: a fronteira acima é a mesma. O que mudou foi a **posse do
+microfone**, que passou a ser uma só e a ter identidade
+([`lib/voice/mic-ownership.ts`](../lib/voice/mic-ownership.ts)). Isso fecha três
+situações que tocavam este modelo de longe:
+
+1. **Dois donos ao mesmo tempo.** O Agent conectando e o ditado abrindo o
+   microfone no mesmo intervalo. Não é só desperdício: o segundo `getUserMedia`
+   reconfigura o dispositivo em boa parte dos aparelhos, e quem perde é a
+   captura em curso — a do Agent, no meio de uma frase do paciente.
+2. **A voz do paciente entrando num transcript do cuidador.** Com áudio
+   controlado pela Helo tocando, o microfone não abre; com o microfone aberto,
+   nenhuma fala automática começa. A emergência do paciente, que tem prioridade
+   máxima, **encerra** a captura em vez de tocar por cima dela.
+3. **Proveniência que mentia por excesso.** `VOICE_TRANSCRIPTION` agora
+   significa "a pergunta nasceu de uma transcrição", não "houve voz neste campo
+   em algum momento". Texto digitado antes do primeiro ditado mantém a origem
+   manual — atribuir ao microfone o que a pessoa escreveu com as mãos é uma
+   afirmação falsa num registro clínico.
+
+Detalhes em [`docs/ditado-do-cuidador.md`](ditado-do-cuidador.md).
 
 ## Como escrever sobre isto
 
@@ -275,4 +297,5 @@ fallback permitido. Detalhes em
 | [`lib/voice/speech-sources.ts`](../lib/voice/speech-sources.ts) | As seis origens legítimas e como cada uma é resolvida |
 | [`lib/helo-action-registry.ts`](../lib/helo-action-registry.ts) | `HeloActionClass`, `isActionAllowedFor` |
 | [`docs/fase-5.0-voz-auditoria.md`](fase-5.0-voz-auditoria.md) | A auditoria que originou R-01 a R-05 |
-| [`docs/ditado-do-cuidador.md`](ditado-do-cuidador.md) | O ditado da Fase 5.2A e a política de retenção zero |
+| [`lib/voice/mic-ownership.ts`](../lib/voice/mic-ownership.ts) | A posse do microfone: um dono de cada vez, concessão com identidade |
+| [`docs/ditado-do-cuidador.md`](ditado-do-cuidador.md) | O ditado das Fases 5.2A/5.2B, a política de retenção zero e a arbitragem do microfone |

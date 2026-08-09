@@ -174,10 +174,24 @@ console.log("\n— A transcrição no campo: acrescenta, nunca destrói —");
   const soEspaco = aplicaTranscricao("o que eu escrevi", "   ", 500);
   check("…nem quando vem só espaço", soEspaco.texto === "o que eu escrevi" && !soEspaco.mudou);
 
-  const cortado = aplicaTranscricao("", "a".repeat(40), 10);
-  check("respeita o limite do campo", cortado.texto.length === 10);
-  check("…e avisa que cortou", cortado.truncado === true);
-  check("sem corte, não avisa", aplicaTranscricao("", "curto", 500).truncado === false);
+  // ——— O que não cabe não entra (5.2B, §22) ———
+  //
+  // A 5.2A cortava no limite e avisava. Cortar produz uma pergunta que termina
+  // no meio, apresentada a alguém que só pode responder SIM ou NÃO — e o corte
+  // só aparece depois do botão "Continuar", porque quem ditou estava olhando
+  // para o paciente. Agora nada é escrito e o campo fica intacto.
+  const naoCoube = aplicaTranscricao("", "a".repeat(40), 10);
+  check("o que não cabe não é cortado, é recusado", naoCoube.mudou === false);
+  check("…e o campo fica exatamente como estava", naoCoube.texto === "");
+  check("…com o aviso ligado", naoCoube.naoCoube === true);
+
+  const naoApaga = aplicaTranscricao("texto que o cuidador digitou", "b".repeat(40), 30);
+  check(
+    "o texto que já existia sobrevive à recusa",
+    naoApaga.texto === "texto que o cuidador digitou" && !naoApaga.mudou && naoApaga.naoCoube
+  );
+  check("cabendo, não avisa", aplicaTranscricao("", "curto", 500).naoCoube === false);
+  check("no limite exato, entra", aplicaTranscricao("", "abcde", 5).mudou === true);
 
   // O separador não pode duplicar espaço nem colar palavras.
   check(

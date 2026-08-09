@@ -94,7 +94,8 @@ const LOTES = [
   },
   {
     nome: "voz-ditado",
-    titulo: "Ditado do cuidador: transcrição vira rascunho e nada mais (5.2A)",
+    titulo:
+      "Ditado do cuidador: rascunho, e um dono do microfone de cada vez (5.2A/5.2B)",
     arquivos: ["tests/e2e/voz-ditado.spec.ts"],
     // O ditado nasce DESLIGADO — é assim que ele vai para produção enquanto o
     // workspace da ElevenLabs não suportar retenção zero. Aqui ele é ligado de
