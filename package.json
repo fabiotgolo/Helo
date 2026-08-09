@@ -33,6 +33,8 @@
   "test:dictation:retention": "node scripts/test-dictation-retention.mjs",
   "test:dictation:authorship": "node scripts/test-dictation-authorship.mjs",
   "test:5.2a": "npm run test:dictation:domain && npm run test:dictation:retention && npm run test:dictation:authorship",
+  "dev:teste": "node scripts/dev-server-de-teste.mjs",
+  "test:eleven-guard": "node scripts/test-eleven-guard.mjs",
   "test:dictation:coordination": "node scripts/test-dictation-coordination.mjs",
   "test:dictation:content": "node scripts/test-dictation-content.mjs",
   "test:dictation:provenance": "node scripts/test-dictation-provenance.mjs",

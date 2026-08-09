@@ -22,6 +22,7 @@
 // um servidor herdado é exatamente a variável que queremos eliminar.
 
 import { assertEmuladorDescartavel } from "./emulator-guard.mjs";
+import { ambienteSemProvedorReal } from "./eleven-guard.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -188,9 +189,17 @@ async function limparBanco() {
 // ---------- Dev server por lote ----------
 
 function ambienteDoServidor(extra = {}) {
+  // ——— O provedor real nunca entra num servidor de teste ———
+  //
+  // A chave não vem de quem roda o teste: o `next dev` lê o `.env`, e o `.env`
+  // deste projeto tem a chave de produção. Nenhum comando de teste a menciona,
+  // então não há nada para lembrar de neutralizar — foi assim que uma suíte
+  // automatizada sintetizou quatro frases de verdade. A decisão passa a ser
+  // tomada aqui, uma vez, antes de qualquer processo nascer. O porquê e o
+  // mecanismo estão em scripts/eleven-guard.mjs.
+  const base = ambienteSemProvedorReal(process.env, extra, "runner de lotes Playwright");
   return {
-    ...process.env,
-    ...extra,
+    ...base,
     PORT: String(PORTA),
     NEXT_DIST_DIR: DIST,
     FIRESTORE_EMULATOR_HOST: EMU,
@@ -289,8 +298,12 @@ function rodarPlaywright(lote) {
       ],
       {
         cwd: RAIZ,
+        // O Playwright não fala com a ElevenLabs — quem fala é o dev server,
+        // já protegido acima. Mas o ambiente passa pela mesma guarda mesmo
+        // assim: um único caminho que monte ambiente por fora dela é um
+        // caminho que alguém copia amanhã para levantar um servidor.
         env: {
-          ...process.env,
+          ...ambienteSemProvedorReal(process.env, {}, "processo do Playwright"),
           HELO_BASE_URL: BASE_URL,
           FIRESTORE_EMULATOR_HOST: EMU,
           FIRESTORE_DATABASE_ID: BANCO,

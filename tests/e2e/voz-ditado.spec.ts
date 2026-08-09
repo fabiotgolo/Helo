@@ -39,6 +39,14 @@ async function instalarMicrofone(page: Page, opcoes: { permitir?: boolean } = {}
       trilhasParadas: 0,
       gravadoresCriados: 0,
       permissaoPedida: 0,
+      // Guardado para o teste poder disparar uma callback ATRASADA: o
+      // `MediaRecorder` real entrega `ondataavailable`/`onstop` de forma
+      // assíncrona, e é justamente essa janela que a emergência precisa
+      // atravessar sem deixar um fragmento escapar.
+      ultimoGravador: null as null | {
+        ondataavailable: ((e: { data: Blob }) => void) | null;
+        onstop: (() => void) | null;
+      },
     };
     (window as unknown as Record<string, unknown>).__ditado = espiao;
 
@@ -74,6 +82,7 @@ async function instalarMicrofone(page: Page, opcoes: { permitir?: boolean } = {}
       onerror: (() => void) | null = null;
       constructor() {
         espiao.gravadoresCriados += 1;
+        espiao.ultimoGravador = this;
       }
       start() {
         this.state = "recording";
@@ -684,6 +693,74 @@ test("a emergência do paciente encerra a captura em vez de tocar por cima dela"
   await page.evaluate(() =>
     (window as unknown as { __heloAudio: CoordenadorDeTeste }).__heloAudio.endPatientVoiceOverride()
   );
+});
+
+test("emergência durante a gravação: o fragmento não vira upload nem transcrição", async ({ page }) => {
+  // O cenário exato do fechamento da 5.2B. A distinção que decide se um pedaço
+  // de áudio clínico sai do aparelho:
+  //
+  //   parar pela mão do cuidador  → "terminei de falar" → transcreve
+  //   interrupção por emergência  → "isto aqui acabou"  → descarta
+  //
+  // Meia frase gravada não é uma pergunta. Mandá-la ao provedor seria
+  // transcrever um trecho que ninguém decidiu enviar — e devolvê-lo ao campo
+  // depois, quando a emergência já passou, seria pior ainda.
+  const chamadas = await interceptarTranscricao(page, () => ({
+    status: 200,
+    body: { transcript: "fragmento que nunca deveria existir" },
+  }));
+  await sessaoAberta(page);
+  await campoPergunta(page).fill("o que eu digitei");
+  await botaoDitar(page).click();
+  await expect(page.getByRole("button", { name: /Parar de ditar/ })).toBeVisible();
+  expect(await donoAtual(page)).toBe("DICTATION_LISTENING");
+
+  await page.evaluate(() =>
+    (window as unknown as { __heloAudio: CoordenadorDeTeste }).__heloAudio.beginPatientVoiceOverride()
+  );
+
+  // A captura acabou, e acabou de verdade: sem microfone aberto, sem posse.
+  await expect(page.getByRole("button", { name: /Parar de ditar/ })).toHaveCount(0);
+  await expect.poll(() => donoAtual(page)).toBe("NONE");
+  await expect.poll(async () => (await espiao(page)).trilhasParadas).toBeGreaterThan(0);
+
+  // ——— A callback atrasada, que é o ponto ———
+  //
+  // O `MediaRecorder` real entrega `ondataavailable` e `onstop` de forma
+  // assíncrona: o teardown pede `stop()` e os eventos chegam DEPOIS. Aqui eles
+  // são disparados à mão, já com a emergência em curso, que é a pior ordem
+  // possível. Se a bandeira `encerrada` subisse depois do `stop()` em vez de
+  // antes, é exatamente aqui que um upload apareceria.
+  await page.evaluate(() => {
+    const g = (window as unknown as { __ditado: { ultimoGravador: {
+      ondataavailable: ((e: { data: Blob }) => void) | null;
+      onstop: (() => void) | null;
+    } | null } }).__ditado.ultimoGravador;
+    g?.ondataavailable?.({ data: new Blob([new Uint8Array(2048)], { type: "audio/webm" }) });
+    g?.onstop?.();
+  });
+  await page.waitForTimeout(1200);
+
+  expect(chamadas).toHaveLength(0);
+  await expect(campoPergunta(page)).toHaveValue("o que eu digitei");
+  await expect(page.getByText("Transcrevendo…")).toHaveCount(0);
+  await expect(page.getByText(/fragmento/)).toHaveCount(0);
+  expect(await donoAtual(page)).toBe("NONE");
+
+  // Terminada a emergência, o ditado volta a funcionar — sem recarregar nada.
+  await page.evaluate(() =>
+    (window as unknown as { __heloAudio: CoordenadorDeTeste }).__heloAudio.endPatientVoiceOverride()
+  );
+  await botaoDitar(page).click();
+  await expect(page.getByRole("button", { name: /Parar de ditar/ })).toBeVisible();
+  await page.getByRole("button", { name: "Descartar" }).click();
+
+  // E a pergunta que sobreviveu continua sendo a DIGITADA: a emergência não
+  // deixou procedência de voz para trás.
+  await expect(campoPergunta(page)).toHaveValue("o que eu digitei");
+  await page.getByRole("button", { name: "Continuar" }).click();
+  await expect(page.getByText("Revisar antes de apresentar")).toBeVisible();
+  await expect(page.getByRole("blockquote")).toHaveText("o que eu digitei");
 });
 
 test("descartar durante a transcrição aborta, e o texto não chega", async ({ page }) => {

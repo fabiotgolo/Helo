@@ -407,6 +407,56 @@ check(
   "a emergência do paciente ENCERRA o ditado em vez de tocar por cima",
   /stopAllDictation\(\);[\s\S]{0,60}stopAllPlatformAudio\(\)/.test(coordenador)
 );
+// Dentro do corpo de `beginPatientVoiceOverride`, e não no arquivo inteiro:
+// as duas funções também são DEFINIDAS aqui, e comparar posições de definição
+// não diz nada sobre a ordem em que elas são chamadas.
+const corpoDaEmergencia =
+  coordenador.match(/export function beginPatientVoiceOverride[\s\S]*?\n\}/)?.[0] ?? "";
+check(
+  "…e o faz ANTES de liberar o áudio da emergência",
+  corpoDaEmergencia.indexOf("stopAllDictation()") > -1 &&
+    corpoDaEmergencia.indexOf("stopAllDictation()") <
+      corpoDaEmergencia.indexOf("stopAllPlatformAudio()")
+);
+
+// ——— A emergência é CANCELAMENTO, não parada normal ———
+//
+// A distinção decide se um fragmento de áudio clínico sai do aparelho. Parar
+// pela mão do cuidador significa "terminei de falar": o `onstop` monta o Blob
+// e envia. Ser interrompido por uma emergência do paciente significa "isto
+// aqui acabou": meia frase gravada não é uma pergunta, e mandá-la para um
+// provedor seria transcrever um pedaço que ninguém decidiu enviar.
+//
+// O que garante isso é a ORDEM dentro de `encerra`: a bandeira `encerrada`
+// sobe ANTES do `gravador.stop()`. Quando o `onstop` chegar — e ele chega,
+// assíncrono, no `MediaRecorder` real —, a guarda `vigente` já é falsa e ele
+// sai sem montar Blob e sem chamar `envia`. Se a bandeira subisse depois, o
+// mesmo `stop()` do teardown produziria um upload.
+const posicaoBandeira = captacao.indexOf("execucao.encerrada = true");
+const posicaoStop = captacao.indexOf("gravador.stop()");
+check("§3 · o teardown marca `encerrada` antes de parar o gravador", posicaoBandeira < posicaoStop);
+check(
+  "§3 · e o `onstop` desiste quando a execução não vale mais",
+  /gravador\.onstop = \(\) => \{[\s\S]{0,220}?if \(!vigente\(execucao\)\) return;/.test(captacao)
+);
+check(
+  "§3 · o cancelamento não passa por PROCESSING",
+  // `abandona` vai direto para IDLE/ERROR; só `para()` avança a posse.
+  !/abandona[\s\S]{0,200}?DICTATION_PROCESSING/.test(captacao)
+);
+check(
+  "§3 · o teardown aborta o envio antes de qualquer outra coisa",
+  captacao.indexOf("execucao.envio?.abort()") < posicaoStop
+);
+check(
+  "§3 · e solta a posse para a emergência poder tocar",
+  /liberaMicrofone\(execucao\.concessao\)/.test(captacao)
+);
+check(
+  "§3 · o caminho da emergência não escreve no campo",
+  // `cancela` → `abandona(null)`: nenhum caminho dele chama `aoTranscrever`.
+  !/abandona[\s\S]{0,400}?aoTranscreverRef/.test(captacao)
+);
 check(
   "com áudio da Helo tocando, o ditado não abre o microfone",
   /if \(isHeloAudioPlaying\(\)\)/.test(captacao) && /Espere o áudio da Helo terminar/.test(captacao)

@@ -307,6 +307,37 @@ handler: encerrar, cair, falhar ao conectar e errar no meio da conversa são
 caminhos diferentes que chegam todos ao mesmo lugar. Uma posse presa seria um
 ditado que não abre mais, sem explicação nenhuma na tela.
 
+### Emergência do paciente durante o ditado *(5.2B)*
+
+O caso extremo da regra acima, e o único em que a captura é interrompida por
+alguém que não é o cuidador. A emergência tem prioridade máxima no produto: um
+botão de emergência que pudesse ser bloqueado por um campo de texto não seria um
+botão de emergência.
+
+Ela **cancela** o ditado — não o "para". A distinção decide se um pedaço de
+áudio clínico sai do aparelho:
+
+```
+parar pela mão do cuidador  → "terminei de falar" → monta o Blob e transcreve
+interrupção por emergência  → "isto aqui acabou"  → descarta tudo
+```
+
+Meia frase gravada não é uma pergunta. O que acontece, em ordem:
+
+1. `beginPatientVoiceOverride()` chama `stopAllDictation()` **antes** de liberar
+   o áudio da emergência;
+2. cada captura montada recebe `cancela` → `encerra`;
+3. `encerra` marca `encerrada = true` **antes** de `gravador.stop()`;
+4. o `onstop` chega depois — assíncrono, como no `MediaRecorder` real — encontra
+   a guarda `vigente` falsa e sai sem montar Blob e sem chamar `envia`;
+5. requisição abortada, trilhas paradas, pedaços soltos, posse devolvida;
+6. nenhum `POST /api/voice/dictation`, nenhum transcript, nenhuma proveniência
+   alterada — o campo fica exatamente como o cuidador o deixou;
+7. o áudio da emergência então toca.
+
+Se a bandeira subisse **depois** do `stop()`, o próprio teardown produziria um
+upload. É a ordem que garante o resultado, e é ela que os testes prendem.
+
 ### TTS × captura *(5.2B)*
 
 O microfone aberto capta o que estiver soando na sala, inclusive a Helo. O caso
@@ -428,17 +459,53 @@ credencial errada.
 | `npm run test:dictation:provenance` | os cinco casos de proveniência mista, a origem atravessando o caminho offline, e a invariante que recusa `originalText` em pergunta digitada |
 | `npm run test:5.2b` | as três acima |
 | `npm run test:dictation:endpoint` | o endpoint por fora, contra um provedor de mentira local: autorização antes do corpo, 415/413/400, 429/500/403, uma única chamada por gravação, `Cache-Control: no-store` |
-| lote `voz-ditado` | 35 jornadas de navegador com provedor e microfone simulados — incluindo duplo clique, Agent conectando, áudio tocando, resposta atrasada, aba escondida, rede caindo durante a gravação |
+| `npm run test:eleven-guard` | a guarda que impede uma suíte de subir um servidor com a chave real da ElevenLabs |
+| lote `voz-ditado` | 36 jornadas de navegador com provedor e microfone simulados — incluindo duplo clique, Agent conectando, áudio tocando, resposta atrasada, aba escondida, rede caindo durante a gravação |
 
-O `test:dictation:endpoint` precisa de um servidor de desenvolvimento com o
-ditado ligado e apontado para o provedor falso:
+### Como subir um servidor para as suítes HTTP *(5.2B)*
+
+Use o launcher, nunca um `next dev` digitado à mão:
 
 ```
-HELO_VOICE_DICTATION_ENABLED=true \
-ELEVENLABS_API_KEY=chave-de-mentira \
-HELO_DICTATION_PROVIDER_BASE=http://127.0.0.1:4599/v1/speech-to-text \
-npm run dev
+npm run dev:teste -- --porta 3510 --banco suite-http
+npm run dev:teste -- --porta 3540 --banco dit --ditado    # para o endpoint de ditado
 ```
+
+O `--ditado` liga a flag e declara uma chave falsa, apontando o provedor para
+`http://127.0.0.1:4599/v1/speech-to-text` — o servidor de mentira que a própria
+suíte levanta.
+
+**Por que existe um launcher.** Um `npx next dev` digitado à mão foi o que
+produziu o único incidente desta fase: o `next dev` lê o `.env`, o `.env` deste
+projeto tem a chave de PRODUÇÃO, e `test-voice-authorization` — a suíte que
+existe para provar que uma fala não autorizada é recusada — atravessou a
+autorização nos casos legítimos e sintetizou quatro frases de verdade. A chave
+não vem de quem roda o teste: vem de um arquivo que o framework lê sozinho, e
+nenhum comando de teste a menciona. Não dá para lembrar de neutralizar o que
+não se vê.
+
+Agora a decisão é tomada num lugar só, em
+[`scripts/eleven-guard.mjs`](../scripts/eleven-guard.mjs), antes de qualquer
+processo nascer:
+
+| Situação | Resultado |
+|---|---|
+| chave real herdada do ambiente ou do `.env` | **neutralizada** (string vazia) |
+| chave declarada por um lote e reconhecível como de teste | passa |
+| chave declarada que pode ser real | **recusa**, com o servidor ainda no chão |
+| `HELO_ALLOW_LIVE_ELEVENLABS_TESTS=true` | libera, com aviso no terminal |
+
+A neutralização é por string **vazia** e não por remoção: `@next/env` só
+preenche o que ainda não existe em `process.env`, então o `.env` é lido e
+ignorado para essa chave. Do lado do produto, `provedorConfigurado()` faz
+`Boolean(...)` — vazio é falso, e o caminho percorrido é exatamente o de "sem
+chave", que é o que as suítes esperam.
+
+O `npm run dev` normal **não** foi tocado: ele é o preview manual, roda com a
+chave real de propósito, e a chave continua no `.env` do usuário.
+`npm run test:eleven-guard` exercita os quatro casos sem abrir processo, subir
+servidor ou tocar a rede — provar que a guarda funciona não pode exigir a
+chamada real que ela existe para impedir.
 
 `HELO_DICTATION_PROVIDER_BASE` **só é lida fora de produção**, e isso é o ponto:
 uma variável capaz de desviar a voz de um cuidador em produção seria uma
