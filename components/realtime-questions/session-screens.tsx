@@ -82,8 +82,12 @@ export function ComposeScreen({
   onOptionConversation: (() => void) | null;
   /** Registrar o que o cuidador entendeu (Fase 4.2). */
   onCaregiverInterpretation: (() => void) | null;
-  /** Texto do campo logo depois que uma transcrição entrou nele (Fase 5.2A). */
-  onDictated: (texto: string) => void;
+  /**
+   * Uma transcrição acabou de entrar no campo (Fase 5.2A, precisada na 5.2B).
+   * `textoAntes` é o que havia ali no instante anterior — é ele que decide se a
+   * pergunta NASCEU por voz ou se a voz apenas completou algo já digitado.
+   */
+  onDictated: (info: { transcricao: string; textoAntes: string }) => void;
 }) {
   const text = draft.trim();
   const remaining = MAX_QUESTION - draft.length;
@@ -93,15 +97,12 @@ export function ComposeScreen({
   const ditado = useDictationField({
     patientId,
     valor: draft,
-    aoMudar: (texto) => {
-      onChange(texto);
-      // O que sobe não é a transcrição crua, é o campo INTEIRO depois dela —
-      // porque é isso que `originalText` precisa significar: o texto como a
-      // voz o deixou, antes de o cuidador reler e mexer. Se ele já havia
-      // digitado metade, a metade digitada faz parte da origem tanto quanto a
-      // ditada.
-      onDictated(texto);
-    },
+    aoMudar: onChange,
+    // O que sobe é a transcrição CRUA e o estado anterior do campo, não o
+    // resultado da soma. `originalText` precisa significar "o que a voz
+    // produziu"; se o cuidador já havia digitado metade, a metade digitada é
+    // dele e não pode ser atribuída ao microfone.
+    aoDitar: ({ transcricao, textoAntes }) => onDictated({ transcricao, textoAntes }),
     limite: MAX_QUESTION,
     bloqueado: busy,
   });

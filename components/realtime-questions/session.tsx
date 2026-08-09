@@ -40,6 +40,12 @@ import {
   RascunhoLocalAviso,
 } from "@/components/realtime-questions/offline-chip";
 import { useOfflineSession } from "@/lib/offline/use-offline-session";
+import {
+  procedenciaInicial,
+  registraDitado,
+  registraEdicao,
+  type ProcedenciaDoTexto,
+} from "@/lib/voice/dictation";
 import { pacienteEstaOlhando } from "@/lib/option-conversation-screen";
 import { ConflictScreen } from "@/components/realtime-questions/conflict-screen";
 import { restoreConflict, type ConflictCase } from "@/lib/offline/conflicts";
@@ -206,30 +212,38 @@ export function RealtimeQuestionSession({
    * autoria. Só a submissão faz alguma dessas coisas.
    */
   /**
-   * A transcrição que originou ESTE rascunho, quando houve uma (Fase 5.2A).
+   * De onde veio o texto que está no campo (Fase 5.2A, precisada na 5.2B).
    *
-   * Guarda o campo inteiro no instante em que a voz terminou de escrever nele.
-   * O que o cuidador fizer depois — corrigir uma palavra, completar a frase —
-   * vira `reviewedText`, e a diferença entre os dois é justamente o registro
-   * de que houve revisão.
+   * As regras estão em `lib/voice/dictation.ts` e o resumo é este: a pergunta
+   * só é "ditada" se ela NASCEU de uma transcrição. Digitar metade e ditar o
+   * resto mantém a origem manual — a metade escrita à mão é da pessoa, e
+   * atribuí-la ao microfone seria uma afirmação falsa num registro clínico.
    *
-   * Deliberadamente NÃO persistido junto do rascunho: depois de um refresh o
+   * Deliberadamente NÃO persistida junto do rascunho: depois de um refresh o
    * texto volta, mas nada garante que ele ainda seja o que a voz produziu, e
    * afirmar procedência a mais é pior que afirmar a menos. Uma pergunta
    * restaurada é registrada como digitada.
    */
-  const [transcricaoDaPergunta, setTranscricaoDaPergunta] = useState<string | null>(null);
+  const [procedencia, setProcedencia] = useState<ProcedenciaDoTexto>(procedenciaInicial);
 
   const setDraftEPersistir = useCallback(
     (valor: string) => {
       setDraft(valor);
       // Campo esvaziado: o que a voz escreveu não existe mais, e a origem
       // tampouco. O que for digitado a partir daqui é texto digitado.
-      if (!valor.trim()) setTranscricaoDaPergunta(null);
+      setProcedencia((atual) => registraEdicao(atual, valor));
       if (valor) offline.definirRascunho(RASCUNHO_PERGUNTA, valor);
       else offline.descartarRascunho(RASCUNHO_PERGUNTA);
     },
     [offline]
+  );
+
+  /** Uma transcrição entrou no campo. Só aqui a origem pode virar voz. */
+  const registraPerguntaDitada = useCallback(
+    ({ transcricao, textoAntes }: { transcricao: string; textoAntes: string }) => {
+      setProcedencia((atual) => registraDitado(atual, textoAntes, transcricao));
+    },
+    []
   );
 
   const [sensitive, setSensitive] = useState(false);
@@ -845,19 +859,22 @@ export function RealtimeQuestionSession({
     // A origem descreve COMO o texto entrou, e mais nada. Não confere
     // confiança, não dispensa a revisão que acabou de acontecer e não muda um
     // passo do fluxo daqui para frente.
-    const ditada = transcricaoDaPergunta != null;
+    const ditada = procedencia.origem === "VOICE_TRANSCRIPTION";
     try {
       const turn = await persist.createTurn(patientId, session.id, {
         text,
-        questionSource: ditada ? "VOICE_TRANSCRIPTION" : "MANUAL_TEXT",
-        originalText: ditada ? transcricaoDaPergunta : null,
+        questionSource: procedencia.origem,
+        // As transcrições cruas, na ordem em que a voz as produziu. O texto
+        // final — com as correções que o cuidador fez ao reler — é o `text`
+        // acima, e a diferença entre os dois é o registro de que houve revisão.
+        originalText: ditada ? procedencia.original : null,
       });
       applyTurn(turn);
       // Submetido: o texto virou registro (ou intenção na fila, sem rede), e o
       // rascunho não tem mais o que guardar.
       offline.descartarRascunho(RASCUNHO_PERGUNTA);
       setDraft("");
-      setTranscricaoDaPergunta(null);
+      setProcedencia(procedenciaInicial());
       setComposing(false);
       failed.current = null;
       setRetryable(false);
@@ -866,7 +883,7 @@ export function RealtimeQuestionSession({
       failed.current = { kind: "create", text };
       setRetryable(true);
     }
-  }, [draft, currentTurn, persist, patientId, session.id, applyTurn, offline, transcricaoDaPergunta]);
+  }, [draft, currentTurn, persist, patientId, session.id, applyTurn, offline, procedencia]);
 
   /** Repete a última ação que falhou, exatamente como ela era. */
   const retryFailed = useCallback(() => {
@@ -1322,7 +1339,7 @@ export function RealtimeQuestionSession({
                 if (currentTurn) void cancelQuestion(currentTurn);
                 else setComposing(false);
               }}
-              onDictated={setTranscricaoDaPergunta}
+              onDictated={registraPerguntaDitada}
               cancelable={currentTurn != null || turns.length > 0}
               onOptionConversation={
                 currentTurn == null
