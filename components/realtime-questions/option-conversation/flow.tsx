@@ -656,6 +656,7 @@ export function OptionConversationFlow({
         <NodeEditor
           draft={draft}
           busy={busy}
+          patientId={patientId}
           editing={current.nodeId != null}
           isRoot={current.parentNodeId == null && nodes.length === 0}
           onChange={setDraft}
@@ -821,6 +822,7 @@ export function OptionConversationFlow({
               <StatementEditor
                 text={statementText}
                 busy={busy}
+                patientId={patientId}
                 suggestion={suggestion}
                 onChange={setStatementText}
                 onSubmit={() => {

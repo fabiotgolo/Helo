@@ -219,8 +219,18 @@ export function isSensitiveCategory(v: unknown): v is SensitiveCategory {
 }
 
 // ---------- Origem da pergunta ----------
-// VOICE_TRANSCRIPTION e AI_SUGGESTION estão preparados no modelo e NÃO são
-// aceitos nesta fase (nem transcrição por voz nem sugestão por IA existem).
+//
+// VOICE_TRANSCRIPTION passou a ser aceita na Fase 5.2A, e descreve UMA coisa:
+// como o texto entrou no campo. O cuidador falou em vez de digitar.
+//
+// Ela não significa autoria do paciente, não significa confirmação, não
+// significa consentimento, não vale como fala e não dispensa revisão. Uma
+// pergunta ditada percorre exatamente o mesmo caminho de uma digitada, botão
+// por botão — e é por isso que a origem cabe num campo descritivo em vez de
+// virar um estado à parte.
+//
+// AI_SUGGESTION continua preparada no modelo e recusada: não existe sugestão
+// por IA em lugar nenhum do produto.
 
 export type QuestionSource =
   | "MANUAL_TEXT"
@@ -233,9 +243,10 @@ export const QUESTION_SOURCES: readonly QuestionSource[] = [
   "AI_SUGGESTION",
 ] as const;
 
-/** Origens efetivamente aceitas na Fase 1/2. */
+/** Origens efetivamente aceitas: texto digitado e texto ditado (Fase 5.2A). */
 export const IMPLEMENTED_QUESTION_SOURCES: readonly QuestionSource[] = [
   "MANUAL_TEXT",
+  "VOICE_TRANSCRIPTION",
 ] as const;
 
 export function isQuestionSource(v: unknown): v is QuestionSource {
@@ -569,6 +580,13 @@ export function assertTurnInvariants(turn: ConversationQuestionTurn): void {
 
   if (turn.status === "PROVISIONAL_RESPONSE" && !isSemanticResponse(turn.provisionalResponse)) {
     bad("seleção provisória exige uma resposta semântica válida");
+  }
+
+  // Texto de origem só existe quando houve uma origem além do teclado. Sem
+  // isto, `originalText` viraria um campo livre onde qualquer coisa poderia
+  // ser guardada como "o que foi dito" — inclusive numa pergunta digitada.
+  if (turn.originalText !== null && turn.questionSource !== "VOICE_TRANSCRIPTION") {
+    bad("texto de origem só existe em pergunta ditada");
   }
 
   if (turn.correctionCount < 0) bad("correctionCount inválido");

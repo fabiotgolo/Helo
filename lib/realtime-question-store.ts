@@ -613,6 +613,8 @@ export async function runSessionAction(
 
 export interface TurnInput {
   questionSource?: unknown;
+  /** Transcrição como saiu do ditado, antes da revisão (Fase 5.2A). */
+  originalText?: unknown;
   text?: unknown;
   isSensitive?: unknown;
   sensitiveCategory?: unknown;
@@ -648,6 +650,14 @@ export async function createTurn(
   const questionSource = normalizeSource(input.questionSource);
   const text = cleanText(input.text, MAX_QUESTION_LEN);
   if (!text) throw new RtqDomainError("a pergunta não pode ficar vazia");
+
+  // O texto de origem só é aceito quando a origem o justifica. Numa pergunta
+  // digitada ele é descartado em silêncio — não é erro do cuidador, é campo
+  // que não se aplica.
+  const originalText =
+    questionSource === "VOICE_TRANSCRIPTION"
+      ? cleanText(input.originalText, MAX_QUESTION_LEN) || null
+      : null;
 
   // Nesta fase quem marca o assunto sensível é o assistente — não há
   // detecção automática em lugar algum.
@@ -753,7 +763,7 @@ export async function createTurn(
       sequence: session.turnCount + 1,
       interactionMode: "CLOSED_CONFIRMATION",
       questionSource,
-      originalText: null,
+      originalText,
       reviewedText: text,
       presentedText: "",
       status: "DRAFT",

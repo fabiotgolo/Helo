@@ -247,11 +247,16 @@ export function construirTurno(args: {
   sequence: number;
   text: string;
   questionSource?: string;
+  originalText?: string | null;
   isSensitive: boolean;
   sensitiveCategory: SensitiveCategory | null;
   reusedFromTurnId: string | null;
   agora: string;
 }): ConversationQuestionTurn {
+  // Só as origens que o domínio aceita hoje. Um valor desconhecido na fila
+  // (schema antigo, gravação truncada) cai para o padrão em vez de reprovar a
+  // invariante e travar a sincronização inteira do cuidador.
+  const ditada = args.questionSource === "VOICE_TRANSCRIPTION";
   const turno: ConversationQuestionTurn = {
     id: args.id,
     sessionId: args.sessionId,
@@ -259,8 +264,13 @@ export function construirTurno(args: {
     assistantId: args.autor.assistantId,
     sequence: args.sequence,
     interactionMode: "CLOSED_CONFIRMATION",
-    questionSource: "MANUAL_TEXT",
-    originalText: null,
+    // A origem vinha fixa em MANUAL_TEXT, e por três fases isso foi verdade —
+    // não havia outra. Com o ditado ela deixa de ser: uma pergunta falada com
+    // rede e submetida depois que a rede caiu chegaria ao prontuário como
+    // digitada, e a procedência se perderia exatamente no caso em que ninguém
+    // olharia de novo. O espelho local passa a carregar o que a operação diz.
+    questionSource: ditada ? "VOICE_TRANSCRIPTION" : "MANUAL_TEXT",
+    originalText: ditada ? limpar(args.originalText, 500) || null : null,
     reviewedText: limpar(args.text, 500),
     presentedText: "",
     status: "DRAFT",
@@ -600,6 +610,9 @@ export function projetarSessao(
             autor,
             sequence: session.turnCount + 1,
             text: String(p.text ?? ""),
+            questionSource:
+              typeof p.questionSource === "string" ? p.questionSource : undefined,
+            originalText: typeof p.originalText === "string" ? p.originalText : null,
             isSensitive: p.isSensitive === true,
             sensitiveCategory:
               (p.sensitiveCategory as SensitiveCategory) ?? null,

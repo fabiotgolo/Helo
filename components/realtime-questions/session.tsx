@@ -205,9 +205,27 @@ export function RealtimeQuestionSession({
    * operação, não gera evento de auditoria e não chega perto do portão de
    * autoria. Só a submissão faz alguma dessas coisas.
    */
+  /**
+   * A transcrição que originou ESTE rascunho, quando houve uma (Fase 5.2A).
+   *
+   * Guarda o campo inteiro no instante em que a voz terminou de escrever nele.
+   * O que o cuidador fizer depois — corrigir uma palavra, completar a frase —
+   * vira `reviewedText`, e a diferença entre os dois é justamente o registro
+   * de que houve revisão.
+   *
+   * Deliberadamente NÃO persistido junto do rascunho: depois de um refresh o
+   * texto volta, mas nada garante que ele ainda seja o que a voz produziu, e
+   * afirmar procedência a mais é pior que afirmar a menos. Uma pergunta
+   * restaurada é registrada como digitada.
+   */
+  const [transcricaoDaPergunta, setTranscricaoDaPergunta] = useState<string | null>(null);
+
   const setDraftEPersistir = useCallback(
     (valor: string) => {
       setDraft(valor);
+      // Campo esvaziado: o que a voz escreveu não existe mais, e a origem
+      // tampouco. O que for digitado a partir daqui é texto digitado.
+      if (!valor.trim()) setTranscricaoDaPergunta(null);
       if (valor) offline.definirRascunho(RASCUNHO_PERGUNTA, valor);
       else offline.descartarRascunho(RASCUNHO_PERGUNTA);
     },
@@ -824,13 +842,22 @@ export function RealtimeQuestionSession({
       setComposing(false);
       return;
     }
+    // A origem descreve COMO o texto entrou, e mais nada. Não confere
+    // confiança, não dispensa a revisão que acabou de acontecer e não muda um
+    // passo do fluxo daqui para frente.
+    const ditada = transcricaoDaPergunta != null;
     try {
-      const turn = await persist.createTurn(patientId, session.id, { text });
+      const turn = await persist.createTurn(patientId, session.id, {
+        text,
+        questionSource: ditada ? "VOICE_TRANSCRIPTION" : "MANUAL_TEXT",
+        originalText: ditada ? transcricaoDaPergunta : null,
+      });
       applyTurn(turn);
       // Submetido: o texto virou registro (ou intenção na fila, sem rede), e o
       // rascunho não tem mais o que guardar.
       offline.descartarRascunho(RASCUNHO_PERGUNTA);
       setDraft("");
+      setTranscricaoDaPergunta(null);
       setComposing(false);
       failed.current = null;
       setRetryable(false);
@@ -839,7 +866,7 @@ export function RealtimeQuestionSession({
       failed.current = { kind: "create", text };
       setRetryable(true);
     }
-  }, [draft, currentTurn, persist, patientId, session.id, applyTurn, offline]);
+  }, [draft, currentTurn, persist, patientId, session.id, applyTurn, offline, transcricaoDaPergunta]);
 
   /** Repete a última ação que falhou, exatamente como ela era. */
   const retryFailed = useCallback(() => {
@@ -1248,6 +1275,7 @@ export function RealtimeQuestionSession({
             <InterpretationEditor
               draft={interpretationDraft}
               busy={busy}
+              patientId={patientId}
               onChange={setInterpretationDraft}
               onSubmit={() =>
                 void saveCaregiverInterpretation(interpretationDraft)
@@ -1286,6 +1314,7 @@ export function RealtimeQuestionSession({
             <ComposeScreen
               draft={draft}
               busy={busy}
+              patientId={patientId}
               editing={currentTurn != null}
               onChange={setDraftEPersistir}
               onContinue={() => void continueToReview()}
@@ -1293,6 +1322,7 @@ export function RealtimeQuestionSession({
                 if (currentTurn) void cancelQuestion(currentTurn);
                 else setComposing(false);
               }}
+              onDictated={setTranscricaoDaPergunta}
               cancelable={currentTurn != null || turns.length > 0}
               onOptionConversation={
                 currentTurn == null

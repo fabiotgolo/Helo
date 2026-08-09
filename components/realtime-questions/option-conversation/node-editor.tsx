@@ -10,6 +10,8 @@ import {
   Control,
   Primary,
 } from "@/components/realtime-questions/ui";
+import { DictationButton } from "@/components/voice/dictation-button";
+import { useDictationField } from "@/lib/voice/use-dictation";
 import {
   MAX_OPTIONS_PER_NODE,
   MAX_OPTION_LABEL_LEN,
@@ -81,6 +83,7 @@ export function NodeEditor({
   busy,
   editing,
   isRoot,
+  patientId,
   onChange,
   onSubmit,
   onCancel,
@@ -90,6 +93,8 @@ export function NodeEditor({
   /** Revisando um rascunho existente, em vez de criar do zero. */
   editing: boolean;
   isRoot: boolean;
+  /** Paciente da sessão — o ditado é autorizado por vínculo com ele. */
+  patientId: number;
   onChange: (draft: NodeDraft) => void;
   onSubmit: () => void;
   onCancel: () => void;
@@ -101,6 +106,18 @@ export function NodeEditor({
     });
 
   const valid = draftIsValid(draft);
+
+  // Só o título do nível. Os rótulos das opções ("FAMÍLIA", "SAÚDE") e as
+  // frases finais ficam de fora desta primeira versão de propósito: são campos
+  // curtos dentro de uma lista repetida, e um microfone por linha encheria a
+  // tela de controles para ganhar pouco.
+  const ditado = useDictationField({
+    patientId,
+    valor: draft.promptText,
+    aoMudar: (texto) => set({ promptText: texto }),
+    limite: MAX_PROMPT_LEN,
+    bloqueado: busy,
+  });
 
   return (
     <section className="flex w-full flex-col gap-5">
@@ -143,6 +160,7 @@ export function NodeEditor({
         >
           {draft.promptText.length} / {MAX_PROMPT_LEN}
         </p>
+        <DictationButton ditado={ditado} rotuloDoCampo="o título do nível" />
       </div>
 
       <fieldset className="flex flex-col gap-4 rounded-2xl border border-line bg-card/60 px-5 py-4">

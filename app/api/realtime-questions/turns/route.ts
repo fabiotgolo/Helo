@@ -47,6 +47,8 @@ export async function POST(request: Request) {
     sessionId?: string;
     text?: unknown;
     questionSource?: unknown;
+    /** Transcrição antes da revisão, quando a pergunta nasceu de ditado. */
+    originalText?: unknown;
     isSensitive?: unknown;
     sensitiveCategory?: unknown;
     /** "Reutilizar como novo" a partir do histórico (§24). */
@@ -78,6 +80,7 @@ export async function POST(request: Request) {
         {
           text: body.text,
           questionSource: body.questionSource,
+          originalText: body.originalText,
           isSensitive: body.isSensitive,
           sensitiveCategory: body.sensitiveCategory,
           reusedFromTurnId: body.reusedFromTurnId,

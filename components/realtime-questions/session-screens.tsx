@@ -13,6 +13,8 @@
 
 import { ModalShell } from "@/components/modal-shell";
 import { Control, Primary } from "@/components/realtime-questions/ui";
+import { DictationButton } from "@/components/voice/dictation-button";
+import { useDictationField } from "@/lib/voice/use-dictation";
 import {
   SEMANTIC_RESPONSE_LABELS,
   SENSITIVE_CATEGORIES,
@@ -59,16 +61,20 @@ export function ComposeScreen({
   busy,
   editing,
   cancelable,
+  patientId,
   onChange,
   onContinue,
   onCancel,
   onOptionConversation,
   onCaregiverInterpretation,
+  onDictated,
 }: {
   draft: string;
   busy: boolean;
   editing: boolean;
   cancelable: boolean;
+  /** Paciente da sessão — o ditado é autorizado por vínculo com ele. */
+  patientId: number;
   onChange: (v: string) => void;
   onContinue: () => void;
   onCancel: () => void;
@@ -76,9 +82,29 @@ export function ComposeScreen({
   onOptionConversation: (() => void) | null;
   /** Registrar o que o cuidador entendeu (Fase 4.2). */
   onCaregiverInterpretation: (() => void) | null;
+  /** Texto do campo logo depois que uma transcrição entrou nele (Fase 5.2A). */
+  onDictated: (texto: string) => void;
 }) {
   const text = draft.trim();
   const remaining = MAX_QUESTION - draft.length;
+  // O ditado escreve pelo mesmo `onChange` do teclado. Daqui para baixo, uma
+  // pergunta falada e uma digitada são a mesma coisa — e o `Continuar` segue
+  // sendo o único jeito de a pergunta existir.
+  const ditado = useDictationField({
+    patientId,
+    valor: draft,
+    aoMudar: (texto) => {
+      onChange(texto);
+      // O que sobe não é a transcrição crua, é o campo INTEIRO depois dela —
+      // porque é isso que `originalText` precisa significar: o texto como a
+      // voz o deixou, antes de o cuidador reler e mexer. Se ele já havia
+      // digitado metade, a metade digitada faz parte da origem tanto quanto a
+      // ditada.
+      onDictated(texto);
+    },
+    limite: MAX_QUESTION,
+    bloqueado: busy,
+  });
   return (
     <section className="flex w-full flex-col gap-4">
       <div>
@@ -111,6 +137,7 @@ export function ComposeScreen({
       >
         {draft.length} / {MAX_QUESTION}
       </p>
+      <DictationButton ditado={ditado} rotuloDoCampo="a pergunta" />
       <div className="flex flex-wrap items-center gap-3">
         <Primary onClick={onContinue} disabled={!text || busy}>
           {busy ? "Salvando…" : "Continuar"}

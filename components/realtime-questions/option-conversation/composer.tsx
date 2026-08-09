@@ -19,6 +19,8 @@ import {
 } from "@/components/realtime-questions/ui";
 import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { useAnswerChoices } from "@/components/realtime-questions/question-stage";
+import { DictationButton } from "@/components/voice/dictation-button";
+import { useDictationField } from "@/lib/voice/use-dictation";
 import {
   rotuloDeAutoria,
   tryToConfirmedPatientStatement,
@@ -133,6 +135,7 @@ export function StatementEditor({
   text,
   busy,
   suggestion,
+  patientId,
   onChange,
   onSubmit,
   onCancel,
@@ -141,10 +144,21 @@ export function StatementEditor({
   busy: boolean;
   /** Frase associada à opção terminal, quando houve uma. */
   suggestion: string | null;
+  /** Paciente da sessão — o ditado é autorizado por vínculo com ele. */
+  patientId: number;
   onChange: (v: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }) {
+  // A frase continua nascendo das duas formas de sempre — da opção terminal ou
+  // escrita pelo assistente. Ditar é a segunda, com a boca em vez das mãos.
+  const ditado = useDictationField({
+    patientId,
+    valor: text,
+    aoMudar: onChange,
+    limite: MAX_STATEMENT_LEN,
+    bloqueado: busy,
+  });
   return (
     <div className="flex flex-col gap-3">
       <label htmlFor="oc-frase" className="text-sm font-medium text-ink-soft">
@@ -173,6 +187,7 @@ export function StatementEditor({
           {text.length} / {MAX_STATEMENT_LEN}
         </p>
       </div>
+      <DictationButton ditado={ditado} rotuloDoCampo="a frase" />
       <div className="flex flex-wrap items-center gap-3">
         <Primary onClick={onSubmit} disabled={!text.trim() || busy}>
           {busy ? "Salvando…" : "Apresentar ao paciente"}

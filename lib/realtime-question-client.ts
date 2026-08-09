@@ -197,6 +197,8 @@ async function request<T>(
 export interface NewTurnInput {
   text: string;
   questionSource?: QuestionSource;
+  /** Transcrição como o ditado a entregou, antes de o cuidador revisar. */
+  originalText?: string | null;
   isSensitive?: boolean;
   sensitiveCategory?: SensitiveCategory | null;
   /** Pergunta criada a partir de outra, pelo histórico (§24). */
@@ -358,6 +360,7 @@ const api = {
         sessionId,
         text: input.text,
         questionSource: input.questionSource ?? "MANUAL_TEXT",
+        originalText: input.originalText ?? undefined,
         isSensitive: input.isSensitive ?? false,
         sensitiveCategory: input.sensitiveCategory ?? undefined,
         reusedFromTurnId: input.reusedFromTurnId ?? undefined,
@@ -1159,6 +1162,7 @@ export function useRtqPersistence(offline?: OfflineBridge): RtqPersistence {
                     turnId,
                     text: input.text,
                     questionSource: input.questionSource ?? "MANUAL_TEXT",
+                    originalText: input.originalText ?? null,
                     isSensitive: input.isSensitive ?? false,
                     sensitiveCategory: input.sensitiveCategory ?? null,
                     reusedFromTurnId: input.reusedFromTurnId ?? null,

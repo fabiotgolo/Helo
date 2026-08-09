@@ -89,6 +89,7 @@ function montarRequisicao(op: OfflineOperation): SyncRequest {
           sessionId: p.sessionId,
           text: p.text,
           questionSource: p.questionSource,
+          originalText: p.originalText,
           isSensitive: p.isSensitive,
           sensitiveCategory: p.sensitiveCategory,
           reusedFromTurnId: p.reusedFromTurnId,

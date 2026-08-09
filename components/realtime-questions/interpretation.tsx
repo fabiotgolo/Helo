@@ -21,6 +21,8 @@ import {
   Primary,
   Selo,
 } from "@/components/realtime-questions/ui";
+import { DictationButton } from "@/components/voice/dictation-button";
+import { useDictationField } from "@/lib/voice/use-dictation";
 import { MAX_STATEMENT_LEN } from "@/lib/option-conversation-types";
 import {
   SENSITIVE_CATEGORIES,
@@ -44,16 +46,29 @@ export const EMPTY_INTERPRETATION: InterpretationDraft = {
 export function InterpretationEditor({
   draft,
   busy,
+  patientId,
   onChange,
   onSubmit,
   onCancel,
 }: {
   draft: InterpretationDraft;
   busy: boolean;
+  /** Paciente da sessão — o ditado é autorizado por vínculo com ele. */
+  patientId: number;
   onChange: (d: InterpretationDraft) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }) {
+  // Ditar aqui não muda nada do que este arquivo inteiro defende: antes do SIM
+  // do paciente, isto é interpretação do cuidador. Falar em vez de digitar é
+  // uma forma de escrever, não uma forma de o paciente ter dito algo.
+  const ditado = useDictationField({
+    patientId,
+    valor: draft.text,
+    aoMudar: (texto) => onChange({ ...draft, text: texto }),
+    limite: MAX_STATEMENT_LEN,
+    bloqueado: busy,
+  });
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col gap-4">
       <header className="flex flex-col gap-1">
@@ -81,6 +96,8 @@ export function InterpretationEditor({
           {draft.text.length}/{MAX_STATEMENT_LEN}
         </span>
       </label>
+
+      <DictationButton ditado={ditado} rotuloDoCampo="a interpretação" />
 
       <div className="flex flex-wrap gap-3">
         <Primary onClick={onSubmit} disabled={busy || !draft.text.trim()}>
