@@ -3,7 +3,7 @@
 // e acrescenta só o que é específico deste modo.
 
 import { expect, type Page } from "@playwright/test";
-import { abrirModo, pularContexto } from "./helpers";
+import { abrirModo, iniciarNovaSessao, pularContexto } from "./helpers";
 
 /** Abre a sessão e entra na conversa por opções pela entrada manual. */
 export async function iniciarConversaPorOpcoes(
@@ -11,7 +11,7 @@ export async function iniciarConversaPorOpcoes(
   patientId: number
 ): Promise<void> {
   await abrirModo(page, patientId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(
     page.getByRole("heading", { name: "Escreva a pergunta" })
