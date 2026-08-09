@@ -64,6 +64,18 @@ export const PRAZO_TRANSCRICAO_MS = 30_000;
 export const MODELO_SCRIBE = "scribe_v2";
 export const IDIOMA_SCRIBE = "por";
 
+/**
+ * Teto do texto que aceitamos como transcrição.
+ *
+ * Sessenta segundos de fala corrida dão ~900 caracteres, e o maior campo com
+ * ditado aceita 500. Quatro mil é folga larga para um provedor verboso, e
+ * ainda assim um limite: uma resposta gigante — provedor com defeito, resposta
+ * de outro endpoint, página de erro que veio com status 200 — não pode virar
+ * uma string enorme circulando pela interface e pelo campo de formulário.
+ * Acima disso não truncamos: texto clínico cortado no meio é pior que ausente.
+ */
+export const TAMANHO_MAXIMO_TRANSCRICAO = 4_000;
+
 // ---------- Retenção zero ----------
 
 /**
@@ -141,8 +153,14 @@ export type EstadoDoDitado =
 export type FalhaDoDitado =
   | "PERMISSION_DENIED"
   | "NO_DEVICE"
+  /** O microfone sumiu NO MEIO da gravação — cabo puxado, fone desligado. */
+  | "DEVICE_LOST"
   | "UNSUPPORTED"
   | "OFFLINE"
+  /** A tela saiu de vista com o microfone aberto: cancelamos por privacidade. */
+  | "BACKGROUNDED"
+  /** O microfone está com o Agente Helo, ou há áudio da Helo tocando. */
+  | "MIC_OCUPADO"
   | "TIMEOUT"
   | "PROVIDER_UNAVAILABLE"
   | "EMPTY_TRANSCRIPT"
@@ -160,10 +178,16 @@ export function mensagemDoDitado(falha: FalhaDoDitado): string {
       return "O microfone não foi liberado. Você pode digitar normalmente.";
     case "NO_DEVICE":
       return "Nenhum microfone disponível. Você pode digitar normalmente.";
+    case "DEVICE_LOST":
+      return "O microfone foi desconectado durante a gravação. Nada foi enviado — você pode digitar ou ditar de novo.";
     case "UNSUPPORTED":
       return "Este navegador não grava áudio. Você pode digitar normalmente.";
     case "OFFLINE":
-      return "Sem conexão. O ditado volta quando a internet voltar.";
+      return "A conexão caiu e o ditado foi interrompido. O que você digitou continua aqui.";
+    case "BACKGROUNDED":
+      return "O ditado foi cancelado porque esta tela saiu de vista. Nada foi gravado nem enviado.";
+    case "MIC_OCUPADO":
+      return "O microfone está em uso pela Helo. Encerre a conversa ou espere o áudio terminar para ditar.";
     case "TIMEOUT":
       return "A transcrição demorou demais. Tente de novo ou digite.";
     case "PROVIDER_UNAVAILABLE":
@@ -181,6 +205,13 @@ export function mensagemDoDitado(falha: FalhaDoDitado): string {
 export const AVISO_LIMITE_DE_TEMPO =
   "O tempo máximo de gravação foi atingido. Transcrevendo o que foi gravado.";
 
+/**
+ * O transcript não coube no campo, e por isso NADA foi escrito. Também não é
+ * falha: o ditado funcionou, o texto é que é maior que o espaço.
+ */
+export const AVISO_NAO_COUBE =
+  "O que foi ditado não cabe no limite deste campo, então nada foi alterado. Encurte o texto ou dite em partes.";
+
 // ---------- Transcrição → campo ----------
 
 /**
@@ -194,12 +225,28 @@ export function limpaTranscricao(bruto: unknown): string {
   return bruto.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * A resposta do provedor, conferida como ESTRUTURA antes de virar texto.
+ *
+ * `null` quer dizer "isto não é uma transcrição": não é string, ou é grande
+ * demais para ter saído de um minuto de fala. Não é a mesma coisa que string
+ * vazia, que é uma transcrição legítima de silêncio.
+ */
+export function validaTranscricao(bruto: unknown): string | null {
+  if (typeof bruto !== "string") return null;
+  if (bruto.length > TAMANHO_MAXIMO_TRANSCRICAO) return null;
+  return limpaTranscricao(bruto);
+}
+
 export interface AplicacaoDeTranscricao {
   texto: string;
-  /** Falso quando a transcrição veio vazia: o campo não pode ser alterado. */
+  /** Falso quando nada pôde entrar no campo — vazio, ou não coube. */
   mudou: boolean;
-  /** O limite do campo cortou parte do que foi dito. */
-  truncado: boolean;
+  /**
+   * O texto todo junto passaria do `maxLength` do campo, e por isso NADA foi
+   * escrito. O cuidador é avisado e o que ele já tinha continua onde estava.
+   */
+  naoCoube: boolean;
 }
 
 /**
@@ -212,8 +259,23 @@ export interface AplicacaoDeTranscricao {
  * momento em que a pessoa está de olho no paciente e não na tela. Acrescentar
  * nunca destrói trabalho; o que sobra o cuidador apaga, que é uma tecla.
  *
- * Transcrição vazia não encosta no campo (§22): "não entendi" não pode virar
+ * Transcrição vazia não encosta no campo: "não entendi" não pode virar
  * "apagou o que você escreveu".
+ *
+ * ——— E o que não cabe não entra ———
+ *
+ * A 5.2A cortava o excedente no fim e avisava. A 5.2B não corta.
+ *
+ * Um `maxLength` num campo do Helo é o limite de uma pergunta que vai ser lida
+ * por um paciente; cortar no caractere 500 produz uma frase que termina no meio
+ * — e uma frase pela metade apresentada a alguém que só pode responder SIM ou
+ * NÃO é pior que nenhuma frase. Pior ainda: quem ditou estava olhando para o
+ * paciente, não para a tela, e um corte silencioso só aparece depois de o botão
+ * "Continuar" já ter sido apertado.
+ *
+ * Então, quando não cabe: o campo fica exatamente como estava, e o cuidador é
+ * avisado. Ele encurta, apaga o que não quer, ou dita de novo em duas partes —
+ * três caminhos que ele controla, nenhum deles destrutivo.
  */
 export function aplicaTranscricao(
   atual: string,
@@ -221,12 +283,88 @@ export function aplicaTranscricao(
   limite: number
 ): AplicacaoDeTranscricao {
   const limpa = limpaTranscricao(transcricao);
-  if (!limpa) return { texto: atual, mudou: false, truncado: false };
+  if (!limpa) return { texto: atual, mudou: false, naoCoube: false };
 
   const base = atual ?? "";
   const juntos = base.trim() ? `${base.replace(/\s+$/, "")} ${limpa}` : limpa;
-  const truncado = juntos.length > limite;
-  return { texto: truncado ? juntos.slice(0, limite) : juntos, mudou: true, truncado };
+  if (juntos.length > limite) return { texto: base, mudou: false, naoCoube: true };
+  return { texto: juntos, mudou: true, naoCoube: false };
+}
+
+// ---------- Proveniência ----------
+
+/**
+ * De onde veio o texto que está no campo — e a resposta tem de ser verdadeira.
+ *
+ * `VOICE_TRANSCRIPTION` precisa significar "esta pergunta NASCEU de uma
+ * transcrição de voz", não "em algum momento houve voz neste campo". A
+ * diferença aparece no caso mais comum de todos: o cuidador digita metade,
+ * percebe que é mais rápido falar o resto, e dita. Marcar a pergunta inteira
+ * como ditada aí seria atribuir à voz um texto que a pessoa escreveu com as
+ * mãos — e proveniência é registro clínico, não estatística de uso.
+ *
+ * As regras, todas determinísticas:
+ *
+ *   campo vazio + ditado          → nasceu por voz
+ *   campo com texto + ditado      → continua digitada, para sempre
+ *   nasceu por voz + edição       → continua por voz; `original` não muda
+ *   nasceu por voz + outro ditado → `original` ganha a nova transcrição BRUTA
+ *   campo esvaziado               → a procedência morre junto com o texto
+ *
+ * `original` guarda as transcrições cruas, na ordem, unidas por espaço — o que
+ * a voz produziu antes de qualquer revisão. Nunca as edições manuais: o texto
+ * final já está no campo, e misturar os dois faria `originalText` mentir
+ * exatamente onde ele existe para não mentir.
+ *
+ * Não guardamos cronologia de teclas. Isto é tudo que o produto precisa saber.
+ */
+export type OrigemDoTexto = "MANUAL_TEXT" | "VOICE_TRANSCRIPTION";
+
+export interface ProcedenciaDoTexto {
+  origem: OrigemDoTexto;
+  /** Transcrições brutas aceitas, em ordem. `null` quando a origem é manual. */
+  original: string | null;
+}
+
+/** O estado de um campo em que ninguém falou ainda. */
+export function procedenciaInicial(): ProcedenciaDoTexto {
+  return { origem: "MANUAL_TEXT", original: null };
+}
+
+/**
+ * Uma transcrição acabou de entrar. `textoAntes` é o conteúdo do campo no
+ * instante ANTERIOR — é ele que decide se a pergunta nasce por voz.
+ */
+export function registraDitado(
+  atual: ProcedenciaDoTexto,
+  textoAntes: string,
+  transcricao: string
+): ProcedenciaDoTexto {
+  const limpa = limpaTranscricao(transcricao);
+  if (!limpa) return atual;
+  if (atual.origem === "VOICE_TRANSCRIPTION") {
+    return {
+      origem: "VOICE_TRANSCRIPTION",
+      original: atual.original ? `${atual.original} ${limpa}` : limpa,
+    };
+  }
+  // Já havia texto digitado quando a voz chegou: a pergunta é dele.
+  if ((textoAntes ?? "").trim()) return atual;
+  return { origem: "VOICE_TRANSCRIPTION", original: limpa };
+}
+
+/**
+ * O campo mudou por digitação. Esvaziá-lo apaga a procedência — o texto que a
+ * voz produziu não existe mais, e o próximo a entrar define a origem de novo.
+ * Qualquer outra edição preserva: revisar o que se ditou é o fluxo, não é
+ * escrever de novo.
+ */
+export function registraEdicao(
+  atual: ProcedenciaDoTexto,
+  textoDepois: string
+): ProcedenciaDoTexto {
+  if ((textoDepois ?? "").trim()) return atual;
+  return procedenciaInicial();
 }
 
 // ---------- Classificação de falhas ----------

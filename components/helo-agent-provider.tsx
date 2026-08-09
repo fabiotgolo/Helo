@@ -30,6 +30,12 @@ import {
   setAgentConversationActive,
   setAgentSpeaking,
 } from "@/lib/audio-coordinator";
+import {
+  adquireMicrofone,
+  avancaMicrofone,
+  liberaMicrofone,
+  type ConcessaoDoMicrofone,
+} from "@/lib/voice/mic-ownership";
 import { usePatient } from "@/lib/patient";
 import { isHeloPersistentAssistantEnabled } from "@/lib/defaults";
 import {
@@ -341,6 +347,10 @@ function HeloAgentSession({
   const startedRef = useRef(false);
   const startingRef = useRef(false);
   const connectedRef = useRef(false);
+  // A posse do microfone enquanto esta conversa durar. Tomada no primeiro
+  // instante de `connect()` — antes do token, antes do WebRTC — porque é
+  // exatamente o intervalo em que a 5.2A deixava o ditado entrar por baixo.
+  const concessaoDoMicrofoneRef = useRef<ConcessaoDoMicrofone | null>(null);
   const statusRef = useRef("disconnected");
   const patientIdRef = useRef<number | null>(patientId);
   const sessionPatientIdRef = useRef<number | null>(null);
@@ -1430,6 +1440,15 @@ function HeloAgentSession({
     const agentActive =
       starting || restarting || status === "connecting" || status === "connected";
     setAgentConversationActive(agentActive);
+    if (agentActive) return;
+    // E a devolução do microfone segue o mesmo princípio: derivada do estado
+    // REAL, não marcada em cada handler. Encerrar, cair, falhar ao conectar e
+    // errar no meio da conversa são caminhos diferentes que chegam todos aqui —
+    // e nenhum deles pode deixar a posse presa, porque uma posse presa é um
+    // ditado que não abre mais e um cuidador sem explicação.
+    const concessao = concessaoDoMicrofoneRef.current;
+    concessaoDoMicrofoneRef.current = null;
+    if (concessao) liberaMicrofone(concessao);
   }, [starting, restarting, status]);
 
   // O Agente está FALANDO agora — alimenta o orbe/telemetria do Audio Manager.
@@ -1463,6 +1482,9 @@ function HeloAgentSession({
     () => () => {
       setAgentSpeaking(false);
       setAgentConversationActive(false);
+      const concessao = concessaoDoMicrofoneRef.current;
+      concessaoDoMicrofoneRef.current = null;
+      if (concessao) liberaMicrofone(concessao);
     },
     []
   );
@@ -1673,14 +1695,30 @@ function HeloAgentSession({
       sdkSession.isOpen() ||
       statusRef.current !== "disconnected"
     ) return false;
-    // O outro lado da arbitragem da 5.2A: o ditado abriu o microfone primeiro
-    // e fica com ele. Conectar por cima reconfiguraria o dispositivo e a
-    // captura em curso perderia o áudio já falado — sem nenhum aviso a quem
-    // estava falando.
+    // O outro lado da arbitragem: o ditado abriu o microfone primeiro e fica
+    // com ele. Conectar por cima reconfiguraria o dispositivo e a captura em
+    // curso perderia o áudio já falado — sem nenhum aviso a quem estava
+    // falando. Vale também durante a TRANSCRIÇÃO, quando o microfone já
+    // fechou: existe uma resposta em voo que ainda vai escrever num campo, e
+    // ela não pode chegar no meio de uma conversa.
     if (isDictationActive()) {
       onError("O ditado está usando o microfone. Conclua ou descarte o ditado para conversar com a Helo.");
       return false;
     }
+    // E a posse é TOMADA aqui, não verificada. Entre esta linha e o WebRTC
+    // aberto passam segundos de rede; sem a concessão, um toque no botão de
+    // ditar nesse intervalo encontraria o Agente "ainda não ativo" e abriria um
+    // segundo microfone. A concessão anterior é reaproveitada quando existe: é
+    // o caso da troca de voz, que encerra e reabre a sessão sem que o cuidador
+    // tenha soltado o dispositivo em momento nenhum.
+    let concessao = concessaoDoMicrofoneRef.current;
+    if (concessao && !avancaMicrofone(concessao, "AGENT_CONNECTING")) concessao = null;
+    concessao ??= adquireMicrofone("AGENT_CONNECTING");
+    if (!concessao) {
+      onError("O microfone está ocupado. Conclua ou descarte o ditado para conversar com a Helo.");
+      return false;
+    }
+    concessaoDoMicrofoneRef.current = concessao;
     startingRef.current = true;
     setStarting(true);
     onError(null);
@@ -1730,6 +1768,9 @@ function HeloAgentSession({
         if (aberta.reason === "failed") onError(describeConversationError(aberta.error));
         return false;
       }
+      // Conversa de pé: a posse avança de "conectando" para "ativa". Mesma
+      // concessão, mesmo dono — o que muda é só o que a interface pode dizer.
+      avancaMicrofone(concessao, "AGENT_ACTIVE");
       loggedSessionIdRef.current = aberta.loggedSessionId;
       sessionPatientIdRef.current = requestedPatientId;
       setActiveSessionPatientId(requestedPatientId);

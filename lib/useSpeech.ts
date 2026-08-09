@@ -7,6 +7,7 @@ import {
   isPlatformMuted,
   registerPlatformAudioPurge,
   registerPlatformStop,
+  setPlatformSpeaking,
   type EscopoLiberacaoAudio,
 } from "@/lib/audio-coordinator";
 import { AudioCache } from "@/lib/voice/audio-cache";
@@ -98,9 +99,16 @@ export function useSpeech() {
   // camada, e a liberação também precisa.
   const pacienteVistoRef = useRef<number | null>(null);
 
+  // Identidade desta instância no coordenador. Um objeto vazio serve: o que se
+  // quer é uma chave estável e única por hook, para o Set de quem está soando.
+  const tokenDeVoz = useRef({});
+
   const setSpeakingBoth = useCallback((v: boolean) => {
     speakingRef.current = v;
     setSpeaking(v);
+    // O coordenador precisa saber que existe SOM no ambiente — é o que impede
+    // o ditado de abrir o microfone em cima da fala da Helo (Fase 5.2B, §19).
+    setPlatformSpeaking(tokenDeVoz.current, v);
     if (!v) {
       setActiveSpeaker("none");
       setActiveVoiceSource("none");

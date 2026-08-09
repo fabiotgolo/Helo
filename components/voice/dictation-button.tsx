@@ -24,7 +24,11 @@ export function DictationButton({
   rotuloDoCampo: string;
 }) {
   const avisoId = useId();
-  if (!ditado.disponivel) return null;
+  // Indisponível E sem nada a dizer: some por completo, como sempre. Mas quando
+  // a indisponibilidade é a própria notícia — a rede caiu no meio da gravação e
+  // o botão sumiu junto —, a frase fica. Sem ela a captura terminaria em
+  // silêncio e o cuidador ficaria esperando um texto que não vem.
+  if (!ditado.disponivel && !ditado.aviso) return null;
 
   const ouvindo = ditado.estado === "LISTENING";
   const pedindo = ditado.estado === "REQUESTING_PERMISSION";
@@ -32,6 +36,7 @@ export function DictationButton({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {ditado.disponivel && (
       <button
         type="button"
         onClick={ouvindo ? ditado.para : ditado.inicia}
@@ -48,29 +53,35 @@ export function DictationButton({
         <span aria-hidden="true">{ouvindo ? "⏺" : "🎙"}</span>
         {ouvindo ? "Parar" : processando ? "Transcrevendo…" : pedindo ? "Aguardando…" : "Ditar"}
       </button>
-
-      {ouvindo && (
-        <>
-          <span
-            aria-live="assertive"
-            className="text-sm font-medium text-ink"
-          >
-            Microfone aberto — gravando.
-          </span>
-          <button
-            type="button"
-            onClick={ditado.cancela}
-            className="min-h-11 rounded-xl px-3 py-2 text-sm text-ink-soft underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-          >
-            Descartar
-          </button>
-        </>
       )}
 
-      {processando && (
-        <span aria-live="polite" className="text-sm text-ink-soft">
-          Transcrevendo…
+      {/* Uma região viva só, com o estado atual dentro. Duas regiões — uma para
+          gravar, outra para transcrever — fariam o leitor de tela anunciar a
+          troca duas vezes, e a mensagem some e volta a cada render. */}
+      {(ouvindo || pedindo || processando) && (
+        <span
+          aria-live="polite"
+          className={ouvindo ? "text-sm font-medium text-ink" : "text-sm text-ink-soft"}
+        >
+          {ouvindo
+            ? "Microfone aberto — gravando."
+            : pedindo
+              ? "Aguardando a liberação do microfone."
+              : "Transcrevendo…"}
         </span>
+      )}
+
+      {/* Descartar existe enquanto houver o que descartar — inclusive durante a
+          transcrição, que é quando a espera incomoda e a pessoa quer sair dela.
+          Aqui ele aborta a requisição: nada volta para o campo. */}
+      {(ouvindo || pedindo || processando) && (
+        <button
+          type="button"
+          onClick={ditado.cancela}
+          className="min-h-11 rounded-xl px-3 py-2 text-sm text-ink-soft underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+        >
+          Descartar
+        </button>
       )}
 
       {ditado.aviso && (

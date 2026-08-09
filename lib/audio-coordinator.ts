@@ -34,12 +34,21 @@
 // muta a plataforma, não o microfone/conversa do Agente.
 
 import { useEffect, useSyncExternalStore } from "react";
+import {
+  adquireMicrofone,
+  assinaMicrofone,
+  ditadoDetemMicrofone,
+  donoDoMicrofone,
+  liberaMicrofone,
+} from "@/lib/voice/mic-ownership";
 
 /** Motivo pelo qual a fala da plataforma foi negada. */
 export type PlatformSpeakDenyReason =
   | "patient_voice_active"
   | "agent_active"
-  | "platform_muted";
+  | "platform_muted"
+  /** O cuidador está com o microfone aberto: falar agora seria falar no ditado. */
+  | "dictation_capturing";
 
 export type PlatformSpeakGate =
   | { ok: true }
@@ -56,9 +65,6 @@ const state = {
   // O Agente está efetivamente FALANDO agora (não só conectado). Mantido para
   // diagnóstico/telemetria do orbe — não gateia mais a emergência.
   agentSpeaking: false,
-  // O cuidador está com o microfone aberto para ditar (Fase 5.2A). Não é voz
-  // que soa: é captura. Fica aqui porque o dispositivo é um só.
-  dictationActive: false,
   platformMuted: false,
   // Só lê o localStorage uma vez, do lado do cliente, para não divergir entre
   // SSR e hidratação (o servidor sempre renderiza "não mutado").
@@ -101,6 +107,33 @@ export function stopAllPlatformAudio(): void {
   for (const stop of platformStops) stop();
 }
 
+// ——— Quem está SOANDO agora (Fase 5.2B) ———
+//
+// Saber que existem instâncias de voz montadas nunca disse nada sobre haver som
+// no ambiente, e o ditado precisa exatamente disso: abrir o microfone enquanto
+// a Helo fala é gravar a Helo. O caso que dói é o terceiro — a voz clonada do
+// paciente tocando enquanto o cuidador começa a ditar — porque o transcript
+// sairia com a fala do PACIENTE dentro dele, num campo que o cuidador vai
+// revisar como se fosse coisa que ele mesmo disse.
+//
+// Um Set de instâncias, e não um contador: um `stop()` chamado duas vezes
+// deixaria um contador preso em 1 para sempre, e o ditado nunca mais abriria.
+
+const platformSpeakingTokens = new Set<object>();
+
+/** Uma instância de voz começou (ou parou) de reproduzir. Idempotente. */
+export function setPlatformSpeaking(token: object, speaking: boolean): void {
+  const antes = platformSpeakingTokens.size;
+  if (speaking) platformSpeakingTokens.add(token);
+  else platformSpeakingTokens.delete(token);
+  if (platformSpeakingTokens.size !== antes) emit();
+}
+
+/** Alguma voz controlada pelo Helo está soando — plataforma ou paciente. */
+export function isHeloAudioPlaying(): boolean {
+  return state.patientVoiceActive || platformSpeakingTokens.size > 0;
+}
+
 // ——— Liberação do áudio guardado (Fase 5.1B, R-06) ———
 //
 // Parar é uma coisa; LIBERAR é outra, e faltava a segunda. Um `stop()` apenas
@@ -137,7 +170,7 @@ export function purgePlatformAudio(escopo: EscopoLiberacaoAudio): void {
   for (const purge of platformAudioPurges) purge(escopo);
 }
 
-// ——— Ditado do cuidador (Fase 5.2A) ———
+// ——— Ditado do cuidador (Fase 5.2A, endurecido na 5.2B) ———
 //
 // O microfone tem um dono de cada vez. O Agente Helo abre um stream WebRTC e o
 // mantém aberto pela conversa inteira; o ditado abre um stream curto e o fecha.
@@ -145,13 +178,18 @@ export function purgePlatformAudio(escopo: EscopoLiberacaoAudio): void {
 // segundo `getUserMedia` reconfigura o dispositivo, e quem perde é a captura
 // que já estava em curso — a do Agente, no meio de uma frase do paciente.
 //
-// A arbitragem aqui é a mínima que impede isso: quem chegou primeiro fica, e o
-// segundo é recusado com uma frase que o cuidador entende. A coordenação fina
-// (enfileirar, retomar, ceder a vez) é da 5.2B; o que não pode é a 5.2A nascer
-// permitindo dois donos concorrentes.
+// A 5.2A arbitrava com dois booleans consultados de longe. A 5.2B substituiu
+// isso por uma posse tomada de forma indivisível, com identidade, em
+// `lib/voice/mic-ownership.ts` — o motivo está escrito lá. O que sobra aqui é o
+// que sempre foi deste módulo: alcançar QUALQUER captura montada, em qualquer
+// árvore React, para encerrá-la de fora (logout, troca de paciente, emergência).
 //
 // O transcript NÃO passa por aqui. Este módulo arbitra dispositivo, não
 // conteúdo — e o texto do ditado nunca chega perto da conversa do Agente.
+
+// A posse muda fora do React; a interface precisa saber. Uma assinatura só,
+// no nível do módulo, repassando para quem já ouvia este coordenador.
+assinaMicrofone(emit);
 
 const dictationStops = new Set<() => void>();
 
@@ -173,16 +211,25 @@ export function stopAllDictation(): void {
   for (const stop of dictationStops) stop();
 }
 
+/**
+ * O ditado detém o microfone — inclusive durante a transcrição, quando o
+ * dispositivo já fechou mas uma resposta ainda pode voltar e escrever no campo.
+ * Derivado da posse; não existe mais um boolean que alguém possa desligar.
+ */
 export function isDictationActive(): boolean {
-  return state.dictationActive;
+  return ditadoDetemMicrofone();
 }
 
-/** O ditado assumiu (ou soltou) o microfone. Idempotente. */
-export function setDictationActive(active: boolean): void {
-  if (state.dictationActive === active) return;
-  state.dictationActive = active;
-  console.log(active ? "[HELO AUDIO] dictation active" : "[HELO AUDIO] dictation ended");
-  emit();
+/**
+ * O microfone está FISICAMENTE aberto para o ditado.
+ *
+ * Distinto do anterior de propósito: durante a transcrição a captura já
+ * terminou, e é seguro voltar a tocar áudio — o que não é seguro é o Agente
+ * entrar, porque a resposta pendente ainda mexe na tela.
+ */
+export function isDictationCapturing(): boolean {
+  const dono = donoDoMicrofone();
+  return dono === "DICTATION_REQUESTING" || dono === "DICTATION_LISTENING";
 }
 
 export function isPlatformMuted(): boolean {
@@ -237,6 +284,13 @@ export function beginPatientVoiceOverride(): void {
   state.patientVoiceActive = true;
   console.log("[HELO AUDIO] priority requested: patient_emergency_phrase");
   console.log("[HELO AUDIO] stopping lower priority audio");
+  // A emergência não espera, e não fica esperando o ditado terminar. Ela
+  // ENCERRA a captura — que é o oposto de tocar por cima dela: o áudio
+  // gravado até aqui é descartado e nada é enviado, em vez de a voz do
+  // paciente entrar no transcript do cuidador. Um botão de emergência que
+  // pudesse ser bloqueado por um campo de texto não seria um botão de
+  // emergência.
+  stopAllDictation();
   stopAllPlatformAudio();
   console.log("[HELO AUDIO] suppressing agent speech");
   for (const suppress of agentSuppressors) suppress(true);
@@ -263,6 +317,11 @@ export function endPatientVoiceOverride(): void {
 export function canPlatformSpeak(): PlatformSpeakGate {
   if (state.patientVoiceActive) return { ok: false, reason: "patient_voice_active" };
   if (state.agentConversationActive) return { ok: false, reason: "agent_active" };
+  // Microfone do cuidador aberto: a fala da plataforma seria captada e entraria
+  // no transcript como se ele a tivesse dito. Descartada, nunca enfileirada —
+  // uma fala automática que "espera a vez" chega quando ninguém mais espera
+  // por ela (mesma regra das demais negativas deste gate).
+  if (isDictationCapturing()) return { ok: false, reason: "dictation_capturing" };
   if (state.platformMuted) return { ok: false, reason: "platform_muted" };
   return { ok: true };
 }
@@ -376,6 +435,16 @@ if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
     endPatientVoiceOverride,
     isPatientVoiceActive,
     isDictationActive,
-    setDictationActive,
+    isDictationCapturing,
+    isHeloAudioPlaying,
+    stopAllDictation,
+    // A posse do microfone, para os testes de navegador poderem encená-la sem
+    // uma sessão real da ElevenLabs: tomar como se o Agente estivesse
+    // conectando, e devolver depois. Só em desenvolvimento, como todo o resto
+    // deste objeto.
+    donoDoMicrofone,
+    adquireMicrofone,
+    liberaMicrofone,
+    setPlatformSpeaking,
   };
 }
