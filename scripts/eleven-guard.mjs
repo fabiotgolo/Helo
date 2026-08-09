@@ -14,9 +14,22 @@
 // menciona. Não dá para lembrar de neutralizar uma coisa que não se vê.
 //
 // Então a decisão passa a ser tomada em um lugar só, no instante em que um
-// servidor de teste é levantado:
+// servidor de teste é levantado POR UM DOS CAMINHOS OFICIAIS:
 //
 //     sem opt-in explícito, o servidor sobe SEM provedor.
+//
+// ——— O alcance, dito com precisão ———
+//
+// Isto NÃO intercepta um `npx next dev` digitado à mão, e não pretende. Não é
+// um hook do framework nem um patch global: é uma função que o runner de lotes
+// e o `scripts/dev-server-de-teste.mjs` chamam ao montar o ambiente do processo
+// filho. Quem levantar um servidor por fora deles continua recebendo a chave do
+// `.env` — que é exatamente o que o preview manual do usuário precisa.
+//
+// A proteção é, portanto, de PROCESSO: servidor de regressão sobe por
+// `npm run test:ui:lotes` ou `npm run dev:teste`. O que mudou não foi a
+// impossibilidade de repetir o incidente — foi passar a existir um comando
+// pronto que faz a coisa certa, e um lugar onde está escrito qual é.
 //
 // ——— Por que neutralizar, e não apagar ———
 //

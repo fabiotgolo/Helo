@@ -18,7 +18,10 @@
 // recusa de autoria do 503 de "sem chave", e é essa distinção que ela prova).
 //
 // O `npm run dev` normal continua intocado. Ele é o preview do usuário, roda
-// com a chave real de propósito, e não é assunto deste arquivo.
+// com a chave real de propósito, e não é assunto deste arquivo. Um `npx next
+// dev` digitado à mão também não passa por aqui — a guarda vive DENTRO deste
+// launcher e do runner de lotes, não no framework. Por isso a regra é de
+// processo: servidor de regressão sobe por um destes dois comandos.
 
 import { spawn } from "node:child_process";
 import { ambienteSemProvedorReal, VARIAVEL_DA_CHAVE } from "./eleven-guard.mjs";

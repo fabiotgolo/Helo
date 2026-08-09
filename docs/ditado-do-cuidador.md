@@ -464,12 +464,29 @@ credencial errada.
 
 ### Como subir um servidor para as suítes HTTP *(5.2B)*
 
-Use o launcher, nunca um `next dev` digitado à mão:
+**Só existem dois caminhos permitidos para levantar um servidor de regressão**, e
+os dois passam pela guarda:
+
+| Caminho | Para quê |
+|---|---|
+| `npm run test:ui:lotes` | os lotes Playwright — o runner sobe o dev server sozinho |
+| `npm run dev:teste` | as suítes HTTP `.mjs`, que recebem uma URL já de pé |
 
 ```
 npm run dev:teste -- --porta 3510 --banco suite-http
 npm run dev:teste -- --porta 3540 --banco dit --ditado    # para o endpoint de ditado
 ```
+
+> **A guarda não intercepta um `npx next dev` digitado à mão.** Ela não é um
+> hook do framework nem um patch de `process.env` global: é uma decisão tomada
+> dentro do runner e do launcher, no momento em que *eles* montam o ambiente do
+> processo filho. Um `npx next dev` continua tecnicamente possível e continua
+> subindo com a chave do `.env` — que é, aliás, o que o preview manual precisa.
+>
+> Por isso a regra é de processo, não de mecanismo: **servidor de regressão sobe
+> por um dos dois comandos acima**. Foi um `npx next dev` à mão que produziu o
+> incidente, e o que mudou não foi a impossibilidade de repeti-lo — foi o fato de
+> existir um comando pronto que faz a coisa certa, e de estar escrito aqui qual é.
 
 O `--ditado` liga a flag e declara uma chave falsa, apontando o provedor para
 `http://127.0.0.1:4599/v1/speech-to-text` — o servidor de mentira que a própria
@@ -484,9 +501,9 @@ não vem de quem roda o teste: vem de um arquivo que o framework lê sozinho, e
 nenhum comando de teste a menciona. Não dá para lembrar de neutralizar o que
 não se vê.
 
-Agora a decisão é tomada num lugar só, em
-[`scripts/eleven-guard.mjs`](../scripts/eleven-guard.mjs), antes de qualquer
-processo nascer:
+A decisão passou a ser tomada num lugar só, em
+[`scripts/eleven-guard.mjs`](../scripts/eleven-guard.mjs), antes de o processo
+filho nascer — **nos dois caminhos oficiais acima, e apenas neles**:
 
 | Situação | Resultado |
 |---|---|
