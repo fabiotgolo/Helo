@@ -217,8 +217,14 @@ export default function EmergenciaPage() {
   );
 
   // Action Registry: as ações de socorro (e a edição contextual, quando
-  // permitida) com os MESMOS handlers do toque manual — o toque do Agent
-  // também é confirmação, pela regra do produto da Emergência.
+  // permitida) com os MESMOS handlers do toque manual.
+  //
+  // Quem aciona é uma PESSOA. As duas são `sensitive`, e o gate de origem
+  // (lib/helo-action-registry.ts) recusa `sensitive` ao Agent — ele pode
+  // NAVEGAR até a Emergência e explicar o que há aqui, nunca disparar uma
+  // frase de socorro. O comentário anterior dizia o contrário, e essa era a
+  // direção perigosa de errar: descrever o sistema como mais permissivo do
+  // que ele é leva a proteger de novo o que já está protegido.
   const registryActions = useMemo<HeloUIAction[]>(() => {
     const list: HeloUIAction[] = [];
     for (const item of actions) {
@@ -229,17 +235,6 @@ export default function EmergenciaPage() {
         type: "modeItem",
         enabled: true,
         run: () => trigger(item),
-        // Retorno TÉCNICO e não-narrável ao Agente: acionar por tool executa o
-        // MESMO handler do clique (registro silencioso + fala do paciente com
-        // prioridade máxima). Sem mensagem em linguagem natural — o Agente não
-        // deve ler nada em voz alta; quem fala é o paciente.
-        toolSuccess: {
-          result: "handled",
-          mode: "silent",
-          speechOwner: "patient",
-          suppressAgentSpeech: true,
-          suppressAssistantNarration: true,
-        },
       });
       if (canEdit && item.itemId) {
         const itemId = item.itemId;

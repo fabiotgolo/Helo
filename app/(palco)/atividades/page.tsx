@@ -172,7 +172,7 @@ export default function AtividadesPage() {
         type: "navigation",
         enabled: true,
         run: () => setPhrasesOpen(false),
-        toolSuccess: { result: "handled", screen: "activities_menu", suppressAssistantNarration: true },
+        toolSuccess: { screen: "activities_menu", suppressAssistantNarration: true },
       }];
     }
     if (view.kind !== "lista" || state !== "ok" || !templates) return [];
@@ -216,11 +216,7 @@ export default function AtividadesPage() {
         type: "activity",
         enabled: true,
         run: () => setPhrasesOpen(true),
-        toolSuccess: {
-          result: "opened",
-          screen: "phrases_to_listen",
-          suppressAssistantNarration: true,
-        },
+        toolSuccess: { screen: "phrases_to_listen", suppressAssistantNarration: true },
       });
     }
     for (const t of templates) {
@@ -247,12 +243,7 @@ export default function AtividadesPage() {
         enabled: Boolean(caps?.run) && starting == null,
         requiredPermission: "runActivities",
         run: () => void start(t),
-        toolSuccess: {
-          result: "opened",
-          screen: "activity_session",
-          activityTitle: t.title,
-          suppressAssistantNarration: true,
-        },
+        toolSuccess: { screen: "activity_session", suppressAssistantNarration: true },
       });
       if (caps?.edit) {
         list.push({

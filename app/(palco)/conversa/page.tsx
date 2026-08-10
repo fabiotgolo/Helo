@@ -647,12 +647,6 @@ export default function ConversaPage() {
             console.log("[HELO CONVERSAR] patient message repeated");
             void speakPatientPhrase(confirm.phrase);
           },
-          toolSuccess: {
-            result: "handled",
-            speechOwner: "patient",
-            suppressAgentSpeech: true,
-            suppressAssistantNarration: true,
-          },
         },
         {
           actionId: "conversa.continuar",

@@ -133,12 +133,6 @@ export function PhrasesToListenModal({
         type: "activity",
         enabled: !isPlaying && !startingRef.current,
         run: () => void playPhrase(),
-        toolSuccess: {
-          result: "handled",
-          audio: "phrase_playback_started",
-          speechOwner: "patient",
-          suppressAssistantNarration: true,
-        },
       }];
       if (hasNavigation) {
         actions.push(
@@ -155,7 +149,7 @@ export function PhrasesToListenModal({
             type: "navigation",
             enabled: index > 0,
             run: () => changePhrase(index - 1),
-            toolSuccess: { result: "handled", phraseIndex: index, suppressAssistantNarration: true },
+            toolSuccess: { suppressAssistantNarration: true },
           },
           {
             actionId: "atividades.frases.proxima",
@@ -171,7 +165,7 @@ export function PhrasesToListenModal({
             type: "navigation",
             enabled: index < phrases.length - 1,
             run: () => changePhrase(index + 1),
-            toolSuccess: { result: "handled", phraseIndex: index + 2, suppressAssistantNarration: true },
+            toolSuccess: { suppressAssistantNarration: true },
           }
         );
       }

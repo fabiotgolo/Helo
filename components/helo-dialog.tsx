@@ -211,7 +211,6 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
         type: "navigation",
         enabled: true,
         run: () => settle(false),
-        toolSuccess: { result: "handled", dialog: "closed", value: false, suppressAssistantNarration: true },
       });
     }
     actions.push({
@@ -231,7 +230,6 @@ export function HeloDialogProvider({ children }: { children: ReactNode }) {
       type: "navigation",
       enabled: true,
       run: () => settle(true),
-      toolSuccess: { result: "handled", dialog: "closed", value: true, suppressAssistantNarration: true },
     });
     return actions;
   }, [cancelLabel, confirmLabel, isConfirm, request, settle]);
