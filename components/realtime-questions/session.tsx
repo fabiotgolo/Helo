@@ -1140,9 +1140,44 @@ export function RealtimeQuestionSession({
   //                             como capability recriaria o R-09 pela porta dos
   //                             fundos.
   //   As opções apresentadas  — `patientResponse`. Nunca.
+  // ——— Os handlers, atrás de uma referência estável ———
+  //
+  // `sessionAct`, `abrirControles`, `startOptionConversation` e
+  // `leaveOptionConversation` são `useCallback` que dependem de `persist`, e
+  // `persist` muda de identidade a cada render. Se o memo abaixo dependesse
+  // deles, ele reconstruiria as seis ações — com todos os aliases — em TODO
+  // render desta tela, e o efeito de registro faria delete+set junto. Esta é
+  // a tela mais quente do produto durante uma conversa por opções; pagar isso
+  // por render é caro e desnecessário.
+  //
+  // O ref é lido no MOMENTO DA EXECUÇÃO, nunca durante o render: o que o Agent
+  // aciona é sempre o handler atual, e o memo passa a depender só de valores
+  // primitivos — o estado real da tela.
+  const heloHandlers = useRef({
+    sessionAct,
+    abrirControles,
+    startOptionConversation,
+    leaveOptionConversation,
+    setInterpreting,
+  });
+  useEffect(() => {
+    heloHandlers.current = {
+      sessionAct,
+      abrirControles,
+      startOptionConversation,
+      leaveOptionConversation,
+      setInterpreting,
+    };
+  }, [sessionAct, abrirControles, startOptionConversation, leaveOptionConversation]);
+
+  const heloPausada = paused;
+  const heloIndisponivel = sessionOver || context == null;
+  const heloNoCaminho = openPath != null;
+  const heloSemPergunta = currentTurn == null && !interpreting && !heloNoCaminho;
+
   const heloAcoes = useMemo<HeloUIAction[]>(() => {
-    if (sessionOver || context == null) return [];
-    if (paused) {
+    if (heloIndisponivel) return [];
+    if (heloPausada) {
       return [
         {
           actionId: "perguntas.retomar",
@@ -1151,16 +1186,11 @@ export function RealtimeQuestionSession({
           aliases: ["retomar", "retomar a sessão", "continuar a sessão", "despausar"],
           type: "activity",
           enabled: !busy,
-          run: () => void sessionAct("RESUME").catch(() => {}),
+          run: () => void heloHandlers.current.sessionAct("RESUME").catch(() => {}),
           toolSuccess: { screen: "perguntas", suppressAssistantNarration: true },
         },
       ];
     }
-    // Montado como LITERAL, sem `push`. O lint do React 19 reclama de passar a
-    // uma função um objeto que fecha sobre callbacks que leem refs — e
-    // `startOptionConversation`/`leaveOptionConversation` leem. A lista
-    // condicional resolve isso sem esconder nada.
-    const semPerguntaEmCurso = currentTurn == null && !interpreting && !openPath;
     return [
       {
         // Permanente por decisão de produto: o paciente precisa alcançar os
@@ -1177,7 +1207,7 @@ export function RealtimeQuestionSession({
         ],
         type: "navigation",
         enabled: !controlsOpen,
-        run: () => void abrirControles(),
+        run: () => void heloHandlers.current.abrirControles(),
         toolSuccess: { screen: "perguntas_controles", suppressAssistantNarration: true },
       },
       {
@@ -1187,10 +1217,10 @@ export function RealtimeQuestionSession({
         aliases: ["pausar", "pausar a sessão", "pausa"],
         type: "activity",
         enabled: !busy,
-        run: () => void sessionAct("PAUSE").catch(() => {}),
+        run: () => void heloHandlers.current.sessionAct("PAUSE").catch(() => {}),
         toolSuccess: { screen: "perguntas_pausada", suppressAssistantNarration: true },
       },
-      ...(openPath
+      ...(heloNoCaminho
         ? [
             {
               actionId: "perguntas.sairDaConversaPorOpcoes",
@@ -1204,14 +1234,14 @@ export function RealtimeQuestionSession({
               ],
               type: "navigation",
               enabled: true,
-              run: () => leaveOptionConversation(),
+              run: () => heloHandlers.current.leaveOptionConversation(),
               toolSuccess: { screen: "perguntas", suppressAssistantNarration: true },
             } satisfies HeloUIAction,
           ]
         : []),
       // Os dois modos alternativos só nascem quando não há pergunta em curso —
       // exatamente a condição que a tela usa para oferecer os botões.
-      ...(semPerguntaEmCurso
+      ...(heloSemPergunta
         ? [
             {
               actionId: "perguntas.conversaPorOpcoes",
@@ -1225,7 +1255,7 @@ export function RealtimeQuestionSession({
               ],
               type: "activity",
               enabled: !busy,
-              run: () => void startOptionConversation(),
+              run: () => void heloHandlers.current.startOptionConversation(),
               toolSuccess: {
                 screen: "perguntas_conversa_por_opcoes",
                 suppressAssistantNarration: true,
@@ -1245,7 +1275,7 @@ export function RealtimeQuestionSession({
               ],
               type: "activity",
               enabled: !busy,
-              run: () => setInterpreting(true),
+              run: () => heloHandlers.current.setInterpreting(true),
               toolSuccess: {
                 screen: "perguntas_interpretacao",
                 suppressAssistantNarration: true,
@@ -1254,20 +1284,7 @@ export function RealtimeQuestionSession({
           ]
         : []),
     ];
-  }, [
-    abrirControles,
-    busy,
-    context,
-    controlsOpen,
-    currentTurn,
-    interpreting,
-    leaveOptionConversation,
-    openPath,
-    paused,
-    sessionAct,
-    sessionOver,
-    startOptionConversation,
-  ]);
+  }, [busy, controlsOpen, heloIndisponivel, heloNoCaminho, heloPausada, heloSemPergunta]);
   useRegisterHeloUIActions(heloAcoes);
 
   // Nome estrutural da sub-tela — nunca conteúdo. Diz ao Agent ONDE ele está,

@@ -335,6 +335,36 @@ não ter medido nada.
 | `test:dictation:coordination` | 111 | 111 | — |
 | Playwright `agent-contexto` | — | **7** | novo lote: a fronteira na tela real |
 
+## 20b. Uma regressão que a fase introduziu, e como ela foi fechada
+
+A primeira execução dos lotes afetados deu **53 aprovados e 2 falhos**: os dois
+testes de breadcrumb de `conversa-por-opcoes-navigation` estouraram o teto de
+90 s. Reproduziu isolado — não era ruído.
+
+A causa foi medida, não deduzida. Revertendo **apenas** `session.tsx` para
+`40aa9b8`, o lote voltou a 6/6; com a versão nova, 4/6. Bissecando dentro do
+arquivo, o culpado era uma linha: `useRegisterHeloUIActions(heloAcoes)`.
+
+O mecanismo: o `useMemo` das seis ações dependia de `sessionAct`,
+`abrirControles`, `startOptionConversation` e `leaveOptionConversation` — todos
+`useCallback` que dependem de `persist`, que muda de identidade a cada render.
+O memo era, na prática, um memo que nunca acertava: reconstruía as seis ações
+com todos os aliases em **todo render**, e o efeito de registro fazia
+`delete`+`set` junto. Numa conversa por opções, esta é a tela mais quente do
+produto.
+
+A correção põe os handlers atrás de um ref atualizado por efeito e deixa o memo
+depender só de primitivos — o estado real da tela. O ref é lido **no momento da
+execução**, nunca durante o render, então o Agent sempre aciona o handler
+atual.
+
+Medido depois: o lote isolado passou de **07:26 com 2 falhos** para **03:53
+verde** — mais rápido, inclusive, que os 04:08 do controle sem a fase.
+
+O que isso deixa registrado: registrar ações num componente quente tem custo, e
+o custo é do memo, não do registry. Uma tela nova que registre ações deve
+depender de primitivos.
+
 ## 21. Limitações residuais
 
 1. **O lote `agent-contexto` roda em modo dev**, porque lê o payload pelo hook
