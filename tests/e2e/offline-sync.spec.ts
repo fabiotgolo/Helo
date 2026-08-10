@@ -13,7 +13,7 @@
 // antes de voltar ao navegador — o servidor não sabe que "falhou" nada.
 
 import { expect, test, type Page, type BrowserContext } from "@playwright/test";
-import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
 import { criarNivel } from "./option-conversation-helpers";
 
 let dados: Semente;
@@ -31,7 +31,7 @@ const botaoSincronizar = (page: Page) => page.getByTestId("sincronizar-agora");
 
 async function sessaoCarregada(page: Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(
     page.getByRole("heading", { name: "Escreva a pergunta" })
@@ -659,12 +659,12 @@ test.describe("Motor de sincronização", () => {
 
     await entrarComo(pageA, dados.assistente.email);
     await abrirModo(pageA, dados.pacienteId);
-    await pageA.getByRole("button", { name: "Iniciar nova sessão" }).click();
+    await iniciarNovaSessao(pageA);
     await pularContexto(pageA);
 
     await entrarComo(pageB, dados.outroAssistente.email);
     await abrirModo(pageB, dados.outroPacienteId);
-    await pageB.getByRole("button", { name: "Iniciar nova sessão" }).click();
+    await iniciarNovaSessao(pageB);
     await pularContexto(pageB);
 
     await ctxA.setOffline(true);

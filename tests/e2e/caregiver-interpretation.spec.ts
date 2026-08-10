@@ -8,7 +8,7 @@
 // scripts/test-caregiver-interpretation.mjs e não se repetem aqui.
 
 import { expect, test, type Page } from "@playwright/test";
-import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
 
 let dados: Semente;
 
@@ -19,7 +19,7 @@ test.beforeEach(async ({ page, request }) => {
 
 async function sessaoAberta(page: Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(page.getByRole("heading", { name: "Escreva a pergunta" })).toBeVisible();
 }

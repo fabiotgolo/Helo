@@ -16,7 +16,7 @@
 // arquivo fala de `networkidle` e `waitForTimeout` em prosa, e já tropeçamos
 // nessa armadilha três vezes neste projeto.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -152,6 +152,27 @@ const ordemOc = [
   oc.indexOf("pularContexto(page)"),
 ];
 checa("sincroniza antes de pular o contexto", ordemOc[0] > -1 && ordemOc[0] < ordemOc[1]);
+
+console.log("\nnenhuma spec voltou a clicar sem sincronizar");
+{
+  // O par «clicar em Iniciar nova sessão» seguido de «pularContexto» é
+  // exatamente a fragilidade que o helper existe para remover: o clique
+  // dispara o POST e o `pularContexto` seguinte paga por ele dentro de um
+  // orçamento de 10s que é de renderização. Uma spec nova que copie o padrão
+  // antigo de outra reintroduz a falha sem ninguém notar — numa máquina
+  // ociosa ela passa.
+  const cru =
+    /getByRole\(\s*"button",\s*\{\s*name:\s*"Iniciar nova sessão"\s*\}\s*\)\s*\.click\(\)\s*;\s*await\s+pularContexto/;
+  const reincidentes = readdirSync(resolve(RAIZ, "tests/e2e"))
+    .filter((f) => f.endsWith(".ts"))
+    .filter((f) => cru.test(codigoDe(`tests/e2e/${f}`)));
+  checa(
+    `nenhuma spec pareia o clique cru com pularContexto${
+      reincidentes.length ? ` (${reincidentes.join(", ")})` : ""
+    }`,
+    reincidentes.length === 0
+  );
+}
 
 console.log(
   `\n${mau === 0 ? "✓" : "✗"} ${ok} passaram, ${mau} falharam`

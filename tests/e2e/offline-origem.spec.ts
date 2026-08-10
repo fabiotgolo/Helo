@@ -16,7 +16,7 @@
 // que a conexão voltou.
 
 import { expect, test, type Page } from "@playwright/test";
-import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
 
 let dados: Semente;
 
@@ -36,7 +36,7 @@ interface EventoLido {
 
 async function sessaoCarregada(page: Page): Promise<string> {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(
     page.getByRole("heading", { name: "Escreva a pergunta" })

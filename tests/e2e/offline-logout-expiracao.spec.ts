@@ -12,7 +12,7 @@
 // offline-continuidade.spec.ts.
 
 import { expect, test, type Page } from "@playwright/test";
-import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
 
 let dados: Semente;
 
@@ -34,7 +34,7 @@ const botaoSair = (page: Page) =>
 /** Sessão aberta e carregada — o ponto de partida obrigatório da fase. */
 async function sessaoCarregada(page: Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(
     page.getByRole("heading", { name: "Escreva a pergunta" })
@@ -142,7 +142,7 @@ test("logout sem pendência apaga o rascunho — e o próximo usuário não vê 
   // Um usuário DIFERENTE entra na mesma máquina, no mesmo navegador.
   await entrarComo(page, dados.outroAssistente.email);
   await abrirModo(page, dados.outroPacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(
     page.getByRole("heading", { name: "Escreva a pergunta" })

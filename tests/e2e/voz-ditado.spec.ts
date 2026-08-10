@@ -20,139 +20,17 @@
 // coisa falsificada — o resto do caminho é o código de produção.
 
 import { expect, test, type Page } from "@playwright/test";
-import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
+import {
+  botaoDitar,
+  declararIndisponivel,
+  ditar,
+  espiao,
+  instalarMicrofone,
+  interceptarTranscricao,
+} from "./dictation-helpers";
 
 let dados: Semente;
-
-/**
- * Dublês de microfone. Instalados ANTES de qualquer script da página para que
- * o hook encontre um `MediaRecorder` que existe e um `getUserMedia` que resolve.
- *
- * `__ditado` guarda o que aconteceu com o dispositivo — é por ele que o teste
- * prova que as trilhas foram paradas, que é a única forma de a luz do microfone
- * apagar.
- */
-async function instalarMicrofone(page: Page, opcoes: { permitir?: boolean } = {}) {
-  await page.addInitScript((permitir: boolean) => {
-    const espiao = {
-      streamsAbertos: 0,
-      trilhasParadas: 0,
-      gravadoresCriados: 0,
-      permissaoPedida: 0,
-      // Guardado para o teste poder disparar uma callback ATRASADA: o
-      // `MediaRecorder` real entrega `ondataavailable`/`onstop` de forma
-      // assíncrona, e é justamente essa janela que a emergência precisa
-      // atravessar sem deixar um fragmento escapar.
-      ultimoGravador: null as null | {
-        ondataavailable: ((e: { data: Blob }) => void) | null;
-        onstop: (() => void) | null;
-      },
-    };
-    (window as unknown as Record<string, unknown>).__ditado = espiao;
-
-    class TrilhaFalsa {
-      kind = "audio";
-      enabled = true;
-      readyState = "live";
-      onended: (() => void) | null = null;
-      stop() {
-        if (this.readyState === "ended") return;
-        this.readyState = "ended";
-        espiao.trilhasParadas += 1;
-      }
-    }
-
-    class StreamFalso {
-      private trilhas = [new TrilhaFalsa()];
-      getTracks() {
-        return this.trilhas;
-      }
-      getAudioTracks() {
-        return this.trilhas;
-      }
-    }
-
-    class MediaRecorderFalso {
-      static isTypeSupported() {
-        return true;
-      }
-      state = "inactive";
-      ondataavailable: ((e: { data: Blob }) => void) | null = null;
-      onstop: (() => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor() {
-        espiao.gravadoresCriados += 1;
-        espiao.ultimoGravador = this;
-      }
-      start() {
-        this.state = "recording";
-      }
-      stop() {
-        if (this.state === "inactive") return;
-        this.state = "inactive";
-        // Um pedaço de áudio plausível: o produto só precisa de bytes.
-        this.ondataavailable?.({ data: new Blob([new Uint8Array(1024)], { type: "audio/webm" }) });
-        this.onstop?.();
-      }
-    }
-
-    (window as unknown as Record<string, unknown>).MediaRecorder = MediaRecorderFalso;
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: async () => {
-          espiao.permissaoPedida += 1;
-          if (!permitir) {
-            const erro = new Error("permissão negada");
-            erro.name = "NotAllowedError";
-            throw erro;
-          }
-          espiao.streamsAbertos += 1;
-          return new StreamFalso();
-        },
-      },
-    });
-  }, opcoes.permitir !== false);
-}
-
-/** Intercepta só o POST. O GET continua sendo respondido pelo servidor real. */
-async function interceptarTranscricao(
-  page: Page,
-  responder: (n: number) => { status: number; body: unknown }
-) {
-  const chamadas: string[] = [];
-  await page.route("**/api/voice/dictation", async (route) => {
-    if (route.request().method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    chamadas.push(route.request().url());
-    const r = responder(chamadas.length);
-    await route.fulfill({
-      status: r.status,
-      contentType: "application/json",
-      body: JSON.stringify(r.body),
-    });
-  });
-  return chamadas;
-}
-
-/** Faz o servidor declarar o ditado indisponível, sem mexer no ambiente. */
-async function declararIndisponivel(page: Page) {
-  await page.route("**/api/voice/dictation", async (route) => {
-    if (route.request().method() !== "GET") {
-      // Um POST aqui seria justamente o defeito: capturar com o recurso
-      // desligado. Deixamos passar para o teste conseguir contá-lo.
-      await route.continue();
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ available: false }),
-    });
-  });
-}
 
 test.beforeEach(async ({ page, request }) => {
   dados = await semear(request);
@@ -162,23 +40,12 @@ test.beforeEach(async ({ page, request }) => {
 
 async function sessaoAberta(page: Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(page.getByRole("heading", { name: "Escreva a pergunta" })).toBeVisible();
 }
 
-const botaoDitar = (page: Page) => page.getByRole("button", { name: /Ditar a pergunta por voz/ });
 const campoPergunta = (page: Page) => page.getByLabel("Pergunta para o paciente");
-
-/** Um ciclo completo: abre o microfone, fala, para e espera o texto chegar. */
-async function ditar(page: Page) {
-  await botaoDitar(page).click();
-  await expect(page.getByRole("button", { name: /Parar de ditar/ })).toBeVisible();
-  await page.getByRole("button", { name: /Parar de ditar/ }).click();
-}
-
-const espiao = (page: Page) =>
-  page.evaluate(() => (window as unknown as Record<string, Record<string, number>>).__ditado);
 
 test("o botão de ditar existe quando o servidor diz que o recurso existe", async ({ page }) => {
   await interceptarTranscricao(page, () => ({ status: 200, body: { transcript: "x" } }));

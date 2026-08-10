@@ -16,14 +16,7 @@
 //     operação, não estado da aba.
 
 import { expect, test, type Page, type BrowserContext } from "@playwright/test";
-import {
-  abrirModo,
-  entrarComo,
-  pularContexto,
-  semear,
-  SENHA,
-  type Semente,
-} from "./helpers";
+import { SENHA, abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
 
 let dados: Semente;
 
@@ -41,7 +34,7 @@ const campoDaPergunta = (page: Page) =>
 
 async function sessaoCarregada(page: Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(
     page.getByRole("heading", { name: "Escreva a pergunta" })

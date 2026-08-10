@@ -3,13 +3,7 @@
 // leitura da pergunta e os alvos de toque não podem depender do desktop.
 
 import { expect, test } from "@playwright/test";
-import {
-  abrirModo,
-  entrarComo,
-  pularContexto,
-  semear,
-  type Semente,
-} from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
 
 let dados: Semente;
 
@@ -20,7 +14,7 @@ test.beforeEach(async ({ page, request }) => {
 
 async function apresentarPergunta(page: import("@playwright/test").Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await page.getByLabel("Pergunta para o paciente").fill("O senhor está com sede?");
   await page.getByRole("button", { name: "Continuar" }).click();

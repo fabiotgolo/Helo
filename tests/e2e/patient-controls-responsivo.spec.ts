@@ -7,7 +7,7 @@
 // projeto `tablet` (ver playwright.config.ts).
 
 import { expect, test, type Page } from "@playwright/test";
-import { abrirModo, entrarComo, pularContexto, semear, type Semente } from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, semear, type Semente } from "./helpers";
 
 let dados: Semente;
 
@@ -24,7 +24,7 @@ const comando = (page: Page, nome: string) =>
 
 async function painelApresentado(page: Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await page.getByLabel("Pergunta para o paciente").fill("O senhor está com sede?");
   await page.getByRole("button", { name: "Continuar" }).click();

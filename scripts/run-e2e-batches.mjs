@@ -42,6 +42,14 @@ const BANCO = process.env.HELO_E2E_DATABASE_ID ?? "e2e-lotes";
 assertEmuladorDescartavel(EMU, BANCO, "run-e2e-batches.mjs");
 const PORTA = Number(process.env.HELO_E2E_PORT ?? 3210);
 const DIST = process.env.HELO_E2E_DIST_DIR ?? ".next-e2e";
+// ——— Dois distDir, porque são dois modos ———
+//
+// Um lote em `next dev` COMPILA dentro do seu distDir. Se ele usasse o mesmo
+// diretório da build, o lote seguinte que roda em `next start` encontraria
+// aquele diretório remexido — e a corrupção apareceria como falha de teste,
+// longe da causa. São dois diretórios porque são dois artefatos de naturezas
+// diferentes: um é cache de compilação viva, o outro é uma build imutável.
+const DIST_PRODUCAO = process.env.HELO_E2E_PROD_DIST_DIR ?? ".next-e2e-prod";
 const BASE_URL = `http://localhost:${PORTA}`;
 
 const RELATORIOS = resolve(RAIZ, "test-results", "lotes");
@@ -153,6 +161,21 @@ const LOTES = [
     },
   },
   {
+    nome: "voz-ditado-integrado",
+    titulo: "Ditado do cuidador: as travessias — paciente, sessão, conta (5.2C)",
+    arquivos: ["tests/e2e/voz-ditado-integrado.spec.ts"],
+    // Sobre BUILD, e não sobre o dev server: uma destas travessias desce um
+    // nível inteiro da conversa por opções até o compositor, e a 5.2B mediu
+    // que é o compilador sob demanda que estoura o orçamento desse caminho.
+    // A contrapartida é que `__heloAudio` não existe aqui — é dev-only —, e
+    // por isso nenhum teste desta spec depende dele.
+    producao: true,
+    env: {
+      HELO_VOICE_DICTATION_ENABLED: "true",
+      ELEVENLABS_API_KEY: "chave-invalida-de-teste-5-2a",
+    },
+  },
+  {
     nome: "offline",
     titulo: "Continuidade sem conexão e armazenamento local",
     // `offline-app-shell.spec.ts` NÃO entra aqui, e não é esquecimento: ele
@@ -164,10 +187,28 @@ const LOTES = [
       "tests/e2e/offline-continuidade.spec.ts",
       "tests/e2e/offline-logout-expiracao.spec.ts",
       "tests/e2e/offline-sync.spec.ts",
-      "tests/e2e/offline-conflitos.spec.ts",
       "tests/e2e/offline-preflight.spec.ts",
       "tests/e2e/offline-origem.spec.ts",
     ],
+  },
+  {
+    nome: "offline-conflitos",
+    titulo: "Conflitos de fila, decisão do cuidador e armazenamento sob pressão",
+    // Lote próprio pelo mesmo motivo que tirou o `offline-app-shell` do lote
+    // acima, e com a mesma evidência: o HMR do `next dev` decide, sozinho, um
+    // «performing full reload» — e se isso cai no instante em que o teste está
+    // com a rede desligada, a página recarrega, não busca nada e nunca volta.
+    // O trace da falha registra os três eventos em sequência:
+    //
+    //   [Fast Refresh] rebuilding
+    //   [Fast Refresh] performing full reload
+    //   Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+    //
+    // Não é o produto: em produção um recarregamento sem rede é servido pelo
+    // app shell, que é exatamente para isso que ele existe. É o servidor de
+    // desenvolvimento. Medido: o teste sozinho passa, a spec inteira passa
+    // 13/13, e só falha quando divide o servidor com os outros cinco arquivos.
+    arquivos: ["tests/e2e/offline-conflitos.spec.ts"],
   },
   {
     nome: "responsivo-base",
@@ -278,6 +319,7 @@ function ambienteDeProducao(extra = {}) {
   }
   return {
     ...base,
+    NEXT_DIST_DIR: DIST_PRODUCAO,
     NODE_ENV: "production",
     // ≥32 caracteres, e o nome diz o que é. Nunca sai daqui para lugar nenhum.
     HELO_SPEECH_GRANT_SECRET:
@@ -303,9 +345,9 @@ async function subirServidor(extra, producao = false) {
     ? ambienteDeProducao(extra)
     : ambienteDoServidor(extra);
 
-  if (producao && !existsSync(resolve(RAIZ, DIST, "BUILD_ID"))) {
+  if (producao && !existsSync(resolve(RAIZ, DIST_PRODUCAO, "BUILD_ID"))) {
     throw new Error(
-      `não há build em ${DIST}. Rode \`npm run test:ui:build\` antes — a build ` +
+      `não há build em ${DIST_PRODUCAO}. Rode \`npm run test:ui:build\` antes — a build ` +
         `é feita uma vez e reaproveitada pelos lotes que rodam em produção.`
     );
   }

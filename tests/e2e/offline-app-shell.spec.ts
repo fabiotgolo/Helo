@@ -30,14 +30,7 @@
 // página carregada — continuam lá, em offline-continuidade.spec.ts.
 
 import { expect, test, type Page } from "@playwright/test";
-import {
-  abrirModo,
-  entrarComo,
-  pularContexto,
-  selecionarPaciente,
-  semear,
-  type Semente,
-} from "./helpers";
+import { abrirModo, entrarComo, iniciarNovaSessao, pularContexto, selecionarPaciente, semear, type Semente } from "./helpers";
 import {
   confirmarOpcao,
   criarNivel,
@@ -116,7 +109,7 @@ async function sessaoNoContexto(page: Page) {
 /** Sessão aberta e carregada, com a rede no ar. */
 async function sessaoCarregada(page: Page) {
   await abrirModo(page, dados.pacienteId);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
   await expect(
     page.getByRole("heading", { name: "Escreva a pergunta" })
@@ -420,7 +413,7 @@ test("o rascunho de um paciente não aparece na conversa de outro", async ({
   // Troca o paciente ativo, como faz o Dashboard.
   const outro = await segundoPacienteDela(page);
   await trocarDePaciente(page, outro);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
 
   // Nada do paciente anterior atravessa.
@@ -464,7 +457,7 @@ test("trocar de paciente NÃO apaga a fila pendente do anterior — e avisa", as
   await context.setOffline(false);
   const outro = await segundoPacienteDela(page);
   await trocarDePaciente(page, outro);
-  await page.getByRole("button", { name: "Iniciar nova sessão" }).click();
+  await iniciarNovaSessao(page);
   await pularContexto(page);
 
   // A área do paciente A continua no aparelho — apagá-la seria o apagamento
