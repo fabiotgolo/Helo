@@ -47,6 +47,8 @@ import {
   type ProcedenciaDoTexto,
 } from "@/lib/voice/dictation";
 import { pacienteEstaOlhando } from "@/lib/option-conversation-screen";
+import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
+import { useHeloScreenContext } from "@/lib/helo-screen-context";
 import { ConflictScreen } from "@/components/realtime-questions/conflict-screen";
 import { restoreConflict, type ConflictCase } from "@/lib/offline/conflicts";
 import type { OfflineOperation } from "@/lib/offline/types";
@@ -1117,6 +1119,179 @@ export function RealtimeQuestionSession({
    * cuidado que levou `pacienteEstaOlhando` para lib/ no commit 286a3f9.
    */
   const telaEDoPaciente = showStage || pacienteNoCaminho;
+
+  // ——— O que a Helo pode fazer nesta tela (Fase 5.3B) ———
+  //
+  // A 5.3A mediu que este subsistema inteiro — o maior do produto — não
+  // registrava ação nenhuma, e mesmo assim era o que mais texto mandava ao
+  // provedor. As duas metades se resolvem juntas: o contexto passou a ser só
+  // capacidade, e a capacidade passou a existir.
+  //
+  // O que entra aqui é o que sobreviveu a uma pergunta por ação: "uma pessoa
+  // já faz isto por um toque, e fazer por voz não decide nada pelo paciente?"
+  //
+  // O que ficou de fora, e por quê:
+  //   Continuar / Apresentar  — empurram a pergunta do cuidador em direção ao
+  //                             paciente. Quem decide que a pergunta está
+  //                             pronta é quem a escreveu.
+  //   Encerrar sessão         — `sensitive`; segue só para a pessoa.
+  //   Reiniciar conversa      — descarta o caminho percorrido pelo paciente.
+  //   Retomar item do histórico — os rótulos são conteúdo clínico, e anunciá-los
+  //                             como capability recriaria o R-09 pela porta dos
+  //                             fundos.
+  //   As opções apresentadas  — `patientResponse`. Nunca.
+  const heloAcoes = useMemo<HeloUIAction[]>(() => {
+    if (sessionOver || context == null) return [];
+    if (paused) {
+      return [
+        {
+          actionId: "perguntas.retomar",
+          actionClass: "operational",
+          label: "Retomar sessão",
+          aliases: ["retomar", "retomar a sessão", "continuar a sessão", "despausar"],
+          type: "activity",
+          enabled: !busy,
+          run: () => void sessionAct("RESUME").catch(() => {}),
+          toolSuccess: { screen: "perguntas", suppressAssistantNarration: true },
+        },
+      ];
+    }
+    // Montado como LITERAL, sem `push`. O lint do React 19 reclama de passar a
+    // uma função um objeto que fecha sobre callbacks que leem refs — e
+    // `startOptionConversation`/`leaveOptionConversation` leem. A lista
+    // condicional resolve isso sem esconder nada.
+    const semPerguntaEmCurso = currentTurn == null && !interpreting && !openPath;
+    return [
+      {
+        // Permanente por decisão de produto: o paciente precisa alcançar os
+        // controles em qualquer tela. Abrir o painel é navegação — os comandos
+        // DENTRO dele são do paciente e não estão registrados.
+        actionId: "perguntas.controlesDoPaciente",
+        actionClass: "navigation",
+        label: "Controles do paciente",
+        aliases: [
+          "controles do paciente",
+          "abrir controles do paciente",
+          "painel do paciente",
+          "controles",
+        ],
+        type: "navigation",
+        enabled: !controlsOpen,
+        run: () => void abrirControles(),
+        toolSuccess: { screen: "perguntas_controles", suppressAssistantNarration: true },
+      },
+      {
+        actionId: "perguntas.pausar",
+        actionClass: "operational",
+        label: "Pausar sessão",
+        aliases: ["pausar", "pausar a sessão", "pausa"],
+        type: "activity",
+        enabled: !busy,
+        run: () => void sessionAct("PAUSE").catch(() => {}),
+        toolSuccess: { screen: "perguntas_pausada", suppressAssistantNarration: true },
+      },
+      ...(openPath
+        ? [
+            {
+              actionId: "perguntas.sairDaConversaPorOpcoes",
+              actionClass: "navigation",
+              label: "Sair da conversa por opções",
+              aliases: [
+                "sair da conversa por opções",
+                "fechar a conversa por opções",
+                "voltar para as perguntas",
+                "sair das opções",
+              ],
+              type: "navigation",
+              enabled: true,
+              run: () => leaveOptionConversation(),
+              toolSuccess: { screen: "perguntas", suppressAssistantNarration: true },
+            } satisfies HeloUIAction,
+          ]
+        : []),
+      // Os dois modos alternativos só nascem quando não há pergunta em curso —
+      // exatamente a condição que a tela usa para oferecer os botões.
+      ...(semPerguntaEmCurso
+        ? [
+            {
+              actionId: "perguntas.conversaPorOpcoes",
+              actionClass: "operational",
+              label: "Conversa por opções",
+              aliases: [
+                "conversa por opções",
+                "abrir conversa por opções",
+                "começar conversa por opções",
+                "modo opções",
+              ],
+              type: "activity",
+              enabled: !busy,
+              run: () => void startOptionConversation(),
+              toolSuccess: {
+                screen: "perguntas_conversa_por_opcoes",
+                suppressAssistantNarration: true,
+              },
+            } satisfies HeloUIAction,
+            {
+              // ABRIR a tela onde o cuidador escreve o que entendeu. Escrever e
+              // confirmar continuam sendo dele: o Agent não preenche nem envia.
+              actionId: "perguntas.registrarInterpretacao",
+              actionClass: "operational",
+              label: "Registrar o que entendi",
+              aliases: [
+                "registrar o que entendi",
+                "abrir registro de interpretação",
+                "registrar interpretação",
+                "o que eu entendi",
+              ],
+              type: "activity",
+              enabled: !busy,
+              run: () => setInterpreting(true),
+              toolSuccess: {
+                screen: "perguntas_interpretacao",
+                suppressAssistantNarration: true,
+              },
+            } satisfies HeloUIAction,
+          ]
+        : []),
+    ];
+  }, [
+    abrirControles,
+    busy,
+    context,
+    controlsOpen,
+    currentTurn,
+    interpreting,
+    leaveOptionConversation,
+    openPath,
+    paused,
+    sessionAct,
+    sessionOver,
+    startOptionConversation,
+  ]);
+  useRegisterHeloUIActions(heloAcoes);
+
+  // Nome estrutural da sub-tela — nunca conteúdo. Diz ao Agent ONDE ele está,
+  // e é por isso que "perguntas_conversa_por_opcoes" serve enquanto a pergunta
+  // que está na tela não serviria.
+  const heloTela = useMemo(
+    () => ({
+      screen: sessionOver
+        ? "perguntas_encerrada"
+        : context == null
+          ? "perguntas_contexto"
+          : interpreting
+            ? "perguntas_interpretacao"
+            : paused
+              ? "perguntas_pausada"
+              : openPath
+                ? "perguntas_conversa_por_opcoes"
+                : composing
+                  ? "perguntas_compor"
+                  : "perguntas",
+    }),
+    [composing, context, interpreting, openPath, paused, sessionOver]
+  );
+  useHeloScreenContext(heloTela);
 
   return (
     <div className="relative flex flex-1 flex-col">
