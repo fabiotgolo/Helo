@@ -255,8 +255,18 @@ console.log("\nO Agent recebe um motivo, não um silêncio:");
   );
   check(
     "sensível: o motivo diz que uma pessoa precisa concluir",
-    /confirmação|pessoa/i.test(sensivel) && sensivel.includes("Concluir sessão"),
+    /confirmação|pessoa/i.test(sensivel),
     sensivel
+  );
+  // Invertido na 5.3B. Até a 5.3A o motivo interpolava o rótulo da ação —
+  // `"Concluir sessão" precisa de confirmação…` — e o rótulo de um item de
+  // Emergência é texto que o CUIDADOR escreveu ("Estou com dor no peito").
+  // Uma recusa não pode ser a porta pela qual sai o conteúdo que o payload
+  // deixou de enviar: o Agent perguntou por uma ação e recebe a política.
+  check(
+    "nenhum motivo repete o rótulo da ação",
+    !doPaciente.includes("Responder sim") && !sensivel.includes("Concluir sessão"),
+    `${doPaciente} | ${sensivel}`
   );
   check(
     "nenhum motivo instrui o Agent a tentar de novo",

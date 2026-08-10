@@ -1,4 +1,4 @@
-// ——— O inventário do Agent não muda sozinho (Fase 5.3A) ———
+// ——— O inventário do Agent não muda sozinho (Fases 5.3A e 5.3B) ———
 //
 //   npm run test:agent:inventory
 //
@@ -148,32 +148,39 @@ console.log("\nGLOBAL_HELO_ROUTES: só destino, nunca handler");
   );
 }
 
-// ——— 3. O que sai daqui para a ElevenLabs é uma lista declarada ———
+// ——— 3. O que sai daqui para a ElevenLabs é capacidade, nunca a tela ———
 
-console.log("\ncontexto enviado ao provedor: campos declarados, não acumulados");
+console.log("\ncontexto enviado ao provedor: capacidade, nunca a tela");
 {
   const provider = codigoDe("components/helo-agent-provider.tsx");
   const descoberta =
     provider.match(/const discoverActions = async \(\) => \{[\s\S]*?\n {4}\};/)?.[0] ?? "";
   checa("a função de descoberta foi encontrada", descoberta.length > 0);
 
-  const retorno = descoberta.match(/return toolResult\(\{([\s\S]*?)\n {6}\}\);/)?.[1] ?? "";
-  const campos = [...retorno.matchAll(/^\s{8}(?:\.\.\.)?([A-Za-z_]\w*)/gm)].map((m) => m[1]);
+  // A 5.3B tirou a montagem do payload de dentro do componente: quem responde
+  // pelo que sai é `buildHeloContext`, uma função pura. A descoberta agora só
+  // reúne rota, tela e registry e entrega.
+  checa(
+    "a descoberta delega o payload ao contrato de capacidades",
+    /buildHeloContext\(\{/.test(descoberta),
+    "— o payload voltou a ser montado à mão dentro do componente"
+  );
+  for (const morto of ["localElements", "availableActions", "querySelectorAll", "textContent"]) {
+    checa(`a descoberta não usa ${morto}`, !descoberta.includes(morto));
+  }
+  checa(
+    "nenhum espalhamento de conteúdo de tela sobrou na descoberta",
+    !descoberta.includes("..."),
+    "— um espalhamento leva campo ao provedor sem passar pelo contrato"
+  );
 
-  // Cada nome aqui é um dado que ATRAVESSA a fronteira do Helo. Acrescentar um
-  // campo exige acrescentar uma linha aqui — e responder por que ele precisa
-  // sair. `localElements` está nesta lista com uma ressalva registrada no
-  // documento da 5.3A: ele carrega texto visível da tela, inclusive clínico.
-  const ESPERADOS = [
-    "ok",
-    "currentPath",
-    "screen",
-    "patientId",
-    "globalRoutes",
-    "localElements",
-    "availableActions",
-    "actions",
-  ];
+  // O contrato em si: a lista de campos que atravessam a fronteira. Um campo
+  // novo exige uma linha aqui — e, com ela, a pergunta "isto precisa mesmo
+  // sair daqui?".
+  const contrato = codigoDe("lib/helo-capabilities.ts");
+  const retorno = contrato.match(/return \{([\s\S]*?)\n {2}\};/)?.[1] ?? "";
+  const campos = [...retorno.matchAll(/^ {4}([A-Za-z_]\w*)/gm)].map((m) => m[1]);
+  const ESPERADOS = ["ok", "route", "screen", "capabilities", "humanOnly", "diagnostic"];
   const novos = campos.filter((c) => !ESPERADOS.includes(c));
   const sumidos = ESPERADOS.filter((c) => !campos.includes(c));
   checa(
@@ -181,37 +188,125 @@ console.log("\ncontexto enviado ao provedor: campos declarados, não acumulados"
     novos.length === 0,
     `— campo novo indo ao provedor sem passar por aqui: ${novos.join(", ")}`
   );
+  checa("nenhum campo declarado sumiu", sumidos.length === 0, `— sumiram: ${sumidos.join(", ")}`);
+
+  // Os campos de UMA capability. Acrescentar um aqui é acrescentar um dado por
+  // ação — e são as ações dinâmicas que carregam texto escrito por gente.
+  const capability = contrato.match(/export interface HeloCapability \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const camposCap = [...capability.matchAll(/^ {2}(\w+)\??:/gm)].map((m) => m[1]);
   checa(
-    "nenhum campo declarado sumiu do payload",
-    sumidos.length === 0,
-    `— sumiram: ${sumidos.join(", ")}`
+    `uma capability tem cinco campos e nada mais (${camposCap.join(", ")})`,
+    camposCap.length === 5 &&
+      ["id", "class", "label", "aliases", "scope"].every((c) => camposCap.includes(c))
   );
 
-  // O único espalhamento permitido, e ele merece nome: a tela montada publica
-  // `extra` (hoje `currentQuestion`, a pergunta da Rotina aberta) e esse objeto
-  // entra inteiro no payload. Um espalhamento novo levaria dado ao provedor
-  // sem aparecer na lista de campos acima.
-  const espalhamentos = [...retorno.matchAll(/^ {8}\.\.\.\(?([^\n]*)/gm)].map((m) => m[1].trim());
+  // `humanOnly` é contagem. No dia em que virar lista, o rótulo de um item de
+  // Emergência volta a sair — e era exatamente esse o caminho do R-09.
+  const humanOnly = contrato.match(/export interface HeloHumanOnlyCount \{([\s\S]*?)\n\}/)?.[1] ?? "";
   checa(
-    `o único espalhamento no payload é screenContext.extra (${espalhamentos.length})`,
-    espalhamentos.length === 1 && espalhamentos[0].startsWith("screenContext?.extra"),
-    `— espalhamentos encontrados: ${espalhamentos.join(" | ")}`
+    "humanOnly conta, não lista",
+    humanOnly.length > 0 &&
+      [...humanOnly.matchAll(/^ {2}(\w+):\s*(\w+)/gm)].every((m) => m[2] === "number"),
+    "— um campo de humanOnly deixou de ser número"
   );
 
-  // A superfície do R-09, prendida na forma exata em que foi medida.
+  // O contrato é PURO: sem DOM, sem React, sem window. É o que permite ao
+  // teste conduzir esta função em vez de uma cópia dela.
+  for (const proibido of ["document", "window", "querySelector", "useEffect", "useState"]) {
+    checa(`o contrato de capacidades não usa ${proibido}`, !contrato.includes(proibido));
+  }
+
+  // O NOME da sub-tela publicado pela tela montada. O campo de conteúdo que
+  // existia ao lado dele (`extra`) levava a pergunta clínica e os rótulos de
+  // opção; ele não deve voltar.
+  const screenContext = codigoDe("lib/helo-screen-context.ts");
   checa(
-    "localElements continua saindo de button/a — qualquer alargamento falha aqui",
-    /querySelectorAll<HTMLElement>\("button, a"\)/.test(descoberta),
-    "— o seletor do contexto local mudou; a medição do R-09 precisa ser refeita"
+    "o contexto de tela publica só o nome, sem campo de conteúdo",
+    !/\bextra\b/.test(screenContext),
+    "— o campo de conteúdo do contexto de tela voltou"
+  );
+}
+
+// ——— 3b. Nenhuma ação bloqueada carrega retorno de tool ———
+
+console.log("\ntoolSuccess só existe onde o Agent chega");
+{
+  // `toolSuccess` é lido em UM lugar: o caminho do Agent, depois do gate. Numa
+  // ação `sensitive` ou `patientResponse` ele é código morto — e era pior que
+  // morto: descrevia um comportamento ("acionar por tool executa o mesmo
+  // handler do clique") que o gate tinha revogado.
+  const ARQUIVOS = [
+    "app/(palco)/conversa/page.tsx",
+    "app/(palco)/rotina/page.tsx",
+    "app/(palco)/atividades/page.tsx",
+    "app/(palco)/emergencia/page.tsx",
+    "components/activity-player.tsx",
+    "components/phrases-to-listen-modal.tsx",
+    "components/helo-dialog.tsx",
+    "components/helo-agent-provider.tsx",
+    "components/realtime-questions/session.tsx",
+  ];
+  const culpados = [];
+  for (const arquivo of ARQUIVOS) {
+    const linhas = codigoDe(arquivo).split("\n");
+    for (let i = 0; i < linhas.length; i++) {
+      const classe = linhas[i].match(/actionClass:\s*"(patientResponse|sensitive)"/);
+      if (!classe) continue;
+      // Da classe até a próxima `actionId:` — o corpo desta declaração.
+      for (let j = i + 1; j < linhas.length && !/actionId:/.test(linhas[j]); j++) {
+        if (/toolSuccess:/.test(linhas[j])) culpados.push(`${arquivo}:${j + 1} (${classe[1]})`);
+      }
+    }
+  }
+  checa(
+    "nenhuma ação bloqueada declara toolSuccess",
+    culpados.length === 0,
+    `— retorno de tool em ação inalcançável: ${culpados.join("; ")}`
+  );
+
+  const provider = codigoDe("components/helo-agent-provider.tsx");
+  checa(
+    "toolSuccess é espalhado ANTES dos campos do contrato",
+    /\{ \.\.\.action\.toolSuccess, ok: true, result: "SUCCESS"/.test(provider),
+    "— uma dica declarada numa tela pode sobrescrever o código de resultado"
+  );
+}
+
+// ——— 3c. Uma recusa não devolve o texto da tela ———
+
+console.log("\nas respostas ao Agent não carregam rótulo de tela");
+{
+  const registry = codigoDe("lib/helo-action-registry.ts");
+  const motivo = registry.match(/export function agentDenialReason[\s\S]*?\n\}/)?.[0] ?? "";
+  checa("agentDenialReason existe", motivo.length > 0);
+  checa(
+    "o motivo da recusa não interpola o rótulo da ação",
+    !/action\.label/.test(motivo),
+    "— o rótulo de um item de Emergência é texto escrito pelo cuidador"
+  );
+
+  const provider = codigoDe("components/helo-agent-provider.tsx");
+  const executa = provider.match(/const interactWithUI = async[\s\S]*?\n {4}\};/)?.[0] ?? "";
+  checa("o dispatcher foi encontrado", executa.length > 0);
+  checa(
+    "nenhuma resposta do dispatcher interpola action.label",
+    !/action\.label/.test(executa),
+    "— um rótulo de tela volta ao provedor pela resposta da tool"
   );
   checa(
-    "a descoberta não lê campos de formulário nem o texto do corpo",
-    !/\binput\b|\btextarea\b|body\.innerText|document\.body\.textContent/.test(descoberta)
+    "a falha do handler não devolve a mensagem do erro ao provedor",
+    !/caught instanceof Error/.test(executa),
+    "— a mensagem do handler é escrita para o cuidador e pode citar a tela"
   );
-  checa(
-    "a descoberta é leitura pura — não executa handler nenhum",
-    !descoberta.includes(".run(")
-  );
+  for (const codigo of [
+    "SUCCESS",
+    "NOT_FOUND",
+    "UNAVAILABLE",
+    "FORBIDDEN_BY_POLICY",
+    "INVALID_PARAMETER",
+  ]) {
+    checa(`o dispatcher devolve o código ${codigo}`, executa.includes(`"${codigo}"`));
+  }
 }
 
 // ——— 4. O gate continua sendo a única decisão de autoridade ———

@@ -176,6 +176,18 @@ const LOTES = [
     },
   },
   {
+    nome: "agent-contexto",
+    titulo: "O contexto enviado ao provedor: capacidade, nunca a tela (5.3B)",
+    arquivos: ["tests/e2e/agent-contexto.spec.ts"],
+    // Em modo DEV de propósito. O payload é lido pelo hook de inspeção
+    // `window.__heloAgentContext`, que só existe fora de produção — e ler o
+    // objeto real é o ponto: uma reconstrução provaria a cópia. O que a suíte
+    // `test:agent:capabilities` prova sobre a função pura, esta prova sobre a
+    // tela real, com conteúdo real digitado por um cuidador.
+    //
+    // Nenhuma sessão do Agent é aberta: o payload é montado no cliente.
+  },
+  {
     nome: "offline",
     titulo: "Continuidade sem conexão e armazenamento local",
     // `offline-app-shell.spec.ts` NÃO entra aqui, e não é esquecimento: ele

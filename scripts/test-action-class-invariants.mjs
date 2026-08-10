@@ -51,6 +51,7 @@ const ARQUIVOS = [
   "components/phrases-to-listen-modal.tsx",
   "components/helo-dialog.tsx",
   "components/helo-agent-provider.tsx",
+  "components/realtime-questions/session.tsx",
 ];
 
 /**
@@ -204,6 +205,16 @@ const CATALOGO = {
   // modal de confirmação
   "dialog.confirm": "sensitive",
   "dialog.cancel": "sensitive",
+  // /conversa/perguntas — cobertura segura acrescentada na 5.3B. Nenhuma
+  // delas responde pelo paciente, e nenhuma conclui o que a política manda um
+  // humano concluir: encerrar sessão, apresentar a pergunta e reiniciar o
+  // caminho continuam fora do alcance do Agent.
+  "perguntas.controlesDoPaciente": "navigation",
+  "perguntas.sairDaConversaPorOpcoes": "navigation",
+  "perguntas.pausar": "operational",
+  "perguntas.retomar": "operational",
+  "perguntas.conversaPorOpcoes": "operational",
+  "perguntas.registrarInterpretacao": "operational",
   // /helo
   "helo.conectar": "operational",
   "helo.solicitarMicrofone": "operational",
@@ -435,9 +446,13 @@ console.log("\n— O que NÃO é ação do registry não vira porta lateral —"
     "debug.ping responde sem tocar no registry",
     /if \(actionId === "debug\.ping"\)[\s\S]{0,200}?return toolResult\(\{ ok: true[^}]*\}\)/.test(codigo)
   );
+  // Invertido na 5.3B: antes o DOM aparecia na DESCOBERTA (e nunca na
+  // execução). Agora ele não aparece em lugar nenhum — a descoberta deixou de
+  // ler a tela e passou a montar capacidades a partir do registry.
   check(
-    "os elementos lidos do DOM aparecem na descoberta e nunca na execução",
-    /localElements/.test(codigo) && !/localElements[\s\S]{0,400}?\.run\(/.test(codigo)
+    "a descoberta não lê mais o DOM",
+    !/localElements/.test(codigo) && !/querySelectorAll/.test(codigo),
+    "— a raspagem da interface voltou ao caminho do Agent"
   );
   check(
     "toda execução passa por resolveRequestedUIAction e pelo gate, nessa ordem",
