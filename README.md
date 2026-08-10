@@ -732,11 +732,19 @@ suíte em lotes por domínio e dá a cada um banco de teste vazio, dev server
 novo e rotas pré-compiladas, sem retry nenhum; ao final imprime um resultado
 agregado único com aprovados, falhos e ignorados por lote.
 
-Nesse arranjo a suíte fecha **187 aprovados, 0 falhos, 0 ignorados** — `base` 31,
+Nesse arranjo a suíte fecha **245 aprovados, 0 falhos, 0 ignorados** — `base` 31,
 `conversa-por-opcoes-flow` 11, `conversa-por-opcoes-navigation` 6,
 `conversa-por-opcoes-editing-history` 9, `conversa-por-opcoes-recovery` 6,
-`fases-4x` 33, `controles-do-paciente` 12, `offline` 41, `responsivo-base` 10,
-`responsivo-fases` 28.
+`fases-4x` 33, `controles-do-paciente` 12, `voz-robustez` 9, `voz-ditado` 36,
+`voz-ditado-integrado` 9, `offline` 32, `offline-conflitos` 13,
+`responsivo-base` 10, `responsivo-fases` 28.
+
+`offline-conflitos` tem lote próprio pelo mesmo motivo que tirou o
+`offline-app-shell` daquele grupo: o HMR do `next dev` decide sozinho um
+*full reload*, e se isso cai no instante em que o teste está com a rede
+desligada, a página recarrega, não busca nada e não volta. Em produção esse
+recarregamento é servido pelo app shell — é para isso que ele existe. Medido: o
+arquivo sozinho passa 13/13, e só falha ao dividir o servidor com os outros.
 
 A conversa por opções mudou duas coisas na Fase 5.2B, e nenhuma delas é teste.
 
