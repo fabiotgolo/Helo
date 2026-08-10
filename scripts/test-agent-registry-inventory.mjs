@@ -266,8 +266,8 @@ console.log("\ntoolSuccess só existe onde o Agent chega");
 
   const provider = codigoDe("components/helo-agent-provider.tsx");
   checa(
-    "toolSuccess é espalhado ANTES dos campos do contrato",
-    /\{ \.\.\.action\.toolSuccess, ok: true, result: "SUCCESS"/.test(provider),
+    "toolSuccess é espalhado ANTES do resultado do contrato",
+    /\{ \.\.\.acao\.toolSuccess, \.\.\.resultado \}/.test(provider),
     "— uma dica declarada numa tela pode sobrescrever o código de resultado"
   );
 }
@@ -315,6 +315,8 @@ console.log("\no gate de origem não ganhou concorrente");
 {
   const provider = codigoDe("components/helo-agent-provider.tsx");
   const chamadas = (provider.match(/isActionAllowedFor\(/g) ?? []).length;
+  // Uma das duas consultas passou a ser injetada na sequência (`permitido`),
+  // e a outra continua na delegação da navegação para Atividades.
   // Dois pontos, e só dois: o dispatcher (interactWithHeloUI) e a delegação da
   // navegação para "atividades", que também executa um handler de tela.
   checa(
@@ -323,11 +325,23 @@ console.log("\no gate de origem não ganhou concorrente");
     "— um caminho de execução novo pode ter aparecido sem consultar o gate"
   );
 
-  const execucoes = (provider.match(/\.run\(\{/g) ?? []).length;
+  // Dois pontos, e continuam sendo dois — só que agora um deles mora na
+  // sequência auditável da 5.3C. Somar os dois arquivos é o que mantém a
+  // afirmação verdadeira depois da mudança de lugar.
+  const despacho = codigoDe("lib/helo-agent-dispatch.ts");
+  const execucoes =
+    (provider.match(/\.run\(\{/g) ?? []).length + (despacho.match(/\.run\(\{/g) ?? []).length;
   checa(
     `só existem dois pontos que executam handler de tela (${execucoes})`,
     execucoes === 2,
     "— um ponto de execução novo precisa de um gate próprio"
+  );
+  checa(
+    "os dois pontos entregam o lease ao handler",
+    (provider.match(/__aindaVale:/g) ?? []).length +
+      (despacho.match(/__aindaVale:/g) ?? []).length ===
+      2,
+    "— um handler com espera longa ficou sem como conferir o contexto"
   );
 
   const registry = codigoDe("lib/helo-action-registry.ts");

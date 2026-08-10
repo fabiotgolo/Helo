@@ -188,6 +188,19 @@ const LOTES = [
     // Nenhuma sessão do Agent é aberta: o payload é montado no cliente.
   },
   {
+    nome: "agent-lifecycle",
+    titulo: "Contexto vivo do Agent: lease, ações vencidas e autoridade (5.3C)",
+    arquivos: ["tests/e2e/agent-lifecycle.spec.ts"],
+    // Em modo DEV, como o lote `agent-contexto` e pelo mesmo motivo: os dois
+    // ganchos de inspeção (`__heloAgentContext`, `__heloAgentTool`) só existem
+    // fora de produção. O segundo é o que torna isto uma prova — o dispatcher
+    // exercitado aqui é o real, com gate, lease, registry vivo e autorização
+    // no servidor.
+    //
+    // Nenhuma sessão do Agent é aberta: as client tools são funções locais, e
+    // nenhuma chamada ao provedor acontece.
+  },
+  {
     nome: "offline",
     titulo: "Continuidade sem conexão e armazenamento local",
     // `offline-app-shell.spec.ts` NÃO entra aqui, e não é esquecimento: ele

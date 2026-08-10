@@ -454,10 +454,30 @@ console.log("\n— O que NÃO é ação do registry não vira porta lateral —"
     !/localElements/.test(codigo) && !/querySelectorAll/.test(codigo),
     "— a raspagem da interface voltou ao caminho do Agent"
   );
+  // A sequência saiu do componente na 5.3C (lib/helo-agent-dispatch.ts) para
+  // poder ser exercitada por teste sem montar React. A propriedade é a mesma e
+  // se verifica lá: resolver, então o gate, e só então o efeito.
+  const despacho = readFileSync("lib/helo-agent-dispatch.ts", "utf8")
+    .split("\n")
+    .filter((linha) => !/^\s*(\/\/|\*|\/\*)/.test(linha))
+    .join("\n");
   check(
-    "toda execução passa por resolveRequestedUIAction e pelo gate, nessa ordem",
-    /const action = resolveRequestedUIAction\([\s\S]{0,300}?if \(!isActionAllowedFor\(action, "agent"\)\)/.test(codigo),
+    "o provider delega a execução à sequência auditável",
+    /despachaAcaoDoAgent</.test(codigo) &&
+      /resolve: \(\) => resolveRequestedUIAction\(/.test(codigo) &&
+      /permitido: \(acao\) => isActionAllowedFor\(acao, "agent"\)/.test(codigo),
+    "— o dispatcher voltou a montar a sequência à mão"
+  );
+  check(
+    "na sequência, o gate vem antes do efeito",
+    despacho.indexOf("deps.permitido(acao)") < despacho.indexOf("acao.run("),
     "— o gate saiu do caminho da execução"
+  );
+  check(
+    "e o contexto é reconferido depois da autorização, antes do efeito",
+    despacho.indexOf("deps.autoriza(acao)") < despacho.indexOf("deps.aindaVale(lease)") &&
+      despacho.indexOf("deps.aindaVale(lease)") < despacho.indexOf("acao.run("),
+    "— a janela do round-trip ficou sem guarda"
   );
 
   // Os ids anunciados no contexto de tela (o player usa isso para ensinar ao

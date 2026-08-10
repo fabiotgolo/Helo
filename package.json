@@ -25,6 +25,8 @@
     "test:agent:invariants": "node scripts/test-action-class-invariants.mjs",
     "test:agent:inventory": "node scripts/test-agent-registry-inventory.mjs",
     "test:agent:capabilities": "node scripts/test-agent-capabilities.mjs",
+    "test:agent:context": "node scripts/test-agent-context.mjs",
+    "test:agent:authorship": "node scripts/test-agent-authorship.mjs",
     "test:audio:cache": "node scripts/test-audio-cache.mjs",
     "test:audio:lifecycle": "node scripts/test-audio-lifecycle.mjs",
     "test:voice:cancel": "node scripts/test-speech-cancel.mjs",
