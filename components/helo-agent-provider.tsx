@@ -55,6 +55,22 @@ import {
 } from "@/lib/helo-action-registry";
 import { getHeloScreenContext } from "@/lib/helo-screen-context";
 import { buildHeloContext, type HeloContextPayload } from "@/lib/helo-capabilities";
+import {
+  CONTEXTO_EXPIRADO,
+  capturaLeaseDoAgent,
+  contextoDoAgent,
+  encerraContextoDoAgent,
+  leaseAindaVale,
+  publicaContextoDoProvider,
+} from "@/lib/helo-agent-context";
+import { despachaAcaoDoAgent } from "@/lib/helo-agent-dispatch";
+import {
+  contextoParaOProvedor,
+  origemDoTurno,
+  origemRecebida,
+  textoParaOProvedor,
+  type HeloSource,
+} from "@/lib/helo-authorship";
 import type { Permission } from "@/lib/access-types";
 import {
   endSession as endLoggedSession,
@@ -876,7 +892,16 @@ function HeloAgentSession({
     }
   }, []);
 
-  const navigateToArea = useCallback(async (action: HeloClientToolAction, area: string) => {
+  const navigateToArea = useCallback(async (
+    action: HeloClientToolAction,
+    area: string,
+    // O lease de quem chamou. As tools de área (`openRoutineMode`,
+    // `navigateHeloArea`, …) chegam aqui sem passar pelo registry, e por isso
+    // carregam a conferência explícita. `undefined` só nas chamadas que
+    // capturam o próprio lease logo abaixo.
+    leaseDoChamador?: number
+  ) => {
+    const lease = leaseDoChamador ?? capturaLeaseDoAgent();
     // Resolução tolerante: aceita nome canônico, plural, inglês e frases com
     // verbo ("abrir rotina", "ir para as rotinas", "modo rotina"). Nunca
     // confunde áreas — o casamento é por token inteiro de sinônimo.
@@ -887,12 +912,24 @@ function HeloAgentSession({
     if (resolved === "rotina") console.log("[HELO NAV] opening routine");
     const access = await authorizeTool(action, { area: resolved });
     if (!access.ok) return toolResult(access);
+    // Mesma regra do dispatcher, e pelo mesmo motivo: entre o pedido e aqui
+    // passou um round-trip de rede.
+    if (!leaseAindaVale(lease)) {
+      return toolResult({
+        ok: false,
+        result: CONTEXTO_EXPIRADO,
+        reason: "A tela mudou desde que esta ação foi oferecida.",
+      });
+    }
     if (resolved === "atividades") {
       const activityMenuAction = findHeloUIAction("activity.goToActivityMenu");
       // Mesmo gate do dispatcher: esta é a segunda porta por onde o Agent
       // executa um handler da tela, e uma porta sem tranca anula a outra.
       if (activityMenuAction?.enabled && isActionAllowedFor(activityMenuAction, "agent")) {
-        await activityMenuAction.run({ __source: "agent" });
+        await activityMenuAction.run({
+          __source: "agent",
+          __aindaVale: () => leaseAindaVale(lease),
+        });
         return toolResult({
           ok: true,
           action,
@@ -967,6 +1004,26 @@ function HeloAgentSession({
       if (!actionId.trim()) {
         return toolResult({ ok: false, result: "INVALID_PARAMETER", reason: "actionId inválido" });
       }
+      // ——— O lease (5.3C) ———
+      //
+      // Capturado AQUI, no instante em que o pedido chega, e conferido no
+      // último instante antes do efeito. Entre os dois pontos existe um
+      // round-trip de rede ao servidor de autorização — centenas de
+      // milissegundos em que o cuidador pode trocar de paciente, sair da tela
+      // ou encerrar a sessão. Até a 5.3B essa janela não tinha guarda: a ação
+      // continuava registrada, o gate de classe continuava dizendo sim, e o
+      // handler executava no mundo errado.
+      //
+      // O lease é uma closure local. Ele não vai à ElevenLabs e não depende de
+      // o modelo devolver nada — a segurança não pode ser função do que o LLM
+      // lembra de repetir.
+      const lease = capturaLeaseDoAgent();
+      const expirado = () =>
+        toolResult({
+          ok: false,
+          result: CONTEXTO_EXPIRADO,
+          reason: "A tela mudou desde que esta ação foi oferecida.",
+        });
       // Curto-circuito de diagnóstico: prova a execução ponta a ponta sem
       // tocar no registry nem exigir sessão/permissão.
       if (actionId === "debug.ping") {
@@ -975,10 +1032,14 @@ function HeloAgentSession({
       const globalRoute = GLOBAL_HELO_ROUTES.find((route) => route.actionId === actionId);
       if (globalRoute) {
         if ("area" in globalRoute) {
-          return navigateToArea("navigateHeloArea", globalRoute.area);
+          return navigateToArea("navigateHeloArea", globalRoute.area, lease);
         }
         const access = await authorizeTool("navigateHeloArea");
         if (!access.ok) return toolResult({ ok: false, result: "FORBIDDEN", reason: access.error });
+        // A rota global não passa pelo registry, e por isso ela precisa da
+        // conferência explícita: sem o registry para esvaziar, nada mais a
+        // impediria de navegar a partir de um contexto que já morreu.
+        if (!leaseAindaVale(lease)) return expirado();
         router.push(globalRoute.path);
         return toolResult({ ok: true, result: "SUCCESS", actionId, path: globalRoute.path });
       }
@@ -986,78 +1047,74 @@ function HeloAgentSession({
         parameters.payload && typeof parameters.payload === "object" && !Array.isArray(parameters.payload)
           ? (parameters.payload as Record<string, unknown>)
           : undefined;
-      const action = resolveRequestedUIAction(actionId, parameters, payload);
-      if (!action) {
-        return toolResult({ ok: false, result: "NOT_FOUND", reason: "Ação não encontrada na tela atual." });
+      // ——— A sequência vive fora do componente (5.3C) ———
+      //
+      // Resolver → gate → habilitada → autorizar → LEASE → ainda registrada →
+      // efeito. Ela está em lib/helo-agent-dispatch.ts para poder ser
+      // exercitada por teste sem montar React — inclusive o caso que motivou a
+      // fase: a troca de paciente durante o round-trip de autorização.
+      const resultado = await despachaAcaoDoAgent<HeloUIAction>(
+        {
+          lease,
+          resolve: () => resolveRequestedUIAction(actionId, parameters, payload),
+          permitido: (acao) => isActionAllowedFor(acao, "agent"),
+          aindaVale: leaseAindaVale,
+          autoriza: (acao) =>
+            authorizeTool(
+              "interactWithHeloUI",
+              acao.requiredPermission ? { permission: acao.requiredPermission } : undefined
+            ),
+          registra: (evento, detalhe) => console.warn(`[HELO TOOL] ${evento}`, detalhe),
+        },
+        payload
+      );
+
+      if (resultado.ok) {
+        const acao = resolveRequestedUIAction(actionId, parameters, payload);
+        // Retorno técnico quando a ação o declara: curto, para o Agente não
+        // narrar em voz alta o que acabou de acontecer na tela. O espalhamento
+        // vem PRIMEIRO — os campos do contrato são a resposta canônica e não
+        // podem ser sobrescritos por uma dica declarada numa tela.
+        return acao?.toolSuccess
+          ? toolResult({ ...acao.toolSuccess, ...resultado })
+          : toolResult(resultado);
       }
-      // ——— O gate de origem (R-02) ———
-      //
-      // Toda chamada que chega aqui vem das client tools da ElevenLabs, e
-      // portanto tem origem "agent". A decisão é tomada sobre a CLASSE da
-      // ação, nunca sobre o texto do pedido — é o que faz a proteção
-      // sobreviver a sinônimo, alias, emoji, idioma e ao actionId literal,
-      // todos caminhos que `resolveRequestedUIAction` acima sabe construir.
-      //
-      // Fica DEPOIS de resolver a ação de propósito: assim o Agent recebe o
-      // motivo certo e pode explicá-lo ao cuidador, em vez de um "não
-      // encontrei" que o faria tentar de novo com outras palavras.
-      if (!isActionAllowedFor(action, "agent")) {
-        console.warn("[HELO TOOL] ação bloqueada para o Agent:", action.actionId, action.actionClass ?? "(sem classe)");
+      if (resultado.result === "FORBIDDEN_BY_POLICY") {
+        const acao = resolveRequestedUIAction(actionId, parameters, payload);
+        console.warn(
+          "[HELO TOOL] ação bloqueada para o Agent:",
+          resultado.actionId,
+          acao?.actionClass ?? "(sem classe)"
+        );
         return toolResult({
-          ok: false,
-          result: "FORBIDDEN_BY_POLICY",
+          ...resultado,
           blocked: true,
-          actionId: action.actionId,
-          actionClass: action.actionClass ?? "unclassified",
-          reason: agentDenialReason(action),
+          actionClass: acao?.actionClass ?? "unclassified",
+          reason: acao
+            ? agentDenialReason(acao)
+            : "Esta ação não pode ser executada por voz.",
           requiresHumanAction: true,
           suppressAssistantNarration: false,
         });
       }
-      if (!action.enabled) {
+      if (resultado.result === "NOT_FOUND") {
+        return toolResult({ ...resultado, reason: "Ação não encontrada na tela atual." });
+      }
+      if (resultado.result === "UNAVAILABLE") {
         // Sem o rótulo: a ação existe, o Agent sabe qual pediu, e o texto da
         // tela não precisa voltar ao provedor para dizer "ainda não dá".
+        return toolResult({ ...resultado, reason: "Esta ação está indisponível agora." });
+      }
+      if (resultado.result === CONTEXTO_EXPIRADO) {
         return toolResult({
-          ok: false,
-          result: "UNAVAILABLE",
-          actionId: action.actionId,
-          reason: "Esta ação está indisponível agora.",
+          ...resultado,
+          reason: "A tela mudou desde que esta ação foi oferecida.",
         });
       }
-      // Abertura de card da Rotina: sinaliza o caminho e a supressão de
-      // narração (a fala do paciente só vem ao selecionar SIM/TALVEZ/NÃO).
-      if (action.actionId.startsWith("routine.open.")) {
-        console.log("[HELO TOOL] opening routine card", action.actionId);
-        console.log("[HELO AGENT] suppress narration for routine card open");
+      if (resultado.result === "FAILED") {
+        return toolResult({ ...resultado, reason: "A ação falhou." });
       }
-      const access = await authorizeTool(
-        "interactWithHeloUI",
-        action.requiredPermission ? { permission: action.requiredPermission } : undefined
-      );
-      if (!access.ok) return toolResult({ ok: false, result: "FORBIDDEN", reason: access.error });
-      try {
-        await action.run({ ...(payload ?? {}), __source: "agent" });
-        // Retorno técnico quando a ação o declara: curto, para o Agente não
-        // narrar em voz alta o que acabou de acontecer na tela.
-        if (action.toolSuccess) {
-          // O espalhamento vem PRIMEIRO: os campos do contrato (`ok`,
-          // `result`, `actionId`) são a resposta canônica e não podem ser
-          // sobrescritos por uma dica de narração declarada numa tela.
-          return toolResult({ ...action.toolSuccess, ok: true, result: "SUCCESS", actionId: action.actionId });
-        }
-        return toolResult({ ok: true, result: "SUCCESS", actionId: action.actionId });
-      } catch (caught) {
-        // A mensagem do handler é escrita para o cuidador e pode citar o
-        // conteúdo da tela ("Informe payload.gesto…"). Ela não volta ao
-        // provedor: o Agent recebe o código e um texto fixo.
-        console.warn("[HELO TOOL] handler falhou", action.actionId, caught);
-        return toolResult({
-          ok: false,
-          result: "FAILED",
-          actionId: action.actionId,
-          reason: "A ação falhou.",
-        });
-      }
+      return toolResult(resultado);
     };
     const checkUserSilence = async () => {
       const now = Date.now();
@@ -1179,6 +1236,40 @@ function HeloAgentSession({
     };
   }, [authorizeTool, generateMusicClientTool, navigateToArea, pathname, playExistingMusicClientTool, router, toolResult]);
 
+  // ——— O contexto executável, publicado (5.3C) ———
+  //
+  // Quatro primitivos: rota, paciente, sessão clínica e usuário. A geração só
+  // avança quando um deles muda de VALOR — render não invalida, array
+  // recriado não invalida, callback com referência nova não invalida. É a
+  // lição da regressão de desempenho da 5.3B, escrita no código.
+  //
+  // O id do usuário sai do espelho local `helo.user`, o mesmo que
+  // `clearLocalMirrors()` apaga no logout. Ele é um DETECTOR DE MUDANÇA, não
+  // uma credencial: a autorização real continua sendo o cookie conferido pelo
+  // servidor a cada `authorizeTool`.
+  useEffect(() => {
+    let usuarioId: string | null = null;
+    try {
+      const bruto = localStorage.getItem("helo.user");
+      usuarioId = bruto ? ((JSON.parse(bruto) as { id?: string }).id ?? null) : null;
+    } catch {
+      // Sem armazenamento: o contexto segue com os outros três campos.
+    }
+    publicaContextoDoProvider({
+      rota: pathname.split("?")[0],
+      pacienteId: patientId,
+      usuarioId,
+    });
+    // A sessão clínica não entra aqui: quem a publica é a própria tela que a
+    // possui, e a recomposição acontece lá. O provider não precisa conhecê-la
+    // — precisa apenas não sobrescrevê-la, e é por isso que cada lado escreve
+    // só a sua parte.
+  }, [pathname, patientId]);
+
+  // O provider saiu do ar (logout leva a página inteira, mas desmontagem e
+  // troca de árvore não): nenhuma autorização anterior sobrevive a isto.
+  useEffect(() => () => encerraContextoDoAgent(), []);
+
   // Inspeção SOMENTE em desenvolvimento, do MESMO payload que a tool devolve.
   // Existe para que o teste de interface do R-09 confira a fronteira real, e
   // não uma reconstrução dela: a prova de que um marcador clínico não sai do
@@ -1187,17 +1278,40 @@ function HeloAgentSession({
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
     const alvo = window as unknown as Record<string, unknown>;
-    alvo.__heloAgentContext = () =>
-      buildHeloContext({
+    alvo.__heloAgentContext = () => ({
+      ...buildHeloContext({
         route: pathname,
         screen: getHeloScreenContext()?.screen ?? SCREEN_BY_PATH[pathname] ?? pathname,
         globalRoutes: GLOBAL_HELO_ROUTES,
         registered: listHeloUIActions("agent"),
-      });
+      }),
+      // Só para a inspeção: a geração NÃO vai ao provedor. Ela existe aqui
+      // para o teste poder afirmar que ela avança quando a autoridade muda —
+      // e, principalmente, que ela NÃO avança a cada render.
+      __geracao: contextoDoAgent().geracao,
+    });
     return () => {
       delete alvo.__heloAgentContext;
     };
   }, [pathname]);
+
+  // As client tools, como a ElevenLabs as chamaria — SOMENTE em
+  // desenvolvimento. É o que permite exercitar o dispatcher real (gate, lease,
+  // registry vivo, autorização no servidor) sem abrir sessão nenhuma e sem
+  // gastar um único crédito: a suíte dirige a mesma função que o provedor
+  // dirigiria. Nunca existe em produção.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const alvo = window as unknown as Record<string, unknown>;
+    alvo.__heloAgentTool = async (nome: string, parametros: Record<string, unknown>) => {
+      const tool = (clientTools as Record<string, unknown>)[nome];
+      if (typeof tool !== "function") return JSON.stringify({ ok: false, result: "NO_SUCH_TOOL" });
+      return (tool as (p: Record<string, unknown>) => Promise<string>)(parametros ?? {});
+    };
+    return () => {
+      delete alvo.__heloAgentTool;
+    };
+  }, [clientTools]);
 
   const {
     startSession,
@@ -1247,9 +1361,19 @@ function HeloAgentSession({
       console.log("[HELO AUDIO] agent mode", mode);
     },
     onMessage: ({ message, role }) => {
-      if (role !== "user" || !message.trim()) return;
+      // ——— R-08: a role do provedor não diz quem falou ———
+      //
+      // `user` significa uma coisa só: entrou pelo microfone DESTA sessão. E o
+      // microfone desta sessão é o do cuidador — ele abriu a conversa, na tela
+      // dele, com o dispositivo que escolheu em "Microfone". O comentário que
+      // existia aqui chamava isso de "patient speech", e era falso.
+      const origem = origemRecebida(role);
+      if (origem.source !== "caregiverVoice" || !message.trim()) return;
       resetSilenceReminderState();
-      console.log("[HELO SILENCE] reminder state reset by patient speech");
+      console.log("[HELO SILENCE] contagem zerada por fala do cuidador", {
+        providerRole: origem.providerRole,
+        source: origem.source,
+      });
     },
     onVadScore: ({ vadScore }) => {
       const now = Date.now();
@@ -1341,6 +1465,35 @@ function HeloAgentSession({
   useEffect(() => {
     conversationTextControlsRef.current = { sendContextualUpdate };
   }, [sendContextualUpdate]);
+
+  // ——— A única porta por onde um turno entra na conversa (5.3C / R-08) ———
+  //
+  // Antes existiam quatro chamadas espalhadas a `sendUserMessage`, cada uma
+  // montando o próprio prefixo em português. Quem lesse o código para saber
+  // QUEM tinha falado precisava ler a string — e foi assim que a fala do
+  // cuidador acabou descrita como "patient speech".
+  //
+  // Agora a origem é um argumento obrigatório. O texto que sai para o provedor
+  // continua com os prefixos (o painel não foi auditado e pode depender
+  // deles), mas eles vivem em lib/helo-authorship.ts: nada dentro do Helo
+  // pergunta autoria lendo o conteúdo.
+  const enviaAoAgent = useCallback(
+    (source: HeloSource, conteudo: string, options?: { contextId?: string }) => {
+      const origem = origemDoTurno(source);
+      const contexto = contextoParaOProvedor(source, conteudo);
+      if (contexto !== conteudo) {
+        // `contextual_update` mantém o contexto da sessão sem criar um turno de
+        // resposta — só as origens que têm forma contextual própria o usam.
+        sendContextualUpdate(contexto, options?.contextId ? { contextId: options.contextId } : undefined);
+      }
+      sendUserMessage(textoParaOProvedor(source, conteudo));
+      console.log("[HELO AUTORIA] turno enviado", {
+        providerRole: origem.providerRole,
+        source: origem.source,
+      });
+    },
+    [sendContextualUpdate, sendUserMessage]
+  );
 
   // O handle foi criado uma vez; `endSession` vem do hook e troca de
   // identidade a cada render. Ligar por efeito é seguro aqui: o handle só
@@ -1620,16 +1773,13 @@ function HeloAgentSession({
     try {
       // A atualização contextual chega à sessão atual sem interromper a fala
       // ou o fluxo de escuta do paciente.
-      sendContextualUpdate(
-        `Observação do acompanhante em tempo real: ${message}`,
-        { contextId: `caregiver-observation:${Date.now()}` }
-      );
-      // contextual_update mantém o contexto da sessão, mas não cria um turno
-      // de resposta. A mensagem do acompanhante abaixo pede que a Helo a
-      // responda em voz, sem confundi-la com uma fala do paciente.
-      sendUserMessage(
-        `Mensagem escrita pelo acompanhante: "${message}". Responda diretamente ao acompanhante em voz, de forma breve e adequada ao contexto atual.`
-      );
+      // A origem é declarada, não inferida do texto: `caregiverText`. Os
+      // prefixos em português continuam saindo — o system prompt do painel
+      // pode depender deles — mas vivem em lib/helo-authorship.ts, e nada
+      // dentro do Helo pergunta a autoria lendo a string.
+      enviaAoAgent("caregiverText", message, {
+        contextId: `caregiver-observation:${Date.now()}`,
+      });
       deliveredToAgent = true;
 
       const response = await fetch(`/api/patients/${activePatientId}/observations`, {
@@ -1659,7 +1809,7 @@ function HeloAgentSession({
     } finally {
       setMessageSending(false);
     }
-  }, [caregiverMessage, messageSending, sendContextualUpdate, sendUserMessage]);
+  }, [caregiverMessage, enviaAoAgent, messageSending]);
 
   const speakActivityQuestion = useCallback(
     (question: string, options?: { activityId?: string; itemId?: string; runId?: string }) => {
@@ -1669,20 +1819,17 @@ function HeloAgentSession({
         .filter(Boolean)
         .join(":");
       try {
-        sendContextualUpdate(
-          `Pergunta atual dirigida ao paciente: "${text}". A próxima fala deve ser a Helo lendo essa pergunta para o paciente, sem explicar nem responder por ele.`,
-          contextId ? { contextId } : undefined
-        );
-        sendUserMessage(
-          `Leia agora para o paciente, com a voz da Helo, exatamente esta pergunta e nada mais: "${text}"`
-        );
+        // Instrução INTERNA do produto, não fala de ninguém. Ela pede que a
+        // Helo leia — a voz que sai é a dela, e a pergunta continua sendo do
+        // cuidador que a escreveu.
+        enviaAoAgent("systemInstruction", text, contextId ? { contextId } : undefined);
         return true;
       } catch (caught) {
         console.warn("[HELO AUDIO] activity question prompt failed", caught);
         return false;
       }
     },
-    [sendContextualUpdate, sendUserMessage]
+    [enviaAoAgent]
   );
 
   const handleInputDeviceChange = useCallback(async (deviceId: string) => {
@@ -1873,7 +2020,11 @@ function HeloAgentSession({
     setLastGesture(gesture);
     sendActivity("gesture", true);
     try {
-      sendUserMessage(GESTURE_SEMANTIC_MESSAGES[gesture]);
+      // O cuidador RELATA ao Agent um gesto que o paciente fez na tela. Não é
+      // o paciente falando: é uma observação sobre ele, feita por outra
+      // pessoa. Não vira consentimento, e as ações de gesto continuam
+      // `patientResponse` — recusadas ao Agent venha o pedido de onde vier.
+      enviaAoAgent("patientGestureReport", GESTURE_SEMANTIC_MESSAGES[gesture]);
       if (patientIdRef.current != null) {
         logEvent({
           sessionId: loggedSessionIdRef.current,
@@ -1887,7 +2038,7 @@ function HeloAgentSession({
     } catch {
       onError("Não foi possível registrar a resposta por gesto. Tente novamente.");
     }
-  }, [onError, sendActivity, sendUserMessage]);
+  }, [enviaAoAgent, onError, sendActivity]);
 
   // Ações da tela /helo no Action Registry: os mesmos handlers dos botões
   // (connect/end) e dos gestos (markGesture — o operador RELATA o gesto do

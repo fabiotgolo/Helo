@@ -49,6 +49,7 @@ import {
 import { pacienteEstaOlhando } from "@/lib/option-conversation-screen";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
 import { useHeloScreenContext } from "@/lib/helo-screen-context";
+import { publicaSessaoClinica } from "@/lib/helo-agent-context";
 import { ConflictScreen } from "@/components/realtime-questions/conflict-screen";
 import { restoreConflict, type ConflictCase } from "@/lib/offline/conflicts";
 import type { OfflineOperation } from "@/lib/offline/types";
@@ -1309,6 +1310,22 @@ export function RealtimeQuestionSession({
     [composing, context, interpreting, openPath, paused, sessionOver]
   );
   useHeloScreenContext(heloTela);
+
+  // ——— A sessão clínica é uma fronteira própria (5.3C) ———
+  //
+  // Trocar de sessão com o MESMO paciente não muda a rota nem o paciente, e
+  // por isso nenhuma das outras fronteiras a alcança. Mas uma ação que nasceu
+  // na sessão A não pode alterar a sessão B: são conversas diferentes com a
+  // mesma pessoa, e um "pausar" pedido numa não é um "pausar" na outra.
+  //
+  // Publicar o id daqui faz a geração do contexto avançar na troca, e todo
+  // lease capturado antes dela vence.
+  useEffect(() => {
+    publicaSessaoClinica(String(session.id));
+    return () => {
+      publicaSessaoClinica(null);
+    };
+  }, [session.id]);
 
   return (
     <div className="relative flex flex-1 flex-col">

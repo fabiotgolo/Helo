@@ -594,7 +594,10 @@ export function SessionPlayer({
   // para o clique do operador e para a ação do Agente — o Agente não decide
   // sozinho; quem escolhe é o usuário no modal.
   const confirmCompleteThen = useCallback(
-    async (navigate: () => void) => {
+    // `aindaVale` só existe quando quem pediu foi o Agent: é o lease do
+    // contexto em que a ação era válida. O caminho humano não passa nada, e
+    // segue como sempre — quem está olhando o modal é a pessoa que o abriu.
+    async (navigate: () => void, aindaVale?: () => boolean) => {
       if (finishedRef.current) {
         navigate();
         return;
@@ -621,6 +624,17 @@ export function SessionPlayer({
           ? "[HELO ACTIVITY EXIT] user chose complete"
           : "[HELO ACTIVITY EXIT] user chose discard"
       );
+      // ——— O commit depois da espera mais longa do produto (5.3C) ———
+      //
+      // Este `await` é de tempo HUMANO: o modal fica aberto enquanto alguém
+      // decide. Quando o pedido veio do Agent, a chamada é `void` — ninguém
+      // segura o resultado — e nesse intervalo o cuidador pode ter trocado de
+      // paciente ou saído da tela. `endRun` grava; gravar aqui com o contexto
+      // vencido escreveria no lugar errado.
+      if (aindaVale && !aindaVale()) {
+        console.warn("[HELO ACTIVITY EXIT] contexto expirou durante o modal — nada foi gravado");
+        return;
+      }
       endRun(complete ? "concluida" : "abandonada");
       stop();
       navigate();
@@ -656,6 +670,11 @@ export function SessionPlayer({
     const question = isQuestionItem(item);
     const gesturesOn = question || item.gesturesEnabled;
     const fromAgent = (payload?: Record<string, unknown>) => payload?.__source === "agent";
+    /** O lease do contexto, quando quem pediu foi o Agent. */
+    const leaseDe = (payload?: Record<string, unknown>) =>
+      typeof payload?.__aindaVale === "function"
+        ? (payload.__aindaVale as () => boolean)
+        : undefined;
     const pickRun = (optionId: string) => (payload?: Record<string, unknown>) => {
       const g = payload?.gesto;
       if (g !== "sim" && g !== "talvez" && g !== "nao") {
@@ -686,7 +705,7 @@ export function SessionPlayer({
         run: async (payload) => {
           console.log("[HELO TOOL] activity.goToActivityMenu handled");
           if (fromAgent(payload)) {
-            void confirmCompleteThen(goToActivityMenu);
+            void confirmCompleteThen(goToActivityMenu, leaseDe(payload));
           } else {
             await confirmCompleteThen(goToActivityMenu);
           }
@@ -712,7 +731,7 @@ export function SessionPlayer({
         run: async (payload) => {
           console.log("[HELO TOOL] activity.goToManageActivities handled");
           if (fromAgent(payload)) {
-            void confirmCompleteThen(goToManage);
+            void confirmCompleteThen(goToManage, leaseDe(payload));
           } else {
             await confirmCompleteThen(goToManage);
           }
