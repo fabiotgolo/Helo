@@ -54,6 +54,7 @@ import {
   type HeloUIAction,
 } from "@/lib/helo-action-registry";
 import { getHeloScreenContext } from "@/lib/helo-screen-context";
+import { buildHeloContext, type HeloContextPayload } from "@/lib/helo-capabilities";
 import type { Permission } from "@/lib/access-types";
 import {
   endSession as endLoggedSession,
@@ -849,7 +850,10 @@ function HeloAgentSession({
     finishMusicPlayback("cancelled", { restoreConversation: false, updateState: false });
   }, [finishMusicPlayback]);
 
-  const toolResult = useCallback((value: Record<string, unknown>) => JSON.stringify(value), []);
+  const toolResult = useCallback(
+    (value: Record<string, unknown> | HeloContextPayload) => JSON.stringify(value),
+    []
+  );
   const authorizeTool = useCallback(async (
     action: HeloClientToolAction,
     options?: { area?: string; section?: string; permission?: Permission }
@@ -911,51 +915,38 @@ function HeloAgentSession({
     const discoverActions = async () => {
       console.log("[HELO TOOL] getCurrentHeloActions called");
       const activePatientId = patientIdRef.current;
-      const debugAction = { actionId: "debug.ping", label: "Ping de teste", type: "debug", enabled: true };
-      // A tela montada pode publicar um sub-estado (ex.: a Rotina distingue
-      // routine_menu de routine_question e informa a pergunta atual). Quando
-      // publicado, ele sobrepõe o nome derivado da rota e mescla campos extras.
+      // A tela montada pode publicar o NOME de um sub-estado (ex.: a Rotina
+      // distingue routine_menu de routine_question). Só o nome: desde a 5.3B
+      // não existe mais campo de conteúdo aqui.
       const screenContext = activePatientId == null ? null : getHeloScreenContext();
       const resolvedScreen =
         activePatientId == null
           ? "debug"
           : screenContext?.screen ?? SCREEN_BY_PATH[pathname] ?? pathname;
-      // Descoberta pela ótica do Agent: cada ação vem marcada com
-      // agentExecutable, e as que ele não pode executar trazem o motivo. Ele
-      // continua VENDO tudo — precisa saber que a ação existe para dizer ao
-      // cuidador "isso é você quem faz", em vez de fingir que não achou.
-      const uiActions = listHeloUIActions("agent");
-      const localElements = typeof document === "undefined"
-        ? []
-        : Array.from(document.querySelectorAll<HTMLElement>("button, a"))
-          .map((element, index) => {
-            const label = element.textContent?.trim();
-            if (!label) return null;
-            return {
-              actionId: element.id || label || `local-${index + 1}`,
-              label,
-              source: "local" as const,
-              ...(element instanceof HTMLAnchorElement ? { path: element.pathname } : {}),
-            };
-          })
-          .filter((element): element is NonNullable<typeof element> => element != null);
-      if (typeof resolvedScreen === "string" && resolvedScreen.startsWith("routine")) {
-        console.log("[HELO TOOL] routine actions returned", uiActions.length);
-      }
-      return toolResult({
-        ok: true,
-        currentPath: pathname,
+      // ——— A fronteira do R-09 ———
+      //
+      // Tudo o que sai daqui para a ElevenLabs é montado por `buildHeloContext`,
+      // que é uma função pura e testável sem navegador. O que ELA não coloca no
+      // payload não sai — e o que ela coloca é só capacidade: onde estou, o que
+      // a Helo pode fazer aqui, e como essas ações podem ser pedidas em
+      // linguagem natural.
+      //
+      // O que existia antes e não existe mais: `localElements`, que varria
+      // `button, a` e mandava o `textContent` de cada um; `availableActions`,
+      // que era a mesma coisa duplicada; e o espalhamento do `extra` da tela,
+      // que levava a pergunta clínica e os rótulos de opção.
+      const contexto = buildHeloContext({
+        route: pathname,
         screen: resolvedScreen,
-        patientId: activePatientId ?? "debug",
-        ...(screenContext?.extra ?? {}),
         globalRoutes: GLOBAL_HELO_ROUTES,
-        localElements,
-        availableActions: [
-          ...GLOBAL_HELO_ROUTES.map((route) => ({ ...route, source: "global" as const })),
-          ...localElements,
-        ],
-        actions: [debugAction, ...GLOBAL_HELO_ROUTES, ...uiActions],
+        registered: listHeloUIActions("agent"),
       });
+      console.log("[HELO TOOL] capabilities returned", {
+        screen: contexto.screen,
+        capabilities: contexto.capabilities.length,
+        humanOnly: contexto.humanOnly,
+      });
+      return toolResult(contexto);
     };
     // Execução: encontra o actionId no registry, autoriza no servidor (com a
     // permissão declarada pela ação) e chama o MESMO handler do clique manual.
@@ -974,12 +965,12 @@ function HeloAgentSession({
       const actionId = typeof rawId === "string" ? rawId : "";
       console.log("[HELO TOOL] actionId received", actionId || "(vazio)");
       if (!actionId.trim()) {
-        return toolResult({ ok: false, reason: "actionId inválido" });
+        return toolResult({ ok: false, result: "INVALID_PARAMETER", reason: "actionId inválido" });
       }
       // Curto-circuito de diagnóstico: prova a execução ponta a ponta sem
       // tocar no registry nem exigir sessão/permissão.
       if (actionId === "debug.ping") {
-        return toolResult({ ok: true, actionId, message: "Tool interactWithHeloUI executada em modo debug." });
+        return toolResult({ ok: true, result: "SUCCESS", actionId, message: "Tool interactWithHeloUI executada em modo debug." });
       }
       const globalRoute = GLOBAL_HELO_ROUTES.find((route) => route.actionId === actionId);
       if (globalRoute) {
@@ -987,9 +978,9 @@ function HeloAgentSession({
           return navigateToArea("navigateHeloArea", globalRoute.area);
         }
         const access = await authorizeTool("navigateHeloArea");
-        if (!access.ok) return toolResult(access);
+        if (!access.ok) return toolResult({ ok: false, result: "FORBIDDEN", reason: access.error });
         router.push(globalRoute.path);
-        return toolResult({ ok: true, actionId, path: globalRoute.path });
+        return toolResult({ ok: true, result: "SUCCESS", actionId, path: globalRoute.path });
       }
       const payload =
         parameters.payload && typeof parameters.payload === "object" && !Array.isArray(parameters.payload)
@@ -997,7 +988,7 @@ function HeloAgentSession({
           : undefined;
       const action = resolveRequestedUIAction(actionId, parameters, payload);
       if (!action) {
-        return toolResult({ ok: false, reason: "Ação não encontrada na tela atual." });
+        return toolResult({ ok: false, result: "NOT_FOUND", reason: "Ação não encontrada na tela atual." });
       }
       // ——— O gate de origem (R-02) ———
       //
@@ -1014,6 +1005,7 @@ function HeloAgentSession({
         console.warn("[HELO TOOL] ação bloqueada para o Agent:", action.actionId, action.actionClass ?? "(sem classe)");
         return toolResult({
           ok: false,
+          result: "FORBIDDEN_BY_POLICY",
           blocked: true,
           actionId: action.actionId,
           actionClass: action.actionClass ?? "unclassified",
@@ -1023,7 +1015,14 @@ function HeloAgentSession({
         });
       }
       if (!action.enabled) {
-        return toolResult({ ok: false, reason: `A ação "${action.label}" está indisponível agora.` });
+        // Sem o rótulo: a ação existe, o Agent sabe qual pediu, e o texto da
+        // tela não precisa voltar ao provedor para dizer "ainda não dá".
+        return toolResult({
+          ok: false,
+          result: "UNAVAILABLE",
+          actionId: action.actionId,
+          reason: "Esta ação está indisponível agora.",
+        });
       }
       // Abertura de card da Rotina: sinaliza o caminho e a supressão de
       // narração (a fala do paciente só vem ao selecionar SIM/TALVEZ/NÃO).
@@ -1035,19 +1034,28 @@ function HeloAgentSession({
         "interactWithHeloUI",
         action.requiredPermission ? { permission: action.requiredPermission } : undefined
       );
-      if (!access.ok) return toolResult({ ok: false, reason: access.error });
+      if (!access.ok) return toolResult({ ok: false, result: "FORBIDDEN", reason: access.error });
       try {
         await action.run({ ...(payload ?? {}), __source: "agent" });
-        // Retorno silencioso quando a ação o declara (Emergência): técnico e
-        // curto, para o Agente NÃO narrar em voz alta que registrou.
+        // Retorno técnico quando a ação o declara: curto, para o Agente não
+        // narrar em voz alta o que acabou de acontecer na tela.
         if (action.toolSuccess) {
-          return toolResult({ ok: true, actionId, ...action.toolSuccess });
+          // O espalhamento vem PRIMEIRO: os campos do contrato (`ok`,
+          // `result`, `actionId`) são a resposta canônica e não podem ser
+          // sobrescritos por uma dica de narração declarada numa tela.
+          return toolResult({ ...action.toolSuccess, ok: true, result: "SUCCESS", actionId: action.actionId });
         }
-        return toolResult({ ok: true, actionId, message: `${action.label}: executado.` });
+        return toolResult({ ok: true, result: "SUCCESS", actionId: action.actionId });
       } catch (caught) {
+        // A mensagem do handler é escrita para o cuidador e pode citar o
+        // conteúdo da tela ("Informe payload.gesto…"). Ela não volta ao
+        // provedor: o Agent recebe o código e um texto fixo.
+        console.warn("[HELO TOOL] handler falhou", action.actionId, caught);
         return toolResult({
           ok: false,
-          reason: caught instanceof Error && caught.message ? caught.message : "A ação falhou.",
+          result: "FAILED",
+          actionId: action.actionId,
+          reason: "A ação falhou.",
         });
       }
     };
@@ -1170,6 +1178,26 @@ function HeloAgentSession({
     executeHeloAction: interactWithUI,
     };
   }, [authorizeTool, generateMusicClientTool, navigateToArea, pathname, playExistingMusicClientTool, router, toolResult]);
+
+  // Inspeção SOMENTE em desenvolvimento, do MESMO payload que a tool devolve.
+  // Existe para que o teste de interface do R-09 confira a fronteira real, e
+  // não uma reconstrução dela: a prova de que um marcador clínico não sai do
+  // produto só vale se for lida do objeto que sairia. Espelha o padrão de
+  // `__heloUIActions` no registry, e como ele nunca existe em produção.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const alvo = window as unknown as Record<string, unknown>;
+    alvo.__heloAgentContext = () =>
+      buildHeloContext({
+        route: pathname,
+        screen: getHeloScreenContext()?.screen ?? SCREEN_BY_PATH[pathname] ?? pathname,
+        globalRoutes: GLOBAL_HELO_ROUTES,
+        registered: listHeloUIActions("agent"),
+      });
+    return () => {
+      delete alvo.__heloAgentContext;
+    };
+  }, [pathname]);
 
   const {
     startSession,

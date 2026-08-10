@@ -116,13 +116,21 @@ export function isActionAllowedFor(
   return action.actionClass === "navigation" || action.actionClass === "operational";
 }
 
-/** Motivo legível da recusa — vai ao Agent para ele explicar ao cuidador. */
-export function agentDenialReason(action: HeloUIAction): string {
+/**
+ * Motivo legível da recusa — vai ao Agent para ele explicar ao cuidador.
+ *
+ * Sem o RÓTULO da ação, desde a 5.3B. A versão anterior devolvia
+ * `"${action.label}" precisa de confirmação…`, e o rótulo de um item de
+ * Emergência é texto que o cuidador escreveu ("Estou com dor no peito"). Uma
+ * recusa não pode ser a porta pela qual sai o conteúdo que o payload deixou de
+ * enviar — o Agent perguntou por uma ação e recebe a política, não a tela.
+ */
+export function agentDenialReason(action: Pick<HeloUIAction, "actionClass">): string {
   if (action.actionClass === "patientResponse") {
     return "Só o paciente responde por ele. Peça ao acompanhante que registre o gesto na tela.";
   }
   if (action.actionClass === "sensitive") {
-    return `"${action.label}" precisa de confirmação de uma pessoa na tela. Posso abrir o caminho, mas não posso concluir.`;
+    return "Esta ação precisa de confirmação de uma pessoa na tela. Posso abrir o caminho, mas não posso concluir.";
   }
   return "Esta ação não pode ser executada por voz.";
 }
@@ -136,26 +144,38 @@ export function agentDenialReason(action: HeloUIAction): string {
 export function listHeloUIActions(origin: HeloActionOrigin = "human"): HeloUIActionSummary[] {
   const all: HeloUIActionSummary[] = [];
   for (const actions of groups.values()) {
-    for (const action of actions) {
-      const { actionId, label, aliases, type, enabled, requiredPermission, actionClass } = action;
-      all.push({
-        actionId,
-        label,
-        ...(aliases ? { aliases } : {}),
-        type,
-        enabled,
-        ...(actionClass ? { actionClass } : {}),
-        ...(requiredPermission ? { requiredPermission } : {}),
-        ...(origin === "agent"
-          ? {
-              agentExecutable: isActionAllowedFor(action, "agent"),
-              ...(isActionAllowedFor(action, "agent") ? {} : { agentBlockedReason: agentDenialReason(action) }),
-            }
-          : {}),
-      });
-    }
+    for (const action of actions) all.push(describeForAgent(action, origin));
   }
   return all;
+}
+
+/**
+ * A forma serializável de UMA ação. Extraída de `listHeloUIActions` para que a
+ * suíte possa conduzir esta função sobre um conjunto explícito de ações — o
+ * registry só se enche com componentes React montados, e um teste que
+ * reconstruísse este mapeamento estaria provando a cópia.
+ */
+export function describeForAgent(
+  action: HeloUIAction,
+  origin: HeloActionOrigin = "human"
+): HeloUIActionSummary {
+  const { actionId, label, aliases, type, enabled, requiredPermission, actionClass } = action;
+  const executavel = isActionAllowedFor(action, "agent");
+  return {
+    actionId,
+    label,
+    ...(aliases ? { aliases } : {}),
+    type,
+    enabled,
+    ...(actionClass ? { actionClass } : {}),
+    ...(requiredPermission ? { requiredPermission } : {}),
+    ...(origin === "agent"
+      ? {
+          agentExecutable: executavel,
+          ...(executavel ? {} : { agentBlockedReason: agentDenialReason(action) }),
+        }
+      : {}),
+  };
 }
 
 // Forma canônica para casar identificadores tolerando as variações que o

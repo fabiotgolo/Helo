@@ -2,11 +2,25 @@
 
 // ——— Contexto de tela reportado ao Agent (Screen Context) ———
 // getCurrentHeloActions reporta, por padrão, o nome de tela derivado da rota
-// (SCREEN_BY_PATH). Algumas telas têm SUB-estados que o Agent precisa enxergar
-// — ex.: a Rotina tem o menu de perguntas (routine_menu) e a tela de UMA
-// pergunta aberta (routine_question, com a pergunta atual). Este módulo deixa a
-// tela montada PUBLICAR esse contexto extra, sem que o provider do Agent
-// conheça os detalhes de cada modo.
+// (SCREEN_BY_PATH). Algumas telas têm SUB-estados que mudam o que está
+// disponível — ex.: a Rotina tem o menu de perguntas (routine_menu) e a tela de
+// UMA pergunta aberta (routine_question). Este módulo deixa a tela montada
+// PUBLICAR esse nome, sem que o provider do Agent conheça os detalhes de cada
+// modo.
+//
+// ——— Só o NOME da sub-tela, desde a 5.3B ———
+//
+// Até a 5.3A existia aqui um campo `extra`, mesclado inteiro no payload
+// enviado à ElevenLabs. Ele carregava exatamente o que o R-09 descreve: a
+// pergunta clínica do card aberto (`currentQuestion`) e os rótulos das opções
+// escritos pelo cuidador (`currentOptions`). Nenhum dos dois sustentava
+// capacidade nenhuma — as ações correspondentes são `patientResponse`, que o
+// Agent não executa. Era conteúdo saindo do produto para ajudar o modelo a
+// entender uma tela em que ele não pode agir.
+//
+// O que sobrou é estrutura: "routine_question" diz ao Agent ONDE ele está.
+// "Você quer tomar água?" dizia o que o paciente está sendo perguntado, e isso
+// não é assunto do provedor.
 //
 // Registro em nível de módulo (mesmo padrão do Action Registry): funciona de
 // qualquer árvore React e o desmonte da tela limpa o contexto — o Agent nunca
@@ -15,10 +29,11 @@
 import { useEffect, useRef } from "react";
 
 export interface HeloScreenContext {
-  /** Nome de tela específico (sobrepõe o derivado da rota). */
+  /**
+   * Nome de tela específico (sobrepõe o derivado da rota). Deve ser um
+   * IDENTIFICADOR estrutural — nunca texto da interface, nunca conteúdo.
+   */
   screen?: string;
-  /** Campos extras mesclados na resposta de getCurrentHeloActions. */
-  extra?: Record<string, unknown>;
 }
 
 let current: HeloScreenContext | null = null;
@@ -29,7 +44,7 @@ export function getHeloScreenContext(): HeloScreenContext | null {
 }
 
 /**
- * Publica o contexto da tela montada enquanto ela viver. Passe null (ou não
+ * Publica o nome da sub-tela montada enquanto ela viver. Passe null (ou não
  * chame) quando não houver sub-estado — o provider volta ao nome derivado da
  * rota. O objeto deve vir memoizado, refletindo o estado atual.
  */

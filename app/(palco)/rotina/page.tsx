@@ -238,20 +238,24 @@ export default function RotinaPage() {
   }, [stop]);
 
   // Contexto de tela para getCurrentHeloActions: o Agent distingue o menu da
-  // pergunta aberta e recebe a pergunta atual.
+  // pergunta aberta. Só isso — a pergunta em si saía daqui até a 5.3A
+  // (`extra.currentQuestion`) e não sustentava capacidade nenhuma: dentro do
+  // card as três respostas são do paciente, e a única ação que o Agent executa
+  // é voltar ao menu.
   const screenContext = useMemo(
-    () =>
-      openQuestion
-        ? { screen: "routine_question", extra: { currentQuestion: openQuestion.question } }
-        : { screen: "routine_menu" },
+    () => ({ screen: openQuestion ? "routine_question" : "routine_menu" }),
     [openQuestion]
   );
   useHeloScreenContext(screenContext);
 
   // Action Registry: espelha o que está clicável agora — os cards (menu) ou,
   // dentro de uma pergunta, as três respostas + voltar. Os handlers são os
-  // MESMOS do toque manual. As respostas devolvem um retorno técnico e não
-  // narrável: quem fala é o paciente, o Agente fica em silêncio.
+  // MESMOS do toque manual.
+  //
+  // Autoridade, que é outra coisa: as três respostas são `patientResponse` e o
+  // Agent NUNCA as executa. Ele abre o card e volta ao menu; quem responde é a
+  // pessoa. Elas continuam registradas porque o registry é o espelho da tela
+  // para o clique humano — a recusa acontece no gate, não pela ausência.
   const registryActions = useMemo<HeloUIAction[]>(() => {
     if (openQuestion) {
       const q = openQuestion;
@@ -274,16 +278,6 @@ export default function RotinaPage() {
         type: "routineAnswer" as const,
         enabled: true,
         run: () => answer(q.key, ans),
-        // Retorno técnico e não-narrável: acionar por tool executa o MESMO
-        // handler do clique (resposta do paciente com prioridade). O Agente não
-        // deve ler nada em voz alta nem confirmar a seleção.
-        toolSuccess: {
-          result: "handled",
-          audibleResponse: "patient_voice_only",
-          speechOwner: "patient",
-          suppressAgentSpeech: true,
-          suppressAssistantNarration: true,
-        },
       }));
       return [
         ...answerActions,
@@ -302,7 +296,7 @@ export default function RotinaPage() {
           type: "navigation",
           enabled: true,
           run: () => backToMenu(),
-          toolSuccess: { result: "handled", screen: "routine_menu", suppressAssistantNarration: true },
+          toolSuccess: { screen: "routine_menu", suppressAssistantNarration: true },
         },
       ];
     }
@@ -315,11 +309,7 @@ export default function RotinaPage() {
       run: () => openQuestionByKey(q.key),
       // Abrir o card NÃO fala nada — a voz do paciente só soa ao selecionar
       // SIM/TALVEZ/NÃO. Retorno técnico e não-narrável.
-      toolSuccess: {
-        result: "opened",
-        screen: "routine_question",
-        suppressAssistantNarration: true,
-      },
+      toolSuccess: { screen: "routine_question", suppressAssistantNarration: true },
     }));
   }, [answer, backToMenu, openQuestion, openQuestionByKey]);
   useRegisterHeloUIActions(registryActions);

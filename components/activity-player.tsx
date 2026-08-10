@@ -692,14 +692,17 @@ export function SessionPlayer({
           }
         },
         toolSuccess: {
-          result: "opened",
           screen: "activity_menu",
           mayRequireDialogChoice: respondidos > 0,
           suppressAssistantNarration: true,
         },
       },
       {
-        // Volta ao gerenciamento das atividades — o Agente também executa.
+        // Volta ao gerenciamento das atividades. Classificada `sensitive`: o
+        // Agent NÃO a executa — ele para na fronteira e explica. A navegação
+        // em si não muda dado, mas o destino é a tela onde o conteúdo do
+        // paciente é editado, e a 5.3B manteve a política conservadora que a
+        // 5.1A escolheu, sem afrouxá-la para ganhar cobertura.
         actionId: "activity.goToManageActivities",
         actionClass: "sensitive",
         label: "Gerenciar atividades",
@@ -713,13 +716,6 @@ export function SessionPlayer({
           } else {
             await confirmCompleteThen(goToManage);
           }
-        },
-        // Retorno técnico: é só navegação, sem fala do Agente nem confirmação.
-        toolSuccess: {
-          result: "handled",
-          navigatedTo: "manage_activities",
-          mayRequireDialogChoice: respondidos > 0,
-          suppressAssistantNarration: true,
         },
       },
       {
@@ -755,31 +751,13 @@ export function SessionPlayer({
         type: "activity",
         enabled: true,
         run: () => closeSession(),
-        toolSuccess: {
-          result: "handled",
-          suppressAssistantNarration: true,
-        },
       },
     ];
     if (gesturesOn && item.options.length > 0) {
       item.options.forEach((o, n) => {
-        // Alternativa que fala: acionar por tool executa o MESMO handler do
-        // clique (resposta do paciente com prioridade). Retorno técnico e
-        // não-narrável — o Agente não lê nada em voz alta nem confirma.
-        const speaks = optionSpeaks(o);
-        const silentToolSuccess = {
-          toolSuccess: {
-            result: "handled",
-            ...(speaks
-              ? {
-                  audibleResponse: "patient_voice_only",
-                  speechOwner: "patient",
-                  suppressAgentSpeech: true,
-                }
-              : {}),
-            suppressAssistantNarration: true,
-          },
-        };
+        // Alternativa do paciente: `patientResponse`. O Agent nunca a executa;
+        // quando ela fala, é a voz DELE que sai. Registrada para o clique
+        // humano, recusada no gate para o Agent.
         for (const gesture of GESTURE_ORDER) {
           const command = GESTURE_COMMAND_LABELS[gesture];
           const optionLabel = o.label.trim();
@@ -817,7 +795,6 @@ export function SessionPlayer({
             type: "gesture",
             enabled: true,
             run: () => pick(o.id, gesture),
-            ...silentToolSuccess,
           });
         }
       });
@@ -835,33 +812,18 @@ export function SessionPlayer({
   }, [closeSession, confirmCompleteThen, finish, goToActivityMenu, goToManage, idx, item, items.length, pick, questionItems.length, respondidos]);
   useRegisterHeloUIActions(registryActions);
 
-  // Exercício com respostas faladas: publica o sub-estado para o Agent, com a
-  // pergunta atual. Assim ele entende que "Qual é a sua idade?" é a pergunta DA
-  // ATIVIDADE (dirigida ao paciente), não a ele. Itens comuns não publicam nada.
+  // Exercício com respostas faladas: publica o NOME do sub-estado, para o Agent
+  // saber que a tela é de alternativas com gesto.
+  //
+  // Até a 5.3A saía junto um `extra` com a pergunta da atividade e o rótulo de
+  // cada opção, mais frases de exemplo montadas a partir deles. Servia para o
+  // modelo casar "SIM de Fisioterapia" com a ação certa — e a ação certa é
+  // `patientResponse`, que ele nunca executa. Era conteúdo do paciente saindo
+  // para sustentar uma capacidade que não existe.
   const screenContext = useMemo(
     () =>
       item && itemHasSpokenResponses(item)
-        ? {
-            screen: "activity_multiple_choice_gesture",
-            extra: {
-              currentQuestion: item.question,
-              currentOptions: item.options.map((option, optionIndex) => ({
-                option: option.label,
-                commands: GESTURE_ORDER.map((gesture) => {
-                  const command = GESTURE_COMMAND_LABELS[gesture];
-                  return {
-                    gesture,
-                    label: command.label,
-                    actionId: `atividades.resposta.${optionIndex + 1}.${gesture}`,
-                    spokenExamples: [
-                      `clique em ${command.label} em ${option.label}`,
-                      `${command.label} de ${option.label}`,
-                    ],
-                  };
-                }),
-              })),
-            },
-          }
+        ? { screen: "activity_multiple_choice_gesture" }
         : null,
     [item]
   );
