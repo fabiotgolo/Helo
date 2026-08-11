@@ -281,6 +281,80 @@ parado.
    não.
 5. **Sem suporte offline para o Agent**, por decisão: não era o escopo.
 
+## 30a. Um defeito preexistente que a regressão final revelou
+
+A regressão completa da 5.3C fechou em 259/260. O falho era
+`voz-ditado.spec.ts › o texto ditado sobrevive ao refresh` — e **não era desta
+fase**.
+
+### O que foi medido, e não suposto
+
+| Ponto da árvore | Falhas (caso isolado) |
+|---|---|
+| 5.3C | **1 / 10** |
+| 5.3B (`2395339`, worktree limpa) | 1 / 5 |
+| **5.2C (`c01eea3`, worktree limpa)** | **1 / 10** |
+
+Mesma taxa no fim da 5.2C — o ponto onde a regressão 245/245 verde foi
+registrada. A 5.3C não alterou a frequência nem o comportamento.
+
+Duas instrumentações temporárias deram a causa:
+
+- envolvendo `IDBObjectStore.prototype.put`, a gravação do rascunho **era
+  disparada em 6 de 6 execuções**, na store `rascunhos`, antes da recarga —
+  inclusive nas que falhavam;
+- instrumentando a hidratação, a execução que falha recebe `{}`.
+
+Entre "gravação disparada" e "gravação guardada" existe uma transação, e a
+recarga a interrompia. **Não era corrida de escrita: era a transação não
+commitada.**
+
+### Por que apareceu agora
+
+O ditado escreve o campo inteiro de uma vez e o teste recarrega logo depois. O
+teclado leva mais tempo para chegar ao mesmo ponto. O `voz-ditado` não causou o
+defeito — ele o alcançou primeiro.
+
+### A correção (autorizada como bloqueador de fechamento)
+
+`lib/offline/use-offline-session.ts`, no mecanismo **compartilhado** de
+rascunho — o mesmo para texto digitado e para `VOICE_TRANSCRIPTION`:
+
+| | Antes | Agora |
+|---|---|---|
+| primeira alteração | esperava 300 ms num `setTimeout` | vai ao disco **imediatamente** |
+| alterações seguintes | reiniciavam o temporizador | coalescidas: uma em voo, uma pendente |
+| ordem | nenhuma garantia | sequência monotônica por chave |
+| saída da página | nada | `pagehide` / `visibilitychange` escoam a cauda |
+
+Os quatro estados passaram a ser distintos: **pendente**, **em voo**, **não
+confirmada**, **confirmada**.
+
+A descarga na saída é **segunda linha de defesa, não a correção**: nenhum
+navegador promete concluir uma transação começada durante o teardown. A
+correção é não existir mais um intervalo em que o texto só vive na memória.
+
+### Custo e prova
+
+77 teclas em 14,5 s → **2 escritas** (0,03 por tecla). O debounce anterior
+produziria 1; a segunda é exatamente a durabilidade comprada.
+
+- caso original: **20 execuções isoladas, 0 falhas** (antes: 1 em 10);
+- `voz-ditado` completo: **5 × 36 = 180/180**;
+- suíte causal nova `rascunho-persistencia`: **10/10**, incluindo os casos que
+  precisam continuar apagando (limpar o campo, outro paciente, novo login);
+- offline: armazenamento 49, projeção 103, origem 48, fila 105, conflitos 111,
+  decisões 72, sync-endpoints 27, idempotência 34 — todas verdes.
+
+Nenhum teste ganhou espera artificial entre a alteração e a recarga: é essa
+janela que eles existem para exercitar.
+
+### O segundo falho da regressão
+
+`sem conexão o ditado some` também falhou uma vez na regressão completa, e
+**não reproduziu** em nenhuma das ~60 execuções da investigação. Não afirmo que
+tenha a mesma causa. Ficou registrado, e a regressão final o reexecuta.
+
 ## 30b. A matriz de confiança da Fase 5.3
 
 Cada linha responde a uma pergunta: **por que acreditamos que é verdade?**
