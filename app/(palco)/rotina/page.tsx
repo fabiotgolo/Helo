@@ -169,7 +169,14 @@ export default function RotinaPage() {
         setOpenKey(key);
       }
       console.log("[HELO ROUTINE] answer selected", question.key, ans);
-      console.log("[HELO ROUTINE] selected answer text", responseText);
+      // A-09: aqui saía `responseText` — o texto que a voz do paciente vai
+      // dizer ("Sim, estou com dor"). É a resposta clínica dele, inteira, no
+      // console. A auditoria da 5.4A não o alcançou porque varreu os caminhos
+      // do Agent, e este é da tela de Rotina; foi a suíte de logs desta fase
+      // que o encontrou, varrendo o app inteiro em vez de uma lista.
+      //
+      // A chave da pergunta e a resposta escolhida (sim/talvez/não) já dizem o
+      // que diagnostica, e nenhuma das duas é o texto.
       console.log("[HELO VOICE] routine response voiceRole patient");
       console.log("[HELO AGENT] suppress narration for routine answer");
       setSelected(ans);

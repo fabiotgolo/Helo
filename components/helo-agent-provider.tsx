@@ -358,7 +358,10 @@ function HeloAgentSession({
   const [sdkSession] = useState<SdkSessionHandle>(() =>
     createSdkSessionHandle({
       log: (message) => console.log(message),
-      warn: (message, detail) => console.warn(message, detail),
+      // A-09: `detail` era o objeto de erro do teardown, despejado inteiro.
+      // O rótulo já diz o que falhou; o objeto só acrescentava o que veio do
+      // SDK.
+      warn: (message) => console.warn(message),
     })
   );
   const startedRef = useRef(false);
@@ -490,8 +493,8 @@ function HeloAgentSession({
         try {
           controls?.setVolume({ volume: agentOutputMutedRef.current ? 0 : 1 });
           controls?.setMuted(agentInputMutedRef.current || musicPreviousMutedRef.current);
-        } catch (caught) {
-          console.warn("[HELO MUSIC] não foi possível restaurar o áudio da conversa", caught);
+        } catch {
+          console.warn("[HELO MUSIC] não foi possível restaurar o áudio da conversa");
         }
       }
     }
@@ -822,7 +825,7 @@ function HeloAgentSession({
         caught instanceof Error && (caught as { heloMusic?: boolean }).heloMusic && caught.message
           ? caught.message
           : "O navegador bloqueou a reprodução ou houve uma falha na rede.";
-      console.warn("[HELO MUSIC] music generation or playback failed", caught);
+      console.warn("[HELO MUSIC] music generation or playback failed");
       finishMusicPlayback("failed", { error: reason });
       return {
         ok: false,
@@ -885,12 +888,12 @@ function HeloAgentSession({
         period: track.period,
         outcome,
       };
-    } catch (caught) {
+    } catch {
       // Mensagem nossa, sempre: o que cai aqui é falha de rede ou de leitura
       // do corpo, e o texto delas não é escrito pela Helo — mas é narrado por
       // ela e guardado na transcrição do provedor.
       const reason = "Não foi possível buscar a playlist.";
-      console.warn("[HELO MUSIC] existing music playback failed", caught);
+      console.warn("[HELO MUSIC] existing music playback failed");
       return { ok: false, found: false, reason };
     }
   }, [playMusicTrack, stopGeneratedMusic]);
@@ -1033,7 +1036,11 @@ function HeloAgentSession({
         parameters.label ??
         parameters.target ??
         parameters.command;
-      console.log("[HELO TOOL] interactWithHeloUI called", rawId, parameters);
+      // A-09: `parameters` inteiro saía daqui. É o objeto que o PROVEDOR
+      // montou — o Helo não escolhe o que vem dentro dele, e nada impede um
+      // campo com texto da conversa. O que diagnostica é se a tool chegou e
+      // com que id; o resto era conteúdo de terceiro no console do cuidador.
+      console.log("[HELO TOOL] interactWithHeloUI called");
       const actionId = typeof rawId === "string" ? rawId : "";
       console.log("[HELO TOOL] actionId received", actionId || "(vazio)");
       if (!actionId.trim()) {
@@ -1367,7 +1374,12 @@ function HeloAgentSession({
     onConversationCreated: patchIncompleteElevenLabsErrorEvent,
     clientTools,
     onConnect: ({ conversationId }) => {
-      console.log("[HELO AUDIO] agent connected", { conversationId });
+      // A-09: `conversationId` é o identificador da conversa DO PROVEDOR, e é
+      // por ele que uma transcrição é localizada do lado de lá. Saber que
+      // conectou é o que diagnostica; o identificador não acrescenta nada a
+      // quem lê um console e acrescenta um elo a quem não deveria estar lendo.
+      void conversationId;
+      console.log("[HELO AUDIO] agent connected");
       resetSilenceReminderState();
       // Uma sessão conectada e com o navegador online começa saudável. O RTT
       // real do stream, recebido em onPing, pode rebaixá-la para amarelo ou vermelho.
@@ -1375,7 +1387,9 @@ function HeloAgentSession({
       onError(null);
     },
     onDisconnect: (details) => {
-      console.log("[HELO AUDIO] agent disconnected", details);
+      // A-09: o objeto `details` do SDK saía inteiro. O único campo que o Helo
+      // realmente usa — e o único de vocabulário fechado — é o motivo.
+      console.log("[HELO AUDIO] agent disconnected", { reason: details.reason });
       // O SDK fechou por conta própria: o recurso externo não existe mais, e
       // insistir em encerrá-lo depois só produziria ruído.
       sdkSession.markClosed();
@@ -1386,11 +1400,23 @@ function HeloAgentSession({
       }
     },
     onError: (message, context) => {
-      console.error("[HELO AUDIO] agent error", message, context);
+      // ——— A-09 + exposição de erro ———
+      //
+      // Aqui saíam `message` e `context` do provedor: o par mais sensível da
+      // lista, porque `context` é o objeto de erro do SDK e `message` é texto
+      // que o Helo não escreveu.
+      //
+      // E `message` não parava no console: ela era MOSTRADA ao cuidador. É o
+      // mesmo defeito que a 5.4B corrigiu na música, onde uma falha de rede
+      // virava "Failed to fetch" na voz da Helo. A regra vale igual aqui: o
+      // que a pessoa lê é sempre escrito pela Helo.
+      void message;
+      void context;
+      console.error("[HELO AUDIO] agent error", { code: "AGENT_SESSION_ERROR" });
       sdkSession.markClosed();
       setConnectionStatus("offline");
       clearLocalSessionState();
-      onError(message || "A conversa foi interrompida. Verifique sua conexão e tente novamente.");
+      onError("A conversa foi interrompida. Verifique sua conexão e tente novamente.");
     },
     onModeChange: ({ mode }) => {
       console.log("[HELO AUDIO] agent mode", mode);
@@ -1436,7 +1462,14 @@ function HeloAgentSession({
     // o código estão com nomes diferentes; se NENHUM log de tool aparecer, o
     // agente não está declarando/chamando a tool no painel da ElevenLabs.
     onUnhandledClientToolCall: (call: unknown) => {
-      console.warn("[HELO TOOL] unhandled client tool call", call);
+      // A-09: o objeto `call` inteiro saía daqui, com os parâmetros dentro.
+      // O que este log existe para responder é "que NOME o painel chamou?" —
+      // e o nome basta para responder. Nada mais do objeto é lido.
+      const nome =
+        typeof call === "object" && call && "tool_name" in call
+          ? String((call as { tool_name?: unknown }).tool_name)
+          : "(desconhecida)";
+      console.warn("[HELO TOOL] client tool não registrada:", nome);
     },
   });
   useEffect(() => {
@@ -1859,8 +1892,8 @@ function HeloAgentSession({
         // cuidador que a escreveu.
         enviaAoAgent("systemInstruction", text, contextId ? { contextId } : undefined);
         return true;
-      } catch (caught) {
-        console.warn("[HELO AUDIO] activity question prompt failed", caught);
+      } catch {
+        console.warn("[HELO AUDIO] activity question prompt failed");
         return false;
       }
     },
@@ -1875,8 +1908,8 @@ function HeloAgentSession({
     setMicLevel(0);
     try {
       await changeInputDevice({ inputDeviceId: deviceId || undefined });
-    } catch (caught) {
-      console.warn("[HELO AUDIO] input device change failed", caught);
+    } catch {
+      console.warn("[HELO AUDIO] input device change failed");
       setInputDeviceError("Não foi possível trocar o microfone nesta sessão. Encerre e conecte novamente.");
     }
   }, [changeInputDevice]);
