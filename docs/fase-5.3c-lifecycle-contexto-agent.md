@@ -27,6 +27,16 @@ do paciente.
 **Nenhuma ação nova foi criada. Nenhuma classificação mudou.** 47 ações,
 25 executáveis — exatamente a distribuição da 5.3B.
 
+**Antes do fechamento, a fase foi auditada contra si mesma.** A primeira versão
+do §7–8 afirmava que apenas o handler de espera humana cometia depois de um
+`await` contextual, e que os demais eram cobertos pelo desmonte da tela. A
+auditoria das 25 ações executáveis, ação por ação, mostrou que essa segunda
+metade era falsa: a troca de paciente **não desmonta** `/conversa`, `/rotina`
+nem `/atividades`. Eram **quatro** caminhos, não um. Os três que faltavam —
+L1 `conversa.comecar`, L2 `routine.open.*`, L3 `atividades.iniciar.*` — foram
+fechados com o mecanismo que já existia, e provados com a resposta do servidor
+segurada e a troca de paciente no meio.
+
 ## 2. Baseline da 5.3B
 
 47 ações · navigation 9 · operational 16 · sensitive 12 · patientResponse 10 ·
@@ -121,19 +131,78 @@ O dispatcher cobre da chegada do pedido até o **começo** do efeito. O que
 acontece depois de um `await` **dentro** do handler só o handler alcança — por
 isso ele recebe `__aindaVale()` no payload.
 
-Handlers Agent-executáveis com espera relevante, mapeados:
+### A primeira versão desta seção estava incompleta
 
-| Handler | Espera | Commit | Guarda |
-|---|---|---|---|
-| `activity.goToActivityMenu` | **modal, tempo humano** | `endRun` grava | ✅ `__aindaVale` |
-| `activity.goToManageActivities` | idem | idem | ✅ (é `sensitive`, inalcançável — a guarda existe pelo caminho humano compartilhado) |
-| `atividades.iniciar.*` | POST | `setView` | componente desmonta com a troca |
-| `perguntas.*` | POST | estado local | idem |
-| `helo.conectar` | WebRTC | sessão | guardas próprias da 5.1A |
-| `routine.open.*`, `routine.backToMenu` | — | estado local | não há await |
+Ela afirmava que só o handler de espera humana tinha commit contextual depois
+de um `await`, e que os demais eram cobertos pelo desmonte da tela. A auditoria
+final das **25 ações executáveis pelo Agent**, feita antes da aprovação da
+fase, mostrou que a segunda metade da frase era falsa em três casos: a troca de
+paciente **não desmonta** `/conversa`, `/rotina` nem `/atividades`, e a
+continuação antiga chega depois do efeito de reset — e vence.
 
-A espera do modal é a única de tempo **humano** — segundos a minutos — e é a
-única onde o commit é uma gravação. É lá que a guarda foi aplicada.
+São **quatro** caminhos com commit contextual pós-`await`, não um.
+
+| # | Handler | Espera | O que comete depois | Guarda |
+|---|---|---|---|---|
+| — | `activity.goToActivityMenu` | modal, tempo **humano** | `endRun` grava | ✅ desde a 5.3C |
+| **L1** | `conversa.comecar` | POST `/api/sessions` | `logEvent` **persistido** + TTS | ✅ `guardaDeContexto` |
+| **L2** | `routine.open.*` | `ensureSession()` | `logEvent` **persistido** | ✅ `guardaDeContexto` |
+| **L3** | `atividades.iniciar.*` | POST `/api/activities/runs` | `setView` **abre o player** | ✅ `guardaDeContexto` |
+
+As demais 21 ações não têm janela: 16 não têm `await` no handler; 4 (`perguntas.pausar`,
+`perguntas.retomar`, `perguntas.conversaPorOpcoes`, `perguntas.controlesDoPaciente`)
+esperam uma escrita que **é** o commit, autorizada pelo dispatcher no instante
+anterior, e o que vem depois é estado local que morre com a remontagem;
+`helo.solicitarMicrofone` espera `getUserMedia` e depois só desliga as trilhas
+que ela mesma abriu. `helo.conectar` revalida por conta própria desde a 5.1A.
+
+### A guarda, e o que ela deliberadamente não faz
+
+`guardaDeContexto(payload)` — em `lib/helo-agent-context.ts`, ao lado do lease.
+Não é um mecanismo novo: é a **mesma geração**. Quando o pedido veio do Agent
+ela reaproveita o verificador que o dispatcher injetou (o lease do instante em
+que a tool chegou, mais antigo e portanto mais exigente); quando veio do dedo
+de alguém, captura o lease de agora. **A corrida é a mesma para os dois**,
+porque quem a abre é o tempo de rede, não a origem do pedido — e por isso os
+três handlers ficaram protegidos nos dois caminhos.
+
+O que ela **não** faz é desfazer. Um efeito remoto já legitimamente commitado
+antes da mudança permanece: a sessão de A e a execução de A foram criadas com
+autorização válida, e apagá-las seria inventar um rollback que o produto não
+tem. O que a guarda bloqueia é a **continuação** — o registro, a fala, a
+apresentação.
+
+### Quais fronteiras invalidam cada um dos três
+
+A resposta é a mesma para os três, e é essa a razão de não haver exceção por
+tela: a guarda é o contexto inteiro, não um campo escolhido a dedo.
+
+| Fronteira | L1 | L2 | L3 | por quê |
+|---|:--:|:--:|:--:|---|
+| troca de rota | ✅ | ✅ | ✅ | `rota` é um dos quatro primitivos |
+| troca de paciente | ✅ | ✅ | ✅ | `pacienteId` — é a fronteira que motivou tudo |
+| troca de sessão clínica | ✅ | ✅ | ✅ | `sessaoId`; nas três telas ele é sempre `null` (só as perguntas em tempo real o publicam), então na prática nenhuma delas muda de sessão sem antes mudar de rota |
+| logout | ✅ | ✅ | ✅ | `usuarioId` cai para `null`; e o logout do produto ainda leva a página inteira, que é uma fronteira mais forte |
+
+Uma tela nova não precisa declarar nada: a geração já cobre as quatro. Foi por
+isso que a correção não criou tratamento por tela — o mecanismo genérico
+resolvia, e criar exceções teria sido inventar um segundo lugar onde a regra
+pode divergir.
+
+### Um defeito irmão, de causa diferente, encontrado ao provar L2
+
+`/rotina` guardava a sessão numa **referência**, e a referência atravessava a
+troca de paciente. Com o contexto **já válido em B**, `ensureSession()` devolvia
+na hora a sessão de A, e o registro seguinte casava a sessão de A com o paciente
+B. Nenhuma guarda de lease pega isso: não há espera onde o mundo mude — o mundo
+já mudou, e o que ficou foi a lembrança. A correção é esquecer a sessão quando o
+paciente troca (`app/(palco)/rotina/page.tsx`), e a prova é a requisição: abrir
+um card depois da troca precisa **criar uma sessão nova**.
+
+O mesmo padrão existe em `/conversa` e **não foi corrigido** — está no §30, item
+2, aguardando decisão de produto: ali a troca de paciente no meio de uma conversa
+em andamento envolve descartar (ou não) o que o cuidador já compôs, e isso é uma
+regra de produto, não um conserto mecânico.
 
 ## 9–13. As fronteiras, uma a uma
 
@@ -250,12 +319,30 @@ local do R-08.
 | `test:voice:grant` | 32 | **32** |
 | `test:e2e-sync` | 34 | **34** |
 | `test:eleven-guard` | 46 | **46** |
+| `test:agent:stale` | — | **53** (novo, L1/L2/L3) |
 | Playwright `agent-lifecycle` | — | **8** (novo lote) |
+| Playwright `agent-async-stale` | — | **9** (novo lote, L1/L2/L3) |
 
 Os aumentos em `invariants` (+2) e `inventory` (+1) são asserções novas sobre a
 sequência de despacho, não afrouxamento: três tripwires dispararam quando a
 sequência mudou de arquivo, e foram **reapontados para onde a propriedade
 agora vive**, não removidos.
+
+### Como o lote novo é determinístico
+
+Nenhum dos nove testes tenta ganhar a corrida na sorte. A resposta do servidor
+é interceptada e **segurada**: a requisição sai, o servidor responde de
+verdade, e a entrega ao handler fica presa até o teste soltá-la. A sequência é
+sempre a mesma — o handler começa, a resposta fica pendente, o contexto muda, a
+resposta é liberada, e só então a asserção. Nenhum `sleep` faz um teste passar.
+
+Cada caso negativo tem o **controle positivo** ao lado: mesma espera, sem
+trocar nada. Sem ele, uma correção que simplesmente matasse as três
+funcionalidades também passaria em todas as asserções negativas.
+
+E a suíte foi verificada contra si mesma: com a guarda **neutralizada**, os
+quatro casos negativos falham e os quatro controles positivos passam. Ela é
+sensível ao defeito, não à sua ausência.
 
 ## 29. Performance
 
@@ -269,10 +356,18 @@ parado.
 1. **O lote `agent-lifecycle` roda em modo dev**, porque os dois ganchos de
    inspeção não existem em produção. A alternativa seria instrumentar o produto
    em produção — pior troca.
-2. **O guarda cobre até o começo do efeito.** Um commit depois de um `await`
-   interno depende de o handler perguntar; só o de espera humana o faz hoje.
-   Os demais são cobertos pelo desmonte da tela, o que é uma proteção *de
-   efeito colateral*, não declarada. Está listado no §7–8.
+2. ~~**O guarda cobre até o começo do efeito.** Um commit depois de um `await`
+   interno depende de o handler perguntar; só o de espera humana o faz hoje.~~
+   **FECHADO.** A auditoria das 25 mostrou que a segunda metade da afirmação
+   original — "os demais são cobertos pelo desmonte da tela" — era falsa em três
+   casos. L1, L2 e L3 foram corrigidos; os quatro caminhos com commit contextual
+   pós-`await` estão listados no §7–8, todos com guarda declarada. Fica em
+   aberto, **como decisão de produto e não como lacuna do Agent**, o que
+   `/conversa` deve fazer quando o cuidador troca de paciente no meio de uma
+   conversa em andamento: hoje a conversa de A continua na tela de B. Não é uma
+   janela pós-`await` (é estado de tela que sobrevive à troca), não é alcançável
+   pelo Agent de forma diferente do clique humano, e a decisão — descartar,
+   perguntar, ou manter — não é minha.
 3. **A geração é por contexto de JS.** Uma recarga a reinicia — o que é seguro
    (a recarga é uma fronteira mais forte), mas significa que ela não distingue
    duas abas.
@@ -371,7 +466,13 @@ Cada linha responde a uma pergunta: **por que acreditamos que é verdade?**
 | 8 | Sessão vencida falha fechado | troca de sessão com o mesmo paciente invalida | `test:agent:context` | 49 ✓ |
 | 9 | Logout invalida | contexto encerrado; nenhuma capacidade local; pedido antigo não ressuscita | `test:agent:context`; `agent-lifecycle` §7 | 49 ✓ · 8 ✓ |
 | 10 | Reconnect nasce do contexto atual | o lease é capturado por chamada, nunca guardado entre sessões | `test:agent:context`; `test:agent:lifecycle` | 49 · 33 ✓ |
-| 11 | Assíncrono vencido não comita | `__aindaVale()` antes do `endRun` do modal | `test:agent:context` | 49 ✓ |
+| 11 | **Assíncrono vencido não comita — nos QUATRO caminhos** | os 4 handlers com commit contextual pós-`await` conferem a guarda antes do efeito; auditados um a um contra as 25 executáveis, e a ordem (captura → conferência → efeito) é verificada estruturalmente | `test:agent:stale`; `test:agent:context` | 53 ✓ · 49 ✓ |
+| 11a | L1 — a conversa de A não começa em B | resposta de `/api/sessions` **segurada**, troca de paciente no meio, resposta liberada: zero `logEvent`, zero TTS, a tela não sai da fase de introdução | `agent-async-stale` §5 | 9 ✓ |
+| 11b | L2 — o card de A não registra em B | idem com `ensureSession()`: zero `logEvent` | `agent-async-stale` §7 | 9 ✓ |
+| 11c | L3 — a atividade de A não abre em B | idem com `/api/activities/runs`: o player não abre, a lista de B continua sendo a de B — pelo pedido do Agent **e** pelo clique do cuidador | `agent-async-stale` §1, §3 | 9 ✓ |
+| 11d | A correção não matou as três funcionalidades | controle positivo ao lado de cada caso: mesma espera, sem trocar nada — a conversa começa e registra, o card registra, o player abre | `agent-async-stale` §2, §6, §8 | 9 ✓ |
+| 11e | Os testes reprovam sem a correção | com a guarda neutralizada, os 4 casos negativos falham e os 4 controles positivos passam — a suíte é sensível ao defeito, não à sua ausência | controle negativo executado | 4 ✗ / 5 ✓ |
+| 11f | A sessão de rotina não atravessa a troca de paciente | o defeito irmão (referência, não `await`): abrir um card depois da troca **cria uma sessão nova**, contado na requisição | `agent-async-stale` §9; `test:agent:stale` | 9 ✓ · 53 ✓ |
 | 12 | O Agent persistente atualiza capacidades | 5 navegações client-side; ação de cada tela anterior recusada | `agent-lifecycle` §3 | 8 ✓ |
 | 13 | O transcript não concede autoridade | não é persistido, não executa ação, não aparece em log | `test:agent:authorship` | 36 ✓ |
 | 14 | `providerRole` não define autoria | `role: user` → `source: caregiverVoice`, com a role preservada | `test:agent:authorship` | 36 ✓ |
@@ -385,6 +486,21 @@ Cada linha responde a uma pergunta: **por que acreditamos que é verdade?**
 | 22 | Chamada duplicada não duplica efeito inseguro | duas chamadas concorrentes: um card aberto, não dois | `agent-lifecycle` §8 | 8 ✓ |
 | 23 | O registry não churna por render | 100 publicações idênticas, contador parado; 10 leituras na tela real, mesma geração | `test:agent:context`; `agent-lifecycle` §1 | 49 ✓ · 8 ✓ |
 | 24 | Nenhuma chamada real à ElevenLabs | a guarda neutraliza a chave antes de o processo nascer; as client tools são funções locais | `test:eleven-guard` | 46 ✓ |
+| 25 | A autoridade não aumentou | 47 ações, distribuição intacta: navigation 9 + operational 16 = **25** executáveis, sensitive 12, patientResponse 10 | `test:agent:invariants` | 23 ✓ |
+| 26 | A guarda não duplica lógica | um só leitor de `__aindaVale` (`leaseDoPayload`), uma só guarda (`guardaDeContexto`); nenhum dos quatro handlers reimplementa a leitura | `test:agent:stale` | 53 ✓ |
+| 27 | A guarda não recusa por nada | 100 republicações idênticas do mesmo contexto e ela continua valendo; render não é mudança de autoridade | `test:agent:stale` | 53 ✓ |
+
+### A propriedade que a matriz sustenta
+
+**ASYNC STALE → ZERO COMMIT CONTEXTUAL.** As 25 ações executáveis pelo Agent,
+somadas:
+
+| | quantas | por que é seguro |
+|---|---|---|
+| sem `await` no handler | **15** | não existe janela |
+| `await` com efeito posterior local ou autocontido | **5** | estado do componente, que morre com a remontagem; ou trilhas que a própria ação abriu |
+| commit contextual depois do `await`, **revalidado** | **5** | `activity.goToActivityMenu` e L1/L2/L3 pela guarda de lease; `helo.conectar` pela sua própria, da 5.1A |
+| **lacuna real** | **0** | — |
 
 ## 31. Pendências da 5.4
 
