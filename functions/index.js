@@ -32,6 +32,25 @@ function novoIdDeMidia() {
   return randomBytes(12).toString("hex");
 }
 
+/**
+ * O bucket, nomeado — e nomeado do MESMO jeito que `lib/midia-privada.ts`.
+ *
+ * Antes desta fase o lado da Function usava `admin.storage().bucket()` (o
+ * padrão do ambiente) e o lado do app Next usava um nome explícito, porque o
+ * App Hosting nem sempre configura um padrão. Enquanto ninguém LIA o objeto
+ * pelo servidor, a divergência não aparecia: a Function escrevia e o navegador
+ * buscava pela URL pública.
+ *
+ * Agora quem lê é o Next. Se os dois lados resolverem buckets diferentes, a
+ * Function grava num lugar e a rota procura noutro — e o sintoma seria um 404
+ * em áudio que "acabou de ser gerado". Um nome só, dos dois lados.
+ */
+function baldeDaHelo() {
+  return admin
+    .storage()
+    .bucket(process.env.FIREBASE_STORAGE_BUCKET || "helo-app-7fbf8.firebasestorage.app");
+}
+
 function prefixoDeAudioDaFrase(patientId, phraseId) {
   return `patients/${patientId}/phrase-audio/${phraseId}/`;
 }
@@ -54,10 +73,9 @@ function caminhoDeMusica(patientId, musicId) {
  */
 async function varrePrefixoDaFrase(patientId, phraseId, preservar) {
   try {
-    const [arquivos] = await admin
-      .storage()
-      .bucket()
-      .getFiles({ prefix: prefixoDeAudioDaFrase(patientId, phraseId) });
+    const [arquivos] = await baldeDaHelo().getFiles({
+      prefix: prefixoDeAudioDaFrase(patientId, phraseId),
+    });
     await Promise.all(
       arquivos
         .filter((a) => a.name !== preservar)
@@ -206,7 +224,7 @@ async function synthesizePhraseAudioHandler(req, res) {
     // esta fase existe para eliminar.
     const audioId = novoIdDeMidia();
     const storagePath = caminhoDeAudioDaFrase(patientId, phraseId, audioId);
-    const file = admin.storage().bucket().file(storagePath);
+    const file = baldeDaHelo().file(storagePath);
     await file.save(buffer, {
       resumable: false,
       metadata: {
@@ -253,11 +271,11 @@ async function synthesizePhraseAudioHandler(req, res) {
     if (typeof anterior === "string" && anterior && anterior !== storagePath) {
       // Gerações fora do prefixo atual (o caminho legado
       // `phrases_audio/{phraseId}.mp3`) não são alcançadas pela varredura.
-      await admin.storage().bucket().file(anterior).delete({ ignoreNotFound: true }).catch(() => {});
+      await baldeDaHelo().file(anterior).delete({ ignoreNotFound: true }).catch(() => {});
     }
     const legado = phrase.data().storagePath;
     if (typeof legado === "string" && legado && legado !== storagePath) {
-      await admin.storage().bucket().file(legado).delete({ ignoreNotFound: true }).catch(() => {});
+      await baldeDaHelo().file(legado).delete({ ignoreNotFound: true }).catch(() => {});
     }
 
     // A resposta NÃO devolve URL nenhuma. O cliente já sabe onde pedir o áudio:
@@ -435,7 +453,7 @@ async function generateMusicHandler(req, res) {
     // Agora o id do documento nasce ANTES do arquivo e é o mesmo dos dois
     // lados. O caminho carrega o vínculo, e o nome não conta nada: nem gênero,
     // nem horário, nem uma letra do que foi pedido.
-    const bucket = admin.storage().bucket();
+    const bucket = baldeDaHelo();
     const trackRef = getFirestore(admin.app(), FIRESTORE_DATABASE_ID)
       .collection("patients")
       .doc(String(patientId))
