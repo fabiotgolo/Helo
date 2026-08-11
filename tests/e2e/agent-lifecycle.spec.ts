@@ -69,6 +69,29 @@ async function tool(
   return JSON.parse(cru) as Record<string, unknown>;
 }
 
+/**
+ * Espera o PACIENTE ATIVO chegar ao provider.
+ *
+ * Toda tool do Agent começa por `authorizeTool`, e a primeira coisa que ela
+ * faz é exigir um paciente ativo. A tela da Rotina, porém, aparece antes disso
+ * — o cabeçalho e os cards não dependem do paciente. Chamar a tool no vão
+ * entre as duas coisas recebe "Paciente ativo não selecionado": recusa
+ * correta, precondição errada. Foi o que fez este arquivo falhar na regressão
+ * completa (e só nela, sob carga) enquanto passava isolado.
+ *
+ * O sinal usado é o seletor de pacientes do cabeçalho, que só renderiza depois
+ * de `/api/patients` responder — estritamente DEPOIS de o provider ter lido o
+ * paciente ativo. Esperar por ele não afrouxa nada: é a condição que o produto
+ * já exige de qualquer pedido do Agent.
+ */
+async function esperaPacienteAtivo(page: Page): Promise<void> {
+  await expect(
+    page
+      .getByText(/^Paciente: /)
+      .or(page.getByRole("button", { name: "Selecionar paciente" }))
+  ).toBeVisible();
+}
+
 const idsLocais = (c: Contexto) =>
   c.capabilities.filter((x) => x.scope === "screen").map((x) => x.id);
 
@@ -84,6 +107,7 @@ test.describe("O contexto vivo do Agent", () => {
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     const a = await contexto(page);
     // Dez leituras seguidas, cada uma um render do ponto de vista do React:
@@ -114,6 +138,7 @@ test.describe("O contexto vivo do Agent", () => {
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     const naRotina = await contexto(page);
     const alvo = idsLocais(naRotina).find((id) => id.startsWith("routine.open."));
@@ -140,6 +165,7 @@ test.describe("O contexto vivo do Agent", () => {
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/helo");
     await expect(page.getByRole("button", { name: "Conectar com Helo" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     // Tudo pelo lado do cliente, como um cuidador com o assistente persistente
     // ligado atravessaria o produto sem perder a conversa.
@@ -182,6 +208,7 @@ test.describe("O contexto vivo do Agent", () => {
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     const c = await contexto(page);
     expect(c.capabilities.filter((x) => x.scope === "global")).toHaveLength(9);
@@ -199,6 +226,7 @@ test.describe("O contexto vivo do Agent", () => {
     await entrarComo(page, semente.assistente.email);
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
+    await esperaPacienteAtivo(page);
     await page.getByRole("button", { name: /água/i }).first().click();
     await expect(page.getByRole("button", { name: "Responder sim" })).toBeVisible();
 
@@ -244,6 +272,7 @@ test.describe("O contexto vivo do Agent", () => {
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     const comA = await contexto(page);
     const alvo = idsLocais(comA).find((id) => id.startsWith("routine.open."));
@@ -255,6 +284,7 @@ test.describe("O contexto vivo do Agent", () => {
     }, semente.outroPacienteId);
     await page.reload();
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     const comB = await contexto(page);
 
@@ -274,6 +304,7 @@ test.describe("O contexto vivo do Agent", () => {
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     const antes = await contexto(page);
     expect(idsLocais(antes).length).toBeGreaterThan(0);
@@ -300,6 +331,7 @@ test.describe("O contexto vivo do Agent", () => {
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    await esperaPacienteAtivo(page);
 
     const c = await contexto(page);
     const alvo = idsLocais(c).find((id) => id.startsWith("routine.open."));

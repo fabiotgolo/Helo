@@ -44,7 +44,56 @@ type Phase = "intro" | "node" | "confirm" | "done";
 
 type Person = { id: number; name: string; relation: string | null };
 
+// ——— A conversa pertence a UMA pessoa (Fase 5.3C) ———
+//
+// Toda a conversa vive em estado local: a fase, o nó atual, o contexto
+// acumulado, a frase composta, o histórico, as sugestões da IA, o id da sessão
+// e — em referências — o caminho percorrido e a frase JÁ confirmada, com o id
+// do registro que autoriza falá-la na voz do paciente.
+//
+// Nada disso dependia de `patientId`. Trocar de paciente no meio de uma
+// conversa deixava tudo na tela: a pergunta de A, a frase de A pronta para ser
+// repetida, a sessão de A recebendo os eventos seguintes. Era o defeito irmão
+// dos de `/rotina` — estado que sobrevive a uma troca de autoridade —, e o
+// maior deles: `confirmedPhrase` faria a mensagem de A soar na voz do paciente
+// com B na tela.
+//
+// A correção é a chave. Remontar não é um mecanismo novo nem uma lista de
+// campos para zerar (uma lista é onde se esquece um): o React descarta o
+// estado inteiro de uma vez, e a tela volta ao SEU próprio estado inicial, o
+// mesmo de sempre — nenhuma UI nova, nenhum redirecionamento.
+//
+// O que a remontagem não alcança é uma promessa já em voo: a closure dela não
+// morre com o componente. Para isso, dentro, a mesma guarda de contexto de L1,
+// L2 e L3.
+//
+// A sessão de A **não** é encerrada. Ela nasceu autorizada e permanece dela,
+// como qualquer sessão aberta e não concluída — trocar de paciente não é
+// concluir uma conversa, e inventar esse lifecycle aqui seria decidir por
+// quem cuida.
+// A chave conta TROCAS, não o paciente. A diferença importa: numa carga
+// direta da rota o paciente chega depois do primeiro render, e uma chave
+// derivada dele remontaria a tela por causa disso — uma remontagem que não
+// corresponde a nenhuma troca, e que faria o Agent receber CONTEXT_EXPIRED
+// (corretamente: a ação teria mesmo saído do registry) por um pedido legítimo
+// feito logo depois de a tela abrir. Contando trocas, a primeira vez que o
+// paciente fica conhecido não é uma troca — e a tela monta uma vez só.
+//
+// O ajuste acontece DURANTE o render, que é o padrão do React para derivar de
+// um valor anterior. Não é efeito e não cascateia: o React reprocessa o mesmo
+// render antes de pintar.
 export default function ConversaPage() {
+  const { patientId } = usePatient();
+  const [pacienteDaTela, setPacienteDaTela] = useState<number | null>(null);
+  const [trocas, setTrocas] = useState(0);
+  if (patientId != null && patientId !== pacienteDaTela) {
+    setPacienteDaTela(patientId);
+    if (pacienteDaTela !== null) setTrocas((n) => n + 1);
+  }
+  return <ConversaDoPaciente key={trocas} />;
+}
+
+function ConversaDoPaciente() {
   const router = useRouter();
   // Voz global da Helo — a mesma do palco; o orbe reage a esta fala
   const { speak, speaking } = useHelo();
@@ -204,6 +253,11 @@ export default function ConversaPage() {
   // sempre marcadas como sugestão, nunca decidindo pelo paciente.
   const trySuggestions = useCallback(
     async (n: FlowNode) => {
+      // As sugestões são formuladas a partir do PERFIL do paciente atual —
+      // nome, estilo de fala, expressões preferidas, rede de pessoas. Chegar
+      // depois de uma troca significaria apresentar (e anunciar em voz alta)
+      // sugestões feitas para outra pessoa.
+      const aindaVale = guardaDeContexto();
       setAiLoading(true);
       try {
         const res = await fetch("/api/suggest", {
@@ -231,6 +285,10 @@ export default function ConversaPage() {
         if (!res.ok) return false;
         const data = (await res.json()) as { options: AIOption[] };
         if (!data.options?.length) return false;
+        if (!aindaVale()) {
+          console.warn("[HELO CONVERSAR] contexto expirou — sugestões de outro paciente descartadas");
+          return false;
+        }
         setAiOptions(data.options.slice(0, LOTE));
         setMarks({});
         shownAt.current = Date.now();
@@ -391,6 +449,9 @@ export default function ConversaPage() {
 
   const onConfirmGesture = useCallback(
     (g: Gesture) => {
+      // A guarda do instante em que a pessoa registrou o gesto. Gravar a
+      // mensagem é um round-trip, e a fala vem depois dele.
+      const aindaVale = guardaDeContexto();
       if (!confirm) return;
       console.log("[HELO CONVERSAR] confirmation selected", g);
       logEvent({
@@ -441,6 +502,14 @@ export default function ConversaPage() {
         }).then((saved) => {
           if (!saved) {
             console.error("[HELO CONVERSAR] frase não registrada — a voz do paciente não soa");
+            return;
+          }
+          // O registro de A é legítimo e fica. A FALA, não: se o cuidador
+          // trocou de paciente enquanto a mensagem era gravada, a voz do
+          // paciente soaria com outra pessoa na tela — que é a coisa mais
+          // grave que esta tela pode fazer.
+          if (!aindaVale()) {
+            console.warn("[HELO CONVERSAR] contexto expirou antes da fala — a voz do paciente não soa");
             return;
           }
           confirmedPhrase.current = { text: confirm.phrase, messageId: saved.id };
@@ -563,7 +632,13 @@ export default function ConversaPage() {
       question: phase === "confirm" ? confirm?.phrase : node.question,
     });
     void speak("Sem problema. Vou repetir.");
-    setTimeout(repeat, 400);
+    // A única fala PROGRAMADA da tela. 400 ms é pouco, mas é tempo: um
+    // temporizador não morre com a remontagem, e a pergunta de A não pode
+    // soar depois que a tela já é de B.
+    const aindaVale = guardaDeContexto();
+    setTimeout(() => {
+      if (aindaVale()) repeat();
+    }, 400);
   }, [sessionId, patientId, node, phase, confirm, speak, repeat]);
 
   const togglePause = useCallback(() => {
@@ -617,26 +692,45 @@ export default function ConversaPage() {
 
   // ——— Render ———
 
-  const displayOptions: { label: string; ai: boolean }[] = aiOptions
-    ? aiOptions.map((o) => ({ label: o.label, ai: true }))
-    : batchOptions.map((o) => ({ label: o.label, ai: false }));
+  // Memoizado: era recriado a cada render, e uma lista nova a cada render
+  // reconstruía TODO o Action Registry desta tela — a mesma lição de churn da
+  // 5.3B. Aqui o custo não era desempenho: era o Agent. O dispatcher confere,
+  // depois de autorizar no servidor, se a ação ainda é A MESMA (identidade de
+  // objeto, e de propósito — um remount devolveria outra instância). Com o
+  // array renascendo a cada render, qualquer render durante o round-trip de
+  // autorização — a chegada da rede de pessoas, por exemplo — fazia um pedido
+  // legítimo voltar como CONTEXT_EXPIRED. A recusa estava certa; o que estava
+  // errado era a tela mudar de identidade sem ter mudado de nada.
+  const displayOptions = useMemo<{ label: string; ai: boolean }[]>(
+    () =>
+      aiOptions
+        ? aiOptions.map((o) => ({ label: o.label, ai: true }))
+        : batchOptions.map((o) => ({ label: o.label, ai: false })),
+    [aiOptions, batchOptions]
+  );
+
+  const pronto = !authLoading && !patientLoading && user != null && patientId != null;
+  // A ação da introdução mora num memo próprio porque ela não depende de NADA
+  // da conversa — nem de opções, nem de gestos, nem de histórico. Mantê-la no
+  // memo geral a fazia renascer junto com tudo o que muda durante a conversa,
+  // e é justamente nessa fase que o Agent é chamado para começar.
+  const acaoDeComecar = useMemo<HeloUIAction[]>(
+    () => [{
+      actionId: "conversa.comecar",
+      actionClass: "operational",
+      label: "Começar",
+      type: "activity",
+      enabled: pronto && !starting,
+      run: (payload) => void begin(payload),
+    }],
+    [pronto, starting, begin]
+  );
 
   // Action Registry da Conversa guiada — espelha os botões visíveis por fase,
   // com os MESMOS handlers do toque manual. Os gestos são o sinal do paciente
   // relatado pelo operador, e por isso vêm classificados como
   // "patientResponse": o Agent os ENXERGA, mas não os aciona (R-02).
   const registryActions = useMemo<HeloUIAction[]>(() => {
-    if (phase === "intro") {
-      const ready = !authLoading && !patientLoading && user != null && patientId != null;
-      return [{
-        actionId: "conversa.comecar",
-        actionClass: "operational",
-        label: "Começar",
-        type: "activity",
-        enabled: ready && !starting,
-        run: (payload) => void begin(payload),
-      }];
-    }
     if (phase === "done") {
       return [
         {
@@ -724,8 +818,10 @@ export default function ConversaPage() {
       { actionId: "conversa.encerrar", actionClass: "sensitive", label: "Encerrar sessão", type: "activity", enabled: true, run: () => { finish(); router.push("/"); } },
     );
     return list;
-  }, [phase, authLoading, patientLoading, user, patientId, starting, begin, confirm, paused, node, displayOptions, aiLoading, marks, onConfirmGesture, onQuestionGesture, onOptionGesture, speaking, speakPatientPhrase, repeat, uncertain, togglePause, goBack, finish, history, enterNode, router]);
-  useRegisterHeloUIActions(registryActions);
+  }, [phase, confirm, paused, node, displayOptions, aiLoading, marks, onConfirmGesture, onQuestionGesture, onOptionGesture, speaking, speakPatientPhrase, repeat, uncertain, togglePause, goBack, finish, history, enterNode, router]);
+  // Na introdução, a lista registrada é a estável — nada da conversa a
+  // reconstrói, porque nada da conversa existe ainda.
+  useRegisterHeloUIActions(phase === "intro" ? acaoDeComecar : registryActions);
 
   return (
     <div className="relative flex flex-1 flex-col">

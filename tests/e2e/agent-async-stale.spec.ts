@@ -85,6 +85,15 @@ async function trocaDePacienteNaTela(page: Page, nome: string) {
   await page.getByRole("menuitemradio", { name: new RegExp(nome) }).click();
 }
 
+/** O paciente ativo já chegou ao provider? É o que `authorizeTool` exige. */
+async function esperaPacienteAtivo(page: Page): Promise<void> {
+  await expect(
+    page
+      .getByText(/^Paciente: /)
+      .or(page.getByRole("button", { name: "Selecionar paciente" }))
+  ).toBeVisible();
+}
+
 /** Chama a client tool como o provedor chamaria. */
 async function tool(
   page: Page,
@@ -126,6 +135,20 @@ async function acoesLocais(page: Page): Promise<string[]> {
     )();
     return c.capabilities.filter((x) => x.scope === "screen").map((x) => x.id);
   });
+}
+
+/**
+ * Grava o que o navegador diz. Nesta suíte é prova melhor que contar
+ * requisições de TTS: no ambiente de teste a ElevenLabs está indisponível de
+ * propósito (chave inválida), e depois da primeira falha o cliente entra em
+ * espera — a ausência de `/api/tts` diria mais sobre a espera do que sobre o
+ * produto. O que interessa é se a TENTATIVA de falar na voz do paciente
+ * chegou a existir.
+ */
+function escuta(page: Page): string[] {
+  const linhas: string[] = [];
+  page.on("console", (m) => linhas.push(m.text()));
+  return linhas;
 }
 
 /** Grava as requisições que interessam à prova. */
@@ -313,10 +336,12 @@ test.describe("L1 — a conversa do paciente anterior não começa no seguinte",
     await entrarComo(page, semente.assistente.email);
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/conversa");
-    await expect(page.getByRole("button", { name: "Começar" })).toBeVisible();
+    // HABILITADO, não apenas visível: o botão só habilita quando o paciente
+    // ativo chegou, e é esse o estado em que a ação existe para o Agent.
+    await expect(page.getByRole("button", { name: "Começar" })).toBeEnabled();
 
     const gravados = espia(page, eventos);
-    const falas = espia(page, (r) => r.url().includes("/api/tts"));
+    const dito = escuta(page);
 
     const barragem = represa(page, "**/api/sessions");
     await barragem.instalada;
@@ -325,13 +350,17 @@ test.describe("L1 — a conversa do paciente anterior não começa no seguinte",
     await esperaPendente(barragem);
 
     await trocaDePacienteNaTela(page, "Sr. Roberto");
+    const marca = dito.length;
     barragem.liberar();
     await pedido;
     await page.waitForTimeout(1500);
 
     // Nada gravado, nada falado, e a tela não avançou de fase.
     expect(gravados, "nenhum evento tardio da conversa de A").toHaveLength(0);
-    expect(falas, "nenhuma fala tardia").toHaveLength(0);
+    expect(
+      dito.slice(marca).filter((l) => l.includes("platform speak requested")),
+      "nenhuma fala tardia"
+    ).toHaveLength(0);
     await expect(page.getByRole("button", { name: "Começar" })).toBeVisible();
   });
 
@@ -339,7 +368,9 @@ test.describe("L1 — a conversa do paciente anterior não começa no seguinte",
     await entrarComo(page, semente.assistente.email);
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/conversa");
-    await expect(page.getByRole("button", { name: "Começar" })).toBeVisible();
+    // HABILITADO, não apenas visível: o botão só habilita quando o paciente
+    // ativo chegou, e é esse o estado em que a ação existe para o Agent.
+    await expect(page.getByRole("button", { name: "Começar" })).toBeEnabled();
 
     const gravados = espia(page, eventos);
 
@@ -364,6 +395,10 @@ test.describe("L2 — o card aberto para um paciente não registra no outro", ()
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    // O paciente ativo é a primeira exigência de `authorizeTool`, e a tela da
+    // Rotina aparece antes dele. Esperar o seletor do cabeçalho é esperar
+    // exatamente essa condição — nunca um tempo arbitrário.
+    await esperaPacienteAtivo(page);
 
     const gravados = espia(page, eventos);
 
@@ -389,6 +424,10 @@ test.describe("L2 — o card aberto para um paciente não registra no outro", ()
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    // O paciente ativo é a primeira exigência de `authorizeTool`, e a tela da
+    // Rotina aparece antes dele. Esperar o seletor do cabeçalho é esperar
+    // exatamente essa condição — nunca um tempo arbitrário.
+    await esperaPacienteAtivo(page);
 
     const gravados = espia(page, eventos);
 
@@ -415,6 +454,10 @@ test.describe("L2 — o card aberto para um paciente não registra no outro", ()
     await selecionarPaciente(page, semente.pacienteId);
     await page.goto("/rotina");
     await expect(page.getByRole("heading", { name: "Rotina" })).toBeVisible();
+    // O paciente ativo é a primeira exigência de `authorizeTool`, e a tela da
+    // Rotina aparece antes dele. Esperar o seletor do cabeçalho é esperar
+    // exatamente essa condição — nunca um tempo arbitrário.
+    await esperaPacienteAtivo(page);
 
     const sessoes = espia(
       page,
@@ -440,5 +483,189 @@ test.describe("L2 — o card aberto para um paciente não registra no outro", ()
     await expect
       .poll(() => sessoes.length, { timeout: 10_000 })
       .toBe(2);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————
+// A conversa guiada pertence a UMA pessoa
+//
+// Diferente de L1/L2/L3, o defeito aqui não era uma janela pós-`await`: era
+// estado de tela que simplesmente não dependia do paciente. A conversa de A —
+// a fase, a pergunta, o contexto acumulado, a sessão, e a frase JÁ confirmada
+// pronta para soar na voz do paciente — continuava apresentada com B na tela.
+//
+// A correção é a chave de remontagem, e por isso a prova é visual e por
+// requisição: o que a tela mostra, e o que ela cria no servidor.
+test.describe("A conversa não atravessa a troca de paciente", () => {
+  const sessoesPost = (r: Request) =>
+    r.method() === "POST" && r.url().includes("/api/sessions");
+  const mensagens = (r: Request) =>
+    r.method() === "POST" && r.url().includes("/api/messages");
+
+  /** Entra em `/conversa` com A e começa a conversa. */
+  async function conversaDeA(page: Page) {
+    await entrarComo(page, semente.assistente.email);
+    await selecionarPaciente(page, semente.pacienteId);
+    await page.goto("/conversa");
+    await expect(page.getByRole("heading", { name: "Iniciar conversa" })).toBeVisible();
+    await expect(page.getByLabel("Conversa guiada").getByText("Dr. Fábio")).toBeVisible();
+    await page.getByRole("button", { name: "Começar" }).click();
+    await expect(
+      page.getByRole("heading", { name: "O que você quer comunicar?" })
+    ).toBeVisible();
+  }
+
+  test("10. trocar de paciente devolve a tela ao estado inicial do novo", async ({ page }) => {
+    const sessoes = espia(page, sessoesPost);
+    const criadas = espia(page, mensagens);
+    const dito = escuta(page);
+
+    await conversaDeA(page);
+    await expect.poll(() => sessoes.length, { timeout: 10_000 }).toBe(1);
+
+    // Aprofunda a conversa: agora existe contexto acumulado de A na tela.
+    await page.getByRole("button", { name: /^Sim:/ }).first().click();
+    await expect(
+      page.getByRole("heading", { name: "Como você está se sentindo?" })
+    ).toBeVisible();
+
+    const antesDaTroca = dito.length;
+    await trocaDePacienteNaTela(page, "Sr. Roberto");
+
+    // A tela voltou ao estado inicial que ela já tinha — e é o de B.
+    await expect(page.getByRole("heading", { name: "Iniciar conversa" })).toBeVisible();
+    await expect(page.getByLabel("Conversa guiada").getByText("Sr. Roberto")).toBeVisible();
+    await expect(page.getByLabel("Conversa guiada").getByText("Dr. Fábio")).toHaveCount(0);
+    // Nada da conversa de A sobrou.
+    await expect(
+      page.getByRole("heading", { name: "Como você está se sentindo?" })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "O que você quer comunicar?" })
+    ).toHaveCount(0);
+    // Nenhuma resposta foi criada, e nada tentou falar na voz do paciente.
+    expect(criadas, "nenhuma mensagem persistida na troca").toHaveLength(0);
+    expect(
+      dito.slice(antesDaTroca).filter((l) => l.includes("[HELO VOICE] role patient")),
+      "nenhuma fala do paciente depois da troca"
+    ).toHaveLength(0);
+
+    // B começa a conversa dele normalmente — e com uma sessão NOVA. Se o
+    // sessionId de A tivesse atravessado, esta segunda criação não existiria.
+    await page.getByRole("button", { name: "Começar" }).click();
+    await expect(
+      page.getByRole("heading", { name: "O que você quer comunicar?" })
+    ).toBeVisible();
+    await expect.poll(() => sessoes.length, { timeout: 10_000 }).toBe(2);
+  });
+
+  test("11. a gravação de A que chega depois da troca não faz a voz do paciente soar", async ({
+    page,
+  }) => {
+    // O pior caso desta tela: a frase confirmada é registrada e SÓ ENTÃO
+    // falada na voz do paciente (a ordem que a 5.1A inverteu de propósito).
+    // Entre as duas coisas existe um round-trip — e é nele que o cuidador
+    // pode trocar de paciente.
+    const dito = escuta(page);
+    const sessoes = espia(page, sessoesPost);
+
+    await conversaDeA(page);
+    // Até uma frase pronta: "Como estou me sentindo" → "Bem".
+    await page.getByRole("button", { name: /^Sim:/ }).first().click();
+    await expect(
+      page.getByRole("heading", { name: "Como você está se sentindo?" })
+    ).toBeVisible();
+
+    const barragem = represa(page, "**/api/messages");
+    await barragem.instalada;
+
+    // "Bem" tem frase própria: a conversa chega à confirmação.
+    await page.getByRole("button", { name: /^Sim:/ }).first().click();
+    await expect(page.getByText("Estou me sentindo bem.")).toBeVisible();
+    // O gesto de confirmação da pessoa: a partir daqui a gravação está em voo.
+    await page.getByRole("button", { name: /^Sim:/ }).first().click();
+    await esperaPendente(barragem);
+
+    await trocaDePacienteNaTela(page, "Sr. Roberto");
+    await expect(page.getByRole("heading", { name: "Iniciar conversa" })).toBeVisible();
+
+    // A gravação de A chega agora.
+    const marca = dito.length;
+    barragem.liberar();
+    await page.waitForTimeout(2000);
+    const depois = dito.slice(marca);
+
+    // A continuação nem TENTA falar: a guarda de contexto a para antes.
+    expect(
+      depois.filter((l) => l.includes("[HELO VOICE] role patient")),
+      "nenhuma tentativa de falar na voz do paciente depois da troca"
+    ).toHaveLength(0);
+    // E a rede de segurança mais funda — a que já existia em `useSpeech`, e
+    // que recusa fala do paciente fora do contexto ativo — não precisou
+    // entrar em ação. Se um dia precisar, é porque a guarda de cima falhou.
+    expect(
+      depois.filter((l) => l.includes("fora do contexto ativo")),
+      "a última linha de defesa não foi acionada"
+    ).toHaveLength(0);
+    // A tela não foi repovoada.
+    await expect(page.getByRole("heading", { name: "Iniciar conversa" })).toBeVisible();
+    await expect(page.getByLabel("Conversa guiada").getByText("Sr. Roberto")).toBeVisible();
+    // E o estado de B é dele: a conversa dele nasce com sessão própria.
+    const antes = sessoes.length;
+    await page.getByRole("button", { name: "Começar" }).click();
+    await expect(
+      page.getByRole("heading", { name: "O que você quer comunicar?" })
+    ).toBeVisible();
+    await expect.poll(() => sessoes.length, { timeout: 10_000 }).toBe(antes + 1);
+  });
+
+  test("12. voltar para o primeiro paciente não mistura os dois", async ({ page }) => {
+    const sessoes = espia(page, sessoesPost);
+
+    await conversaDeA(page);
+    await page.getByRole("button", { name: /^Sim:/ }).first().click();
+    await expect(
+      page.getByRole("heading", { name: "Como você está se sentindo?" })
+    ).toBeVisible();
+
+    await trocaDePacienteNaTela(page, "Sr. Roberto");
+    await expect(page.getByRole("heading", { name: "Iniciar conversa" })).toBeVisible();
+    await page.getByRole("button", { name: "Começar" }).click();
+    await expect(
+      page.getByRole("heading", { name: "O que você quer comunicar?" })
+    ).toBeVisible();
+    await page.getByRole("button", { name: /^Sim:/ }).first().click();
+    await expect(
+      page.getByRole("heading", { name: "Como você está se sentindo?" })
+    ).toBeVisible();
+
+    await trocaDePacienteNaTela(page, "Dr. Fábio");
+
+    // A volta também é um começo limpo. Este teste NÃO exige retomada: o
+    // produto não tem esse mecanismo hoje, e o requisito é isolamento, não
+    // uma funcionalidade nova. O que ele exige é que nada de B esteja aqui.
+    await expect(page.getByRole("heading", { name: "Iniciar conversa" })).toBeVisible();
+    await expect(page.getByLabel("Conversa guiada").getByText("Dr. Fábio")).toBeVisible();
+    await expect(page.getByLabel("Conversa guiada").getByText("Sr. Roberto")).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Como você está se sentindo?" })
+    ).toHaveCount(0);
+
+    // E a conversa de A recomeça com sessão própria — a terceira.
+    await page.getByRole("button", { name: "Começar" }).click();
+    await expect(
+      page.getByRole("heading", { name: "O que você quer comunicar?" })
+    ).toBeVisible();
+    await expect.poll(() => sessoes.length, { timeout: 10_000 }).toBe(3);
+
+    // As sessões pertencem a quem as abriu: duas de A, uma de B.
+    const deA = await page.request
+      .get(`/api/sessions?patientId=${semente.pacienteId}`)
+      .then((r) => r.json());
+    const deB = await page.request
+      .get(`/api/sessions?patientId=${semente.outroPacienteId}`)
+      .then((r) => r.json());
+    expect(deA.sessions.length, "as duas sessões de A continuam de A").toBe(2);
+    expect(deB.sessions.length, "a sessão de B continua de B").toBe(1);
   });
 });
