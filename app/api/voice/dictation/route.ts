@@ -1,4 +1,6 @@
 import { requirePatientAccess, requireUser } from "@/lib/auth";
+import { comPoliticaSemCache } from "@/lib/cache-policy";
+import { consomeLimite, respostaDeLimite } from "@/lib/rate-limit";
 import { BYTES_DE_ASSINATURA, verificaContainer } from "@/lib/voice/audio-container";
 import { TAMANHO_MAXIMO_BYTES, tipoDeAudioAceito } from "@/lib/voice/dictation";
 import { ditadoDisponivel, transcreve } from "@/lib/voice/dictation-server";
@@ -26,7 +28,7 @@ import { statusParaCliente } from "@/lib/voice/eleven-fetch";
 /** O cliente pergunta se o recurso existe para ele. Recebe um booleano. */
 export async function GET(request: Request) {
   const auth = await requireUser(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   // Estado DERIVADO. Nem a flag, nem a presença da chave, nem o plano do
   // workspace atravessam esta resposta.
   return Response.json(
@@ -46,7 +48,7 @@ export async function POST(request: Request) {
   }
 
   const auth = await requirePatientAccess(request, patientId);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
 
   // Fail-closed, e antes do corpo. Enquanto o workspace da ElevenLabs não
   // suportar retenção zero, é aqui que a Fase 5.2A para em produção — sem
@@ -54,6 +56,18 @@ export async function POST(request: Request) {
   if (!ditadoDisponivel()) {
     return recusa(503, "ditado indisponível", "desabilitado");
   }
+
+  // ——— A-10 ———
+  //
+  // Depois da flag, de propósito: com o recurso desligado — que é o estado de
+  // produção hoje — a recusa é de graça e não consome a cota de ninguém.
+  //
+  // O limite entra agora, com o ditado ainda desabilitado, para que a
+  // ativação futura não dependa de alguém lembrar disso. Cada chamada carrega
+  // um arquivo de áudio e compra transcrição; vinte por minuto é muito mais
+  // do que ditar num campo de formulário produz.
+  const limite = await consomeLimite("ditado", { userId: auth.user.id });
+  if (!limite.permitido) return respostaDeLimite(limite);
 
   // Pré-conferência barata: o `Content-Length` é do cliente e não se confia
   // nele, mas quando ele já se declara grande demais não há motivo para

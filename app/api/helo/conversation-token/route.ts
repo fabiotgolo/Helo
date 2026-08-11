@@ -1,4 +1,6 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
+import { consomeLimite, respostaDeLimite } from "@/lib/rate-limit";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { getPatient, getPatientSettings } from "@/lib/store";
 import {
@@ -64,13 +66,27 @@ function resolveVoiceOverride(preference: HeloVoicePreference) {
   // O override só é enviado quando foi explicitamente habilitado na segurança
   // do Agent. Sem essa confirmação, a voz configurada no Agent prevalece.
   if (process.env.ELEVENLABS_HELO_VOICE_OVERRIDE_ENABLED !== "true") return null;
-  // Os nomes PLATFORM são a interface atual da aplicação. Os aliases abaixo
-  // mantêm compatibilidade com os secrets já existentes no App Hosting e com
-  // ambientes locais que ainda usam os nomes anteriores.
-  const candidates = preference === "male"
-    ? [process.env.ELEVENLABS_HELO_PLATFORM_VOICE_MALE_ID, process.env.ELEVENLABS_HELO_VOICE_MALE_ID]
-    : [process.env.ELEVENLABS_HELO_PLATFORM_VOICE_FEMALE_ID, process.env.ELEVENLABS_HELO_VOICE_FEMALE_ID];
-  return candidates.map((value) => value?.trim()).find(Boolean) || null;
+  // ——— A-13: os aliases saíram ———
+  //
+  // Havia aqui um segundo candidato por preferência —
+  // `ELEVENLABS_HELO_VOICE_MALE_ID` e `_FEMALE_ID` —, descrito como
+  // compatibilidade com "os secrets já existentes no App Hosting". A 5.4C
+  // conferiu os três lugares onde uma variável de ambiente pode nascer neste
+  // projeto e eles **não existem em nenhum**: no `apphosting.yaml` esses dois
+  // nomes são os nomes dos SECRETS no Secret Manager, e o valor deles é
+  // entregue ao processo sob os nomes PLATFORM (é o que `variable:` declara);
+  // no `.env` e no `.env.example` não aparecem; no `.env.local` também não.
+  //
+  // Eram, portanto, um fallback para uma variável que nenhuma configuração
+  // preenche. Os secrets do App Hosting continuam intocados — o que saiu foi
+  // a leitura de um nome que nunca chega ao processo.
+  //
+  // O resto desta função é o R-12 e **fica**: é um recurso pronto, bloqueado
+  // por uma configuração do painel da ElevenLabs que ainda não foi verificada.
+  const escolhida = preference === "male"
+    ? process.env.ELEVENLABS_HELO_PLATFORM_VOICE_MALE_ID
+    : process.env.ELEVENLABS_HELO_PLATFORM_VOICE_FEMALE_ID;
+  return escolhida?.trim() || null;
 }
 
 function buildVoiceOverrides(voiceId: string | null): HeloConversationOverrides | undefined {
@@ -86,17 +102,26 @@ export async function POST(request: Request) {
   };
   const patientId = Number(body.patientId);
   if (!Number.isInteger(patientId) || patientId <= 0) {
-    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+    return jsonSemCache({ error: "patientId obrigatório" }, { status: 400 });
   }
   // Não confiamos no patientId do cliente: só um vínculo ativo pode solicitar
   // o contexto daquele paciente. Isso impede contexto cruzado já no token.
   const patientAuth = await requirePatientAccess(request, patientId);
-  if (patientAuth instanceof Response) return patientAuth;
+  if (patientAuth instanceof Response) return comPoliticaSemCache(patientAuth);
+
+  // ——— A-10 ———
+  //
+  // Cada token abre uma sessão de conversa paga do lado do provedor. O uso
+  // real é UMA sessão por vez; doze em cinco minutos cobre reconexões
+  // seguidas numa rede ruim, que é o único caminho legítimo que repete este
+  // pedido. Vem antes de qualquer chamada externa: recusar é de graça.
+  const limite = await consomeLimite("conversa", { userId: patientAuth.user.id });
+  if (!limite.permitido) return respostaDeLimite(limite);
 
   const agentId = process.env.ELEVENLABS_HELO_AGENT_ID?.trim();
   const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!agentId) return Response.json({ error: "Agent Helo não configurado" }, { status: 503 });
-  if (!apiKey) return Response.json({ error: "Serviço de voz não configurado" }, { status: 503 });
+  if (!agentId) return jsonSemCache({ error: "Agent Helo não configurado" }, { status: 503 });
+  if (!apiKey) return jsonSemCache({ error: "Serviço de voz não configurado" }, { status: 503 });
 
   try {
     const [settings, patient] = await Promise.all([
@@ -131,16 +156,16 @@ export async function POST(request: Request) {
       // A categoria já foi registrada em chamaElevenLabsJson. Aqui ela vira o
       // status que o cliente entende — e "timeout" nunca vira 401: quem opera
       // precisa distinguir "demorou" de "credencial recusada".
-      return Response.json(
+      return jsonSemCache(
         { error: "Não foi possível conectar com a Helo", reason: chamada.falha },
         { status: statusParaCliente(chamada.falha) }
       );
     }
     const tokenBody = chamada.dados;
     if (typeof tokenBody.token !== "string" || !tokenBody.token) {
-      return Response.json({ error: "Resposta inválida do serviço de voz" }, { status: 502 });
+      return jsonSemCache({ error: "Resposta inválida do serviço de voz" }, { status: 502 });
     }
-    return Response.json({
+    return jsonSemCache({
       conversationToken: tokenBody.token,
       dynamicVariables,
       // ID técnico só é devolvido transitoriamente quando o próprio servidor
@@ -150,6 +175,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("Erro ao obter token temporário do Agent Helo:", error instanceof Error ? error.message : error);
-    return Response.json({ error: "Serviço de voz indisponível" }, { status: 502 });
+    return jsonSemCache({ error: "Serviço de voz indisponível" }, { status: 502 });
   }
 }

@@ -2,7 +2,7 @@ const { onRequest } = require("firebase-functions/v2/https");
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { randomBytes } = require("node:crypto");
 
 if (!admin.apps.length) {
@@ -107,6 +107,126 @@ const MAX_MUSIC_DURATION_SECONDS = 300;
 // docs/robustez-da-voz.md.
 const PHRASE_TTS_TIMEOUT_MS = 20_000;
 
+// ——— Limitador de taxa (Fase 5.4C — A-10) ———
+//
+// Estes dois endpoints são os que gastam dinheiro: a composição de música
+// compra até 300 segundos de áudio por chamada, e a síntese de frase compra
+// TTS na voz clonada do paciente. Até a 5.4C nenhum dos dois tinha teto —
+// bastava um laço para esgotar a cota da conta, e a autorização não ajudava,
+// porque quem abusa aqui é alguém que TEM vínculo com o paciente.
+//
+// O gêmeo em TypeScript é `lib/rate-limit.ts`, e o raciocínio inteiro (por que
+// janela fixa, por que não contador em memória, o que nunca entra na chave,
+// como a limpeza acontece sem fila) está documentado lá. Aqui está a cópia,
+// pela mesma razão que `patientAccess` é reimplementado neste arquivo: as
+// Functions não compartilham código com o app Next. A suíte `test:rate:limite`
+// confere que os dois lados concordam em limite, janela e formato da chave.
+const COLECAO_DE_LIMITES = "rateLimits";
+const MARGEM_DE_EXPIRACAO_MS = 60_000;
+const PRAZO_DE_LIMPEZA_DE_LIMITE_MS = 2_000;
+
+const LIMITES = {
+  musica: { limite: 6, janelaMs: 60 * 60_000, unidade: "usuario", falhaFechada: true },
+  fraseAudio: { limite: 30, janelaMs: 60 * 60_000, unidade: "usuarioEPaciente", falhaFechada: true },
+};
+
+function idDoBalde(endpoint, userId, patientId, agoraMs) {
+  const config = LIMITES[endpoint];
+  const indice = Math.floor(agoraMs / config.janelaMs);
+  const paciente =
+    config.unidade === "usuarioEPaciente" && patientId != null ? String(patientId) : "-";
+  return `${endpoint}__${userId}__${paciente}__${indice}`;
+}
+
+/**
+ * Conta um pedido e diz se ele passa. Roda DEPOIS de `patientAccess`: a chave
+ * precisa da identidade, e recusar por limite antes de recusar por acesso
+ * contaria a um desconhecido que aquele paciente existe.
+ *
+ * Transação, e não `FieldValue.increment`: o incremento é atômico mas não
+ * devolve o valor novo, e sem o valor novo não há decisão. Fora de uma
+ * transação, duas chamadas simultâneas leem `limite - 1` e ambas passam — que
+ * é exatamente o que o limite existe para impedir.
+ */
+async function consomeLimite(endpoint, userId, patientId, agoraMs = Date.now()) {
+  const config = LIMITES[endpoint];
+  const terminaEm = (Math.floor(agoraMs / config.janelaMs) + 1) * config.janelaMs;
+  const esperaSegundos = Math.max(1, Math.ceil((terminaEm - agoraMs) / 1000));
+  const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
+  const id = idDoBalde(endpoint, userId, patientId, agoraMs);
+  const ref = db.collection(COLECAO_DE_LIMITES).doc(id);
+
+  // A transação devolve o VEREDITO, não a contagem. Devolver o número deixava
+  // "gastei a última vaga" e "o balde já estava cheio" indistinguíveis — os
+  // dois valem `limite` —, e o portão ficava aberto a partir da última vaga.
+  // Ver a nota longa em lib/rate-limit.ts.
+  let resultado;
+  try {
+    resultado = await db.runTransaction(async (tx) => {
+      const atual = await tx.get(ref);
+      const contagem = atual.exists ? Number(atual.data()?.contagem ?? 0) : 0;
+      if (contagem >= config.limite) return { excedeu: true, contagem };
+      tx.set(
+        ref,
+        {
+          contagem: contagem + 1,
+          expiraEm: Timestamp.fromMillis(terminaEm + MARGEM_DE_EXPIRACAO_MS),
+        },
+        { merge: true }
+      );
+      return { excedeu: false, contagem: contagem + 1 };
+    });
+  } catch (falha) {
+    // Nada do erro sai daqui: nem mensagem do driver, nem caminho, nem
+    // identidade. Estes dois endpoints falham FECHADOS — não gastar é sempre
+    // reversível, e a frase continua sendo falada pelo caminho do grant, que é
+    // o que a pré-síntese apenas otimiza.
+    console.error("[LIMITE] contador indisponível", {
+      endpoint,
+      decisao: "recusa",
+      nome: falha?.name,
+    });
+    return { permitido: false, causa: "indisponivel", esperaSegundos };
+  }
+
+  if (resultado.excedeu) return { permitido: false, causa: "limite", esperaSegundos };
+  const usadas = resultado.contagem;
+
+  // Limpeza sem fila e sem varredura: o primeiro pedido de uma janela apaga o
+  // balde da janela anterior daquela mesma chave. Exclusão por id, com prazo —
+  // a lição da 5.4B é que limpeza sem relógio dentro de uma requisição do
+  // cuidador é uma requisição que pode ficar pendurada.
+  if (usadas === 1) {
+    const partes = id.split("__");
+    const indice = Number(partes[partes.length - 1]);
+    if (Number.isFinite(indice) && indice > 0) {
+      partes[partes.length - 1] = String(indice - 1);
+      await Promise.race([
+        db.collection(COLECAO_DE_LIMITES).doc(partes.join("__")).delete().catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, PRAZO_DE_LIMPEZA_DE_LIMITE_MS)),
+      ]);
+    }
+  }
+
+  return { permitido: true, usadas };
+}
+
+/**
+ * A recusa. Sanitizada: sem contador, sem limite configurado, sem patientId,
+ * sem cota do provedor, sem caminho de infraestrutura. `Retry-After` é exato
+ * porque a janela é fixa — o segundo em que ela vira é conhecido.
+ */
+function recusaPorLimite(res, veredicto) {
+  res.set("Retry-After", String(veredicto.esperaSegundos));
+  res.set("Cache-Control", "no-store");
+  return veredicto.causa === "indisponivel"
+    ? res.status(503).json({
+        error: "serviço temporariamente indisponível",
+        reason: "rate_limit_unavailable",
+      })
+    : res.status(429).json({ error: "muitos pedidos em pouco tempo", reason: "rate_limited" });
+}
+
 function sessionToken(req) {
   const cookie = String(req.headers.cookie || "");
   const match = cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith("__session="));
@@ -164,6 +284,11 @@ async function synthesizePhraseAudioHandler(req, res) {
     }
     const acesso = await patientAccess(req, patientId, "createActivities");
     if (!acesso.ok) return res.status(acesso.status).json({ error: acesso.error });
+    // Depois da autorização, antes de qualquer coisa cara. Montar a lista de
+    // frases de um paciente é uma rajada legítima, e o teto (30/hora por
+    // cuidador e paciente) cobre montá-la inteira e ainda corrigir várias.
+    const limite = await consomeLimite("fraseAudio", acesso.userId, patientId);
+    if (!limite.permitido) return recusaPorLimite(res, limite);
     const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
     const phraseRef = db.collection("patients").doc(String(patientId)).collection("favoritePhrases").doc(phraseId);
     const phrase = await phraseRef.get();
@@ -378,6 +503,19 @@ async function generateMusicHandler(req, res) {
       console.warn("[HELO MUSIC] pedido sem acesso ao paciente", { patientId, status: acesso.status });
       return res.status(acesso.status).json({ error: acesso.error });
     }
+
+    // ——— A-10, o caso que motivou a fase ———
+    //
+    // Este é o pedido mais caro do produto: até 300 segundos de composição
+    // paga, 1 GiB de memória e um MP3 gravado, por chamada. Sem teto, um
+    // cuidador legítimo — ou um laço na máquina dele — esgotava a cota da
+    // conta sozinho. Seis por hora, por cuidador: generoso para quem também
+    // precisa ESCUTAR o que pediu, e finito.
+    //
+    // Por usuário e não por paciente: quem paga é a conta, e somar por
+    // paciente daria a quem cuida de mais gente um teto maior sem razão.
+    const limite = await consomeLimite("musica", acesso.userId, patientId);
+    if (!limite.permitido) return recusaPorLimite(res, limite);
 
     if (prompt.length > MAX_PROMPT_LENGTH) {
       return res.status(400).json({ error: `O prompt deve ter no máximo ${MAX_PROMPT_LENGTH} caracteres.` });

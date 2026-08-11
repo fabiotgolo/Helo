@@ -11,6 +11,8 @@ import {
   updatePlatformVoice,
   validateElevenLabsVoice,
 } from "@/lib/voice-catalog";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
+import { consomeLimite, respostaDeLimite } from "@/lib/rate-limit";
 
 // Catálogo de vozes da plataforma — EXCLUSIVO do Admin.
 // É o ÚNICO lugar onde um voiceId ElevenLabs entra no sistema para a
@@ -20,7 +22,7 @@ import {
 
 export async function GET(request: Request) {
   const auth = await requireAdmin(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const [voices, patients] = await Promise.all([
     listPlatformVoices(true),
     listPatients(true),
@@ -54,12 +56,12 @@ export async function GET(request: Request) {
       };
     })
   );
-  return Response.json({ voices, usage, patientVoices });
+  return jsonSemCache({ voices, usage, patientVoices });
 }
 
 export async function POST(request: Request) {
   const auth = await requireAdmin(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const body = (await request.json()) as {
     elevenLabsVoiceId?: string;
     displayName?: string;
@@ -70,23 +72,31 @@ export async function POST(request: Request) {
   const voiceId = body.elevenLabsVoiceId?.trim();
   const displayName = body.displayName?.trim();
   if (!voiceId || !displayName) {
-    return Response.json(
+    return jsonSemCache(
       { error: "ElevenLabs Voice ID e nome de exibição são obrigatórios" },
       { status: 400 }
     );
   }
   const existing = await listPlatformVoices(true);
   if (existing.some((v) => v.elevenLabsVoiceId === voiceId)) {
-    return Response.json(
+    return jsonSemCache(
       { error: "esta voz já está cadastrada no catálogo" },
       { status: 409 }
     );
   }
+  // ——— A-10 ———
+  //
+  // É o único ponto do produto que consulta a conta da ElevenLabs, e o alvo
+  // aqui não é custo: é enumeração. Um laço de Admin poderia varrer voiceIds
+  // até mapear a biblioteca da conta. Sessenta por minuto não atrapalha
+  // ninguém cadastrando vozes à mão e fecha a varredura.
+  const limite = await consomeLimite("vozesAdmin", { userId: auth.user.id });
+  if (!limite.permitido) return respostaDeLimite(limite);
   // Validação na ElevenLabs quando tecnicamente possível; um voiceId
   // comprovadamente inexistente não entra no catálogo.
   const validation = await validateElevenLabsVoice(voiceId);
   if (validation.status === "invalid") {
-    return Response.json(
+    return jsonSemCache(
       { error: "voiceId não encontrado na conta ElevenLabs" },
       { status: 422 }
     );
@@ -111,12 +121,12 @@ export async function POST(request: Request) {
       isDefault: String(voice.isDefault),
     },
   });
-  return Response.json({ voice, validation: validation.status });
+  return jsonSemCache({ voice, validation: validation.status });
 }
 
 export async function PATCH(request: Request) {
   const auth = await requireAdmin(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const body = (await request.json()) as {
     id?: string;
     displayName?: string;
@@ -124,15 +134,15 @@ export async function PATCH(request: Request) {
     enabled?: boolean;
     isDefault?: boolean;
   };
-  if (!body.id) return Response.json({ error: "id obrigatório" }, { status: 400 });
+  if (!body.id) return jsonSemCache({ error: "id obrigatório" }, { status: 400 });
   const voice = await getPlatformVoice(body.id);
-  if (!voice) return Response.json({ error: "voz não encontrada" }, { status: 404 });
+  if (!voice) return jsonSemCache({ error: "voz não encontrada" }, { status: 404 });
   // A voz padrão precisa ser utilizável: nunca definir como padrão uma voz
   // desativada, nem desativar a voz que é o padrão atual.
   const willBeEnabled = body.enabled ?? voice.enabled;
   const willBeDefault = body.isDefault ?? voice.isDefault;
   if (willBeDefault && !willBeEnabled) {
-    return Response.json(
+    return jsonSemCache(
       { error: "a voz padrão da plataforma precisa estar ativa" },
       { status: 400 }
     );
@@ -156,18 +166,18 @@ export async function PATCH(request: Request) {
       after: body.displayName ?? voice.displayName,
     },
   });
-  return Response.json({ ok: true });
+  return jsonSemCache({ ok: true });
 }
 
 export async function DELETE(request: Request) {
   const auth = await requireAdmin(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const { id } = (await request.json()) as { id?: string };
-  if (!id) return Response.json({ error: "id obrigatório" }, { status: 400 });
+  if (!id) return jsonSemCache({ error: "id obrigatório" }, { status: 400 });
   const voice = await getPlatformVoice(id);
-  if (!voice) return Response.json({ error: "voz não encontrada" }, { status: 404 });
+  if (!voice) return jsonSemCache({ error: "voz não encontrada" }, { status: 404 });
   if (voice.isDefault) {
-    return Response.json(
+    return jsonSemCache(
       { error: "defina outra voz padrão antes de remover esta" },
       { status: 400 }
     );
@@ -200,7 +210,7 @@ export async function DELETE(request: Request) {
       reassignedPatients: String(usage.patientIds.length),
     },
   });
-  return Response.json({
+  return jsonSemCache({
     ok: true,
     reassigned: { users: usage.userIds.length, patients: usage.patientIds.length },
   });

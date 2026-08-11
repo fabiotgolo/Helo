@@ -1,6 +1,8 @@
 import { getPatientSetting } from "@/lib/store";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { requirePatientAccess, requireUser } from "@/lib/auth";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
+import { consomeLimite, respostaDeLimite } from "@/lib/rate-limit";
 import {
   getPlatformVoice,
   resolvePatientVoice,
@@ -71,12 +73,12 @@ export async function POST(request: Request) {
   };
   const { text } = body;
   if (!text || typeof text !== "string" || text.length > 1000) {
-    return Response.json({ error: "texto inválido" }, { status: 400 });
+    return jsonSemCache({ error: "texto inválido" }, { status: 400 });
   }
 
   // Síntese requer login. A voz de um paciente exige, além do vínculo, o grant.
   const authUser = await requireUser(request);
-  if (authUser instanceof Response) return authUser;
+  if (authUser instanceof Response) return comPoliticaSemCache(authUser);
 
   // A autorização é decidida ANTES de olhar para a chave da ElevenLabs. Duas
   // razões: uma fala não autorizada deve ser recusada mesmo com o provedor
@@ -94,14 +96,14 @@ export async function POST(request: Request) {
 
   if (isPatientVoice) {
     if (!Number.isInteger(patientId) || patientId <= 0) {
-      return Response.json(
+      return jsonSemCache(
         { error: "fala do paciente exige patientId" },
         { status: 400 }
       );
     }
     // Vínculo ativo com ESTE paciente, verificado no servidor.
     const authPatient = await requirePatientAccess(request, patientId);
-    if (authPatient instanceof Response) return authPatient;
+    if (authPatient instanceof Response) return comPoliticaSemCache(authPatient);
 
     // O portão. Um grant ausente, adulterado, vencido, de outro paciente ou
     // de outro texto recusa a fala — e nenhum campo do corpo substitui isso.
@@ -113,7 +115,7 @@ export async function POST(request: Request) {
       // não mandar quem opera procurar um problema de autorização que não
       // existe. Nos dois casos, nenhuma voz do paciente é sintetizada.
       const status = verdict.reason === "misconfigured" ? 503 : 403;
-      return Response.json(
+      return jsonSemCache(
         { error: "fala do paciente sem autorização válida", reason: verdict.reason },
         { status }
       );
@@ -128,7 +130,7 @@ export async function POST(request: Request) {
           PATIENT_SETTING_KEYS.voiceId
         ).catch(() => undefined);
         if (!clone) {
-          return Response.json(
+          return jsonSemCache(
             { error: "voz clonada não configurada para este paciente" },
             { status: 422 }
           );
@@ -138,7 +140,7 @@ export async function POST(request: Request) {
       } else {
         const candidate = await getPlatformVoice(preview.platformVoiceId?.trim() ?? "");
         if (!candidate || !candidate.enabled) {
-          return Response.json(
+          return jsonSemCache(
             { error: "voz inexistente ou não aprovada" },
             { status: 422 }
           );
@@ -168,7 +170,7 @@ export async function POST(request: Request) {
     const candidate = await getPlatformVoice(body.previewPlatformVoiceId.trim());
     const canPreview = candidate && (candidate.enabled || authUser.user.role === "admin");
     if (!candidate || !canPreview) {
-      return Response.json(
+      return jsonSemCache(
         { error: "voz inexistente ou não aprovada" },
         { status: 422 }
       );
@@ -189,11 +191,32 @@ export async function POST(request: Request) {
     }
   }
 
+  // ——— A-10, e por que o limite entra EXATAMENTE aqui ———
+  //
+  // Depois de toda a autorização, antes da chamada paga. A ordem não é
+  // detalhe: colocá-lo antes faria uma fala PROIBIDA voltar 429 em vez de 403
+  // quando o usuário estivesse no teto, e a 5.1A construiu esta rota para que
+  // uma fala não autorizada seja recusada como não autorizada — mesmo com o
+  // provedor fora do ar. O limite protege o dinheiro; ele não opina sobre
+  // autoria, e não deve poder mascarar a recusa que opina.
+  //
+  // O teto (60/minuto por usuário) sai de uma medida, não de um palpite: o
+  // pior caso legítimo é o pré-aquecimento da Emergência, que
+  // `lib/voice/audio-cache.ts` documenta como "15 no pior caso realista".
+  // Sessenta deixa esse conjunto inteiro passar quatro vezes no mesmo minuto.
+  //
+  // E quando alguém bate no teto, a voz não some: um 429 não é falha
+  // transitória para `lib/voice/eleven-availability.ts` (só 502/503/504 e rede
+  // são), então a aba NÃO entra em prazo de indisponibilidade — a fala cai no
+  // fallback do navegador naquele instante e a seguinte tenta de novo.
+  const limite = await consomeLimite("tts", { userId: authUser.user.id });
+  if (!limite.permitido) return respostaDeLimite(limite);
+
   // Autorizado e com a voz resolvida — só agora a configuração do provedor
   // importa. Sem chave, o cliente aplica o fallback aprovado.
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
-    return Response.json({ error: "sem chave ElevenLabs" }, { status: 503 });
+    return jsonSemCache({ error: "sem chave ElevenLabs" }, { status: 503 });
   }
 
   // Prazo até os cabeçalhos: o áudio é repassado ao navegador enquanto chega,
@@ -228,7 +251,7 @@ export async function POST(request: Request) {
     // A categoria vira o status que o cliente entende: 503 para o que é
     // transitório (timeout, 5xx, limite de taxa, rede) — e só esse abre o
     // prazo de espera do lado do navegador —, 502 para o que é recusa.
-    return Response.json(
+    return jsonSemCache(
       { error: "falha na síntese", reason: chamada.falha },
       { status: statusParaCliente(chamada.falha) }
     );

@@ -1,4 +1,6 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
+import { consomeLimite, respostaDeLimite } from "@/lib/rate-limit";
 import { SpeechGrantConfigError, issueSpeechGrant } from "@/lib/voice/speech-grant";
 import { parseSpeechSource, resolveSpeechSource } from "@/lib/voice/speech-sources";
 
@@ -24,22 +26,32 @@ export async function POST(request: Request) {
 
   const patientId = Number(body?.patientId);
   if (!Number.isInteger(patientId) || patientId <= 0) {
-    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+    return jsonSemCache({ error: "patientId obrigatório" }, { status: 400 });
   }
 
   const source = parseSpeechSource(body?.source);
   if (!source) {
-    return Response.json({ error: "origem de fala inválida" }, { status: 400 });
+    return jsonSemCache({ error: "origem de fala inválida" }, { status: 400 });
   }
 
   // Vínculo ativo com ESTE paciente. O patientId do cliente não é confiado:
   // é exatamente o que esta verificação existe para desmentir.
   const auth = await requirePatientAccess(request, patientId);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
+
+  // ——— A-10 ———
+  //
+  // Emitir um grant não gasta crédito: é um HMAC. O que este limite protege é
+  // a TENTATIVA repetida — nomear recursos em sequência para descobrir quais
+  // existem, ou moer o portão até achar uma folga. O teto (90/minuto) fica
+  // acima do de `/api/tts` de propósito: cada síntese que não vem do cache
+  // pede um grant antes, então um limite menor aqui estrangularia o de lá.
+  const limite = await consomeLimite("grant", { userId: auth.user.id });
+  if (!limite.permitido) return respostaDeLimite(limite);
 
   const resolved = await resolveSpeechSource(patientId, source);
   if (!resolved.ok) {
-    return Response.json({ error: resolved.error }, { status: resolved.status });
+    return jsonSemCache({ error: resolved.error }, { status: resolved.status });
   }
 
   // Configuração inválida vira 503 e um log no servidor. O cliente recebe uma
@@ -55,14 +67,11 @@ export async function POST(request: Request) {
   } catch (caught) {
     if (caught instanceof SpeechGrantConfigError) {
       console.error("[VOZ] SpeechGrant indisponível:", caught.message);
-      return Response.json({ error: "voz do paciente indisponível" }, { status: 503 });
+      return jsonSemCache({ error: "voz do paciente indisponível" }, { status: 503 });
     }
     throw caught;
   }
   const { grant, expiresAt } = issued;
 
-  return Response.json(
-    { grant, text: resolved.text, origin: resolved.origin, expiresAt },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  return jsonSemCache({ grant, text: resolved.text, origin: resolved.origin, expiresAt });
 }
