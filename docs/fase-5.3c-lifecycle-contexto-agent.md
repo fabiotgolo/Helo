@@ -199,10 +199,115 @@ já mudou, e o que ficou foi a lembrança. A correção é esquecer a sessão qu
 paciente troca (`app/(palco)/rotina/page.tsx`), e a prova é a requisição: abrir
 um card depois da troca precisa **criar uma sessão nova**.
 
-O mesmo padrão existe em `/conversa` e **não foi corrigido** — está no §30, item
-2, aguardando decisão de produto: ali a troca de paciente no meio de uma conversa
-em andamento envolve descartar (ou não) o que o cuidador já compôs, e isso é uma
-regra de produto, não um conserto mecânico.
+O mesmo padrão existia em `/conversa`, e era pior. Está fechado — §7c.
+
+## 7c. A conversa pertence a UMA pessoa
+
+Trocar de paciente no meio de uma conversa guiada deixava tudo na tela. A
+auditoria, estado por estado, do que atravessava a troca:
+
+| Estado | Atravessava? | O que significava |
+|---|:--:|---|
+| `sessionId` | **sim** | os eventos seguintes caíam na sessão de A |
+| `phase`, `nodeId`, `batch`, `history` | **sim** | a pergunta de A continuava na tela de B |
+| `ctx` | **sim** | o contexto acumulado de A (com quem falar, o quê) |
+| `confirm` | **sim** | a frase composta de A, exibida como citação |
+| `aiOptions` | **sim** | sugestões formuladas a partir do PERFIL de A |
+| `marks`, `paused`, `starting`, `startError` | sim | estado de condução de A |
+| `pathLog`, `rejectedLog`, `shownAt` (refs) | **sim** | o caminho de A, que alimenta a IA |
+| `confirmedPhrase` (ref) | **sim** | **o pior**: `{texto, messageId}` da mensagem JÁ confirmada de A — e `conversa.repetirMensagemPaciente` a faria soar **na voz do paciente** com B na tela |
+| `people` | não | já havia efeito em `[patientId]` |
+
+Nenhum deles dependia de `patientId`. A tela inteira era de A e não sabia.
+
+### A política
+
+> **Ao trocar o paciente ativo, `/conversa` começa em contexto limpo.**
+
+Implementada com a **chave de remontagem**, não com uma lista de campos para
+zerar — uma lista é onde se esquece um, e foram doze. O React descarta o estado
+inteiro de uma vez e a tela volta ao **seu próprio** estado inicial: nenhuma UI
+nova, nenhum redirecionamento.
+
+A chave conta **trocas**, não o paciente. Uma chave derivada de `patientId`
+remontaria a tela também na carga direta da rota, quando o paciente fica
+conhecido depois do primeiro render — e essa remontagem faria o Agent receber
+`CONTEXT_EXPIRED` (corretamente: a ação teria mesmo saído do registry) por um
+pedido legítimo. Contando trocas, a primeira vez não é uma troca.
+
+### O que acontece com o que já existia
+
+**A sessão de A não é encerrada, nem apagada, nem marcada como concluída.** Ela
+nasceu autorizada e permanece dela, como qualquer sessão aberta e não concluída
+— o mesmo que já acontecia ao sair da tela. Trocar de paciente não é concluir
+uma conversa, e inventar esse lifecycle aqui seria decidir por quem cuida.
+Medido: depois de A → B → A, o servidor tem duas sessões de A e uma de B, cada
+uma com o seu dono.
+
+**Voltar para A também é um começo limpo.** O produto não tem retomada de
+conversa, e esta correção não inventou uma: o requisito é isolamento, não uma
+funcionalidade nova.
+
+### O que a remontagem não alcança
+
+Uma promessa já em voo. A closure dela não morre com o componente, e três
+lugares desta tela falam ou apresentam depois de esperar:
+
+| Onde | Espera | Guarda |
+|---|---|---|
+| `onConfirmGesture` → `saveMessage().then()` | POST `/api/messages` | não tenta falar na voz do paciente |
+| `trySuggestions` | POST `/api/suggest` | não apresenta nem anuncia sugestões feitas para outra pessoa |
+| `uncertain` → `setTimeout(…, 400)` | temporizador | a pergunta de A não soa depois da troca |
+
+A mesma `guardaDeContexto` de L1, L2 e L3. Nenhuma arquitetura nova.
+
+### Defesa em profundidade, medida
+
+Ao instrumentar o teste, o navegador revelou uma proteção que já existia:
+`lib/useSpeech.ts` **recusa** uma fala com `speakerRole: "patient"` cujo
+`patientId` não seja o ativo. Ela funcionava — sem a guarda nova, a fala tardia
+era tentada e bloqueada ali.
+
+As duas camadas são diferentes e as duas importam: a de cima impede a
+**tentativa**, a de baixo impede o **som**. O teste distingue as duas de
+propósito e afirma que a de baixo **não precisou entrar em ação** — se um dia
+precisar, é sinal de que a de cima falhou.
+
+### Uma precondição que faltava aos testes do Agent
+
+A regressão completa acusou `agent-lifecycle` §1 duas vezes — e o lote passava
+**6 de 6** isolado. O rastro deu a resposta sem margem para palpite:
+
+```
+{"ok":false,"error":"Paciente ativo não selecionado"}
+```
+
+`authorizeTool` exige um paciente ativo antes de qualquer coisa, e a tela da
+Rotina aparece **antes** disso: o cabeçalho e os cards não dependem do
+paciente. O teste disparava a tool no vão entre as duas coisas. A recusa estava
+certa; a precondição do teste é que estava errada — e só sob carga o vão ficava
+largo o bastante.
+
+Os dois specs passaram a esperar o seletor de pacientes do cabeçalho, que só
+renderiza depois de `/api/patients` responder, estritamente **depois** de o
+provider ter lido o paciente ativo. Nada foi afrouxado: passou-se a esperar a
+condição que o produto já exige. A mesma fragilidade latente existia nos três
+testes novos de `/rotina`, e foi corrigida junto.
+
+### Um churn que custava caro ao Agent
+
+`registryActions` desta tela dependia de `displayOptions`, que era um array
+**novo a cada render**. O Action Registry inteiro renascia continuamente, e o
+dispatcher — que depois de autorizar no servidor confere se a ação ainda é *a
+mesma* — devolvia `CONTEXT_EXPIRED` para pedidos legítimos sempre que qualquer
+render caísse dentro do round-trip (a chegada da rede de pessoas, por exemplo).
+A recusa estava certa; errado era a tela mudar de identidade sem ter mudado de
+nada.
+
+`displayOptions` passou a ser memoizado e a ação de começar ganhou memo próprio
+— ela não depende de nada da conversa. É a lição de churn da 5.3B outra vez, e
+aqui o custo não era desempenho: era confiabilidade do Agent. Medido no lote: o
+controle positivo de L1 caiu de **17,1 s para 2,4 s**.
 
 ## 9–13. As fronteiras, uma a uma
 
@@ -321,7 +426,7 @@ local do R-08.
 | `test:eleven-guard` | 46 | **46** |
 | `test:agent:stale` | — | **53** (novo, L1/L2/L3) |
 | Playwright `agent-lifecycle` | — | **8** (novo lote) |
-| Playwright `agent-async-stale` | — | **9** (novo lote, L1/L2/L3) |
+| Playwright `agent-async-stale` | — | **12** (novo lote: L1/L2/L3 + `/conversa`) |
 
 Os aumentos em `invariants` (+2) e `inventory` (+1) são asserções novas sobre a
 sequência de despacho, não afrouxamento: três tripwires dispararam quando a
@@ -361,13 +466,9 @@ parado.
    **FECHADO.** A auditoria das 25 mostrou que a segunda metade da afirmação
    original — "os demais são cobertos pelo desmonte da tela" — era falsa em três
    casos. L1, L2 e L3 foram corrigidos; os quatro caminhos com commit contextual
-   pós-`await` estão listados no §7–8, todos com guarda declarada. Fica em
-   aberto, **como decisão de produto e não como lacuna do Agent**, o que
-   `/conversa` deve fazer quando o cuidador troca de paciente no meio de uma
-   conversa em andamento: hoje a conversa de A continua na tela de B. Não é uma
-   janela pós-`await` (é estado de tela que sobrevive à troca), não é alcançável
-   pelo Agent de forma diferente do clique humano, e a decisão — descartar,
-   perguntar, ou manter — não é minha.
+   pós-`await` estão listados no §7–8, todos com guarda declarada. O estado de
+   tela que sobrevivia à troca de paciente em `/conversa` — doze campos,
+   incluindo a frase já confirmada — foi fechado no §7c.
 3. **A geração é por contexto de JS.** Uma recarga a reinicia — o que é seguro
    (a recarga é uma fronteira mais forte), mas significa que ela não distingue
    duas abas.
@@ -472,7 +573,11 @@ Cada linha responde a uma pergunta: **por que acreditamos que é verdade?**
 | 11c | L3 — a atividade de A não abre em B | idem com `/api/activities/runs`: o player não abre, a lista de B continua sendo a de B — pelo pedido do Agent **e** pelo clique do cuidador | `agent-async-stale` §1, §3 | 9 ✓ |
 | 11d | A correção não matou as três funcionalidades | controle positivo ao lado de cada caso: mesma espera, sem trocar nada — a conversa começa e registra, o card registra, o player abre | `agent-async-stale` §2, §6, §8 | 9 ✓ |
 | 11e | Os testes reprovam sem a correção | com a guarda neutralizada, os 4 casos negativos falham e os 4 controles positivos passam — a suíte é sensível ao defeito, não à sua ausência | controle negativo executado | 4 ✗ / 5 ✓ |
-| 11f | A sessão de rotina não atravessa a troca de paciente | o defeito irmão (referência, não `await`): abrir um card depois da troca **cria uma sessão nova**, contado na requisição | `agent-async-stale` §9; `test:agent:stale` | 9 ✓ · 53 ✓ |
+| 11f | A sessão de rotina não atravessa a troca de paciente | o defeito irmão (referência, não `await`): abrir um card depois da troca **cria uma sessão nova**, contado na requisição | `agent-async-stale` §9; `test:agent:stale` | 12 ✓ · 53 ✓ |
+| 11g | **A conversa de A não fica na tela de B** | conversa em andamento, troca real pelo seletor: a tela volta ao estado inicial, o nome é o de B, a pergunta e o contexto de A somem, nenhuma mensagem é criada, nenhuma fala do paciente é tentada — e B começa a conversa dele com sessão **nova** | `agent-async-stale` §10 | 12 ✓ |
+| 11h | A gravação de A que chega depois não faz a voz do paciente soar | a resposta de `/api/messages` é segurada, o paciente troca, a resposta é liberada: a continuação **nem tenta** falar — e a recusa de fundo em `useSpeech` não precisou entrar em ação | `agent-async-stale` §11 | 12 ✓ |
+| 11i | Voltar ao primeiro paciente não mistura os dois | A → B → A: começo limpo dos dois lados, e no servidor duas sessões de A e uma de B, cada uma com o seu dono | `agent-async-stale` §12 | 12 ✓ |
+| 11j | Os testes de `/conversa` reprovam sem a correção | com a chave neutralizada os três falham; com só a guarda da fala neutralizada, o §11 falha sozinho — as duas peças são medidas separadamente | controle negativo executado | 3 ✗ · 1 ✗ |
 | 12 | O Agent persistente atualiza capacidades | 5 navegações client-side; ação de cada tela anterior recusada | `agent-lifecycle` §3 | 8 ✓ |
 | 13 | O transcript não concede autoridade | não é persistido, não executa ação, não aparece em log | `test:agent:authorship` | 36 ✓ |
 | 14 | `providerRole` não define autoria | `role: user` → `source: caregiverVoice`, com a role preservada | `test:agent:authorship` | 36 ✓ |
@@ -501,6 +606,10 @@ somadas:
 | `await` com efeito posterior local ou autocontido | **5** | estado do componente, que morre com a remontagem; ou trilhas que a própria ação abriu |
 | commit contextual depois do `await`, **revalidado** | **5** | `activity.goToActivityMenu` e L1/L2/L3 pela guarda de lease; `helo.conectar` pela sua própria, da 5.1A |
 | **lacuna real** | **0** | — |
+
+E o isolamento entre pacientes, que é a outra metade do critério: nenhuma das
+três telas com estado de conversa — `/conversa`, `/rotina`, `/atividades` —
+apresenta ou executa contexto de A depois que o paciente ativo passou a ser B.
 
 ## 31. Pendências da 5.4
 
