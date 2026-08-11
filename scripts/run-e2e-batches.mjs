@@ -201,6 +201,22 @@ const LOTES = [
     // nenhuma chamada ao provedor acontece.
   },
   {
+    nome: "rascunho-persistencia",
+    titulo: "O rascunho não se perde na saída: recarga, aba e troca de contexto",
+    arquivos: ["tests/e2e/rascunho-persistencia.spec.ts"],
+    // Nasceu de um defeito PREEXISTENTE, descoberto pela regressão final da
+    // 5.3C: ditar (ou digitar) e recarregar em seguida devolvia o campo vazio.
+    // A mesma taxa foi medida no fim da 5.2C — não era do Agent nem do STT.
+    //
+    // O lote exercita a janela de propósito: nenhum destes testes espera entre
+    // a alteração e a recarga. Uma espera artificial aqui devolveria o defeito
+    // ao escuro.
+    env: {
+      HELO_VOICE_DICTATION_ENABLED: "true",
+      ELEVENLABS_API_KEY: "chave-invalida-de-teste-5-2a",
+    },
+  },
+  {
     nome: "offline",
     titulo: "Continuidade sem conexão e armazenamento local",
     // `offline-app-shell.spec.ts` NÃO entra aqui, e não é esquecimento: ele

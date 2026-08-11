@@ -265,7 +265,34 @@ export function useOfflineSession(args: {
   );
   const rascunhosProntos =
     chaveDoEscopo != null && escopoDosRascunhos === chaveDoEscopo;
-  const temporizadores = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // ——— Os quatro estados de um rascunho (correção da corrida) ———
+  //
+  // A regressão final da 5.3C revelou perda SILENCIOSA de rascunho: ditar (ou
+  // digitar) e recarregar em seguida devolvia o campo vazio. A investigação
+  // mediu, envolvendo `IDBObjectStore.prototype.put`, que a gravação chegava a
+  // ser DISPARADA — e mesmo assim a leitura seguinte voltava vazia. Entre
+  // "disparada" e "guardada" existe uma transação que a recarga interrompia.
+  //
+  // Por isso os estados de um rascunho passam a ser distintos, e cada um tem
+  // seu lugar:
+  //
+  //   A. PENDENTE     mudou na tela, ainda não foi para o disco  → `pendentes`
+  //   B. EM VOO       a transação começou                        → `emVoo`
+  //   C. NÃO CONFIRMADA  a promessa ainda não resolveu           → `emVoo`
+  //   D. CONFIRMADA   a promessa resolveu                        → sai de ambos
+  //
+  // E a mudança que fecha a janela reproduzida: a PRIMEIRA alteração de uma
+  // rajada vai para o disco IMEDIATAMENTE, no mesmo passo em que acontece. Não
+  // existe mais um intervalo de 300 ms em que o texto só existe na memória —
+  // era esse intervalo que a recarga alcançava.
+  //
+  // O custo continua contido porque as alterações SEGUINTES são coalescidas:
+  // enquanto uma gravação está em voo, as novas só atualizam o valor pendente,
+  // e uma única gravação final o leva. Digitar rápido não vira uma transação
+  // por tecla — vira uma em voo e uma enfileirada, no máximo.
+  const pendentes = useRef(new Map<string, { valor: unknown; sensivel: boolean; seq: number }>());
+  const emVoo = useRef(new Map<string, number>());
+  const ultimaSeq = useRef(0);
   // Palpite inicial do navegador, lido uma vez na montagem. Ele erra em portal
   // cativo e em Wi-Fi sem rota — quem corrige é a primeira requisição real.
   const [online, setOnlineState] = useState(
@@ -613,32 +640,58 @@ export function useOfflineSession(args: {
 
   const lerRascunho = useCallback((chave: string) => rascunhosRef.current[chave], []);
 
-  const definirRascunho = useCallback(
-    (chave: string, valor: unknown, sensivel = false) => {
-      rascunhosRef.current = { ...rascunhosRef.current, [chave]: valor };
+  /**
+   * Leva ao disco o que estiver pendente desta chave, se nada estiver em voo.
+   *
+   * Uma gravação de cada vez por chave, e sempre a MAIS NOVA: a sequência
+   * monotônica garante que uma gravação lenta não escreva por cima de um valor
+   * mais recente, nem ressuscite um rascunho que já foi descartado.
+   */
+  const escoar = useCallback(
+    (chave: string) => {
       if (!store) return;
-      // A tela já respondeu — quem espera é o disco. Gravar a cada tecla
-      // escreveria dezenas de vezes por frase, e cifrar não é de graça.
-      const anterior = temporizadores.current.get(chave);
-      if (anterior) clearTimeout(anterior);
-      temporizadores.current.set(
-        chave,
-        setTimeout(() => {
-          temporizadores.current.delete(chave);
-          void store.salvarRascunho(chave, valor, sensivel).catch(() => {});
-        }, 300)
-      );
+      if (emVoo.current.has(chave)) return;
+      const pendente = pendentes.current.get(chave);
+      if (!pendente) return;
+      pendentes.current.delete(chave);
+      emVoo.current.set(chave, pendente.seq);
+      void store
+        .salvarRascunho(chave, pendente.valor, pendente.sensivel)
+        .catch(() => {
+          // Disco indisponível: o valor continua na memória e na próxima
+          // alteração tenta de novo. Perder aqui não pode ser silencioso para
+          // o código, mas também não deve quebrar a tela do cuidador.
+        })
+        .finally(() => {
+          if (emVoo.current.get(chave) === pendente.seq) emVoo.current.delete(chave);
+          // Chegou coisa nova enquanto esta gravava: leva a última.
+          if (pendentes.current.has(chave)) escoar(chave);
+        });
     },
     [store]
   );
 
+  const definirRascunho = useCallback(
+    (chave: string, valor: unknown, sensivel = false) => {
+      rascunhosRef.current = { ...rascunhosRef.current, [chave]: valor };
+      if (!store) return;
+      pendentes.current.set(chave, { valor, sensivel, seq: ++ultimaSeq.current });
+      // Imediato quando o disco está livre — é isto que fecha a janela em que
+      // o texto existia só na memória. Ocupado, o valor fica pendente e a
+      // gravação em curso o leva ao terminar.
+      escoar(chave);
+    },
+    [store, escoar]
+  );
+
   const descartarRascunho = useCallback(
     (chave: string) => {
-      const pendente = temporizadores.current.get(chave);
-      if (pendente) {
-        clearTimeout(pendente);
-        temporizadores.current.delete(chave);
-      }
+      // Descartar precisa vencer o que estiver a caminho: sem a sequência, uma
+      // gravação lenta disparada antes do descarte devolveria o rascunho ao
+      // disco depois dele.
+      pendentes.current.delete(chave);
+      emVoo.current.delete(chave);
+      ultimaSeq.current += 1;
       const { [chave]: _fora, ...resto } = rascunhosRef.current;
       void _fora;
       rascunhosRef.current = resto;
@@ -695,13 +748,50 @@ export function useOfflineSession(args: {
     [store, setFila, definirRascunho]
   );
 
+  // Trocar de escopo abandona o que era do escopo anterior: aquele rascunho
+  // pertence a outra sessão, e escrevê-lo agora o gravaria no lugar errado.
   useEffect(() => {
-    const mapa = temporizadores.current;
+    const aPendentes = pendentes.current;
+    const aEmVoo = emVoo.current;
     return () => {
-      for (const t of mapa.values()) clearTimeout(t);
-      mapa.clear();
+      aPendentes.clear();
+      aEmVoo.clear();
     };
   }, [chaveDoEscopo]);
+
+  // ——— A cauda: o que ficou pendente quando a página vai embora ———
+  //
+  // A coalescência deixa, no pior caso, UM valor esperando a gravação em curso
+  // terminar. Se a página sai nesse instante, ele precisa ao menos ser
+  // disparado — e é o que acontece aqui.
+  //
+  // Isto é uma segunda linha de defesa, não a correção: a correção é a
+  // gravação imediata, que faz a janela pendente durar o tempo de uma
+  // transação em vez de 300 ms. Nenhum navegador promete concluir uma
+  // transação começada durante o teardown, e por isso a garantia não pode
+  // repousar aqui.
+  //
+  // `pagehide` cobre a saída (recarga, navegação, fechar a aba, e o bfcache do
+  // iOS, onde `beforeunload` não é confiável). `visibilitychange` para
+  // "hidden" cobre a troca de aba no celular, em que a página pode ser
+  // descartada sem nunca mais receber evento nenhum.
+  useEffect(() => {
+    const escoarTudo = () => {
+      for (const chave of [...pendentes.current.keys()]) escoar(chave);
+    };
+    const aoEsconder = () => {
+      if (document.visibilityState === "hidden") escoarTudo();
+    };
+    window.addEventListener("pagehide", escoarTudo);
+    document.addEventListener("visibilitychange", aoEsconder);
+    return () => {
+      window.removeEventListener("pagehide", escoarTudo);
+      document.removeEventListener("visibilitychange", aoEsconder);
+      // Desmontar também é uma saída: trocar de sessão ou de paciente não pode
+      // deixar para trás o que o cuidador acabou de escrever.
+      escoarTudo();
+    };
+  }, [escoar]);
 
   const reconhecerDescarte = useCallback(() => {
     setAviso(null);
