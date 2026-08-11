@@ -372,6 +372,29 @@ frase. **A limpeza se conserta sozinha.**
 E um resíduo é detectável por definição: é tudo que sobra sob
 `patients/{id}/phrase-audio/{phraseId}/` além do arquivo referenciado.
 
+### Best-effort precisa de relógio — e a regressão provou isso
+
+A limpeza roda **dentro** da requisição do cuidador. É o que garante a ordem
+(a mídia sai antes do documento), e a primeira versão parou nisso — o que foi um
+erro. A regressão dirigida o encontrou: *"editar uma frase salva"* estourou 90 s
+esperando o PATCH responder, porque o ambiente de E2E não tem credencial de
+Storage nenhuma e a varredura ficava pendurada.
+
+O defeito **não era do teste**. O mesmo caminho, com o Storage lento em
+produção, penduraria um cuidador de verdade — e ele perderia a edição por causa
+de uma faxina.
+
+Duas correções, as duas valendo em produção:
+
+1. **a limpeza nem começa quando não há mídia.** A esmagadora maioria das frases
+   nunca foi pré-sintetizada, e varrer um prefixo vazio custa uma ida à rede que
+   não tinha o que limpar. A **exclusão** varre de qualquer forma: é rara, é
+   final, e é a última chance de alcançar um resíduo de uma limpeza anterior
+   malsucedida;
+2. **toda limpeza tem prazo** (`PRAZO_DE_LIMPEZA_MS`, 5 s). Passado o prazo,
+   segue-se em frente — o resíduo é o mesmo que qualquer outra falha produz, e
+   some pelo mesmo caminho auto-corretivo.
+
 ---
 
 ## 16. Exclusão da frase
@@ -744,7 +767,7 @@ Decisão adiada para a **5.4C**, depois do checklist do painel
 
 | Suíte | Asserções | O que ela responde |
 | --- | --- | --- |
-| `test:midia:privada` | **91** | estrutural, rodando o código de produção: nenhuma URL pública é emitida; o caminho carrega o paciente e não carrega conteúdo; um caminho estragado não vira leitura de outro lugar; nenhuma rota aceita caminho do navegador; a aritmética do `Range`; a ordem que impede o órfão; e o que a fase não podia tocar |
+| `test:midia:privada` | **94** | estrutural, rodando o código de produção: nenhuma URL pública é emitida; o caminho carrega o paciente e não carrega conteúdo; um caminho estragado não vira leitura de outro lugar; nenhuma rota aceita caminho do navegador; a aritmética do `Range`; a ordem que impede o órfão; o prazo da limpeza; e o que a fase não podia tocar |
 | `test:midia:autorizacao` | **35** | HTTP — a prova central do R-04 |
 | `test:storage:rules` | **17** | comportamento das regras contra o emulador |
 | `test:migracao:midia` | **40** | dry-run, apply, morte da URL legada, idempotência, guardas |
@@ -853,6 +876,15 @@ O custo real acrescentado é **um salto de rede a mais por reprodução** (o
 navegador fala com o Helo em vez de falar com o Storage) e **uma leitura de
 metadata** por requisição, para saber o tamanho. Em troca, o áudio deixou de ser
 público.
+
+Do lado da escrita, a limpeza acrescentaria latência à edição e à exclusão de
+frases — e acrescentou, até a regressão dirigida mostrar quanto (§15). Depois da
+correção: **zero** chamadas ao Storage quando a frase nunca teve áudio, e no
+máximo `PRAZO_DE_LIMPEZA_MS` quando teve.
+
+Uma falha ao ler a metadata deixou de ser sempre 404: só o objeto ausente é 404,
+e o transitório é 503. Um Storage lento reportado como "mídia não encontrada"
+mandaria o cuidador desistir de uma frase que está lá.
 
 ---
 
