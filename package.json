@@ -40,6 +40,7 @@
     "test:5.2a": "npm run test:dictation:domain && npm run test:dictation:retention && npm run test:dictation:authorship",
     "dev:teste": "node scripts/dev-server-de-teste.mjs",
     "test:eleven-guard": "node scripts/test-eleven-guard.mjs",
+    "test:5.4a:superficie": "node scripts/test-superficie-eleven.mjs",
     "test:e2e-sync": "node scripts/test-e2e-sync.mjs",
     "test:dictation:coordination": "node scripts/test-dictation-coordination.mjs",
     "test:dictation:content": "node scripts/test-dictation-content.mjs",
