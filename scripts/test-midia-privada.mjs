@@ -288,13 +288,37 @@ secao("8. edição, exclusão e troca de voz tratam a mídia");
   );
   checa(
     "excluir a frase apaga a mídia ANTES do documento",
-    frases.indexOf("await descartaMidiaDaFrase(patientId, phraseId, existing.data());\n  await ref.delete();") > 0
+    /await descartaMidiaDaFrase\(patientId, phraseId, existing\.data\(\)[^\n]*\);\n\s*await ref\.delete\(\);/.test(
+      frases
+    )
   );
   checa(
     "a limpeza alcança todas as gerações e o caminho legado",
     /descartaMidiaDaFrase[\s\S]*?apagaPrefixo\(prefixoDeAudioDaFrase[\s\S]*?apagaObjeto\(legado\)/.test(
       frases
     )
+  );
+  // A limpeza roda DENTRO da requisição do cuidador — é o que garante a ordem.
+  // Duas coisas impedem que isso vire uma edição pendurada: ela nem começa
+  // quando não há mídia, e tem relógio quando começa.
+  checa(
+    "a limpeza não bate no Storage quando não há mídia",
+    /if \(!opcoes\?\.varreSempre && !dados\?\.audioStoragePath && !dados\?\.storagePath\) return;/.test(
+      frases
+    )
+  );
+  checa(
+    "a exclusão varre mesmo assim — é a última chance de alcançar um resíduo",
+    /descartaMidiaDaFrase\(patientId, phraseId, existing\.data\(\), \{ varreSempre: true \}\)/.test(
+      frases
+    )
+  );
+  const midia = codigoDe("lib/midia-privada.ts");
+  checa(
+    "toda limpeza tem prazo — um Storage lento não segura o cuidador",
+    /PRAZO_DE_LIMPEZA_MS/.test(midia) &&
+      /apagaObjeto[\s\S]{0,200}?comPrazo/.test(midia) &&
+      /apagaPrefixo[\s\S]{0,200}?comPrazo/.test(midia)
   );
   checa(
     "trocar o clone invalida o áudio pré-sintetizado",

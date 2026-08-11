@@ -181,7 +181,7 @@ export async function deleteFavoritePhrase(patientId: number, phraseId: string):
   // se ela falhar, o documento ainda existe e a próxima tentativa alcança o
   // arquivo. Apagar o documento primeiro seria perder o único ponteiro para
   // um MP3 na voz do paciente.
-  await descartaMidiaDaFrase(patientId, phraseId, existing.data());
+  await descartaMidiaDaFrase(patientId, phraseId, existing.data(), { varreSempre: true });
   await ref.delete();
 }
 
@@ -196,8 +196,22 @@ export async function deleteFavoritePhrase(patientId: number, phraseId: string):
 async function descartaMidiaDaFrase(
   patientId: number,
   phraseId: string,
-  dados: FirebaseFirestore.DocumentData | undefined
+  dados: FirebaseFirestore.DocumentData | undefined,
+  opcoes?: { varreSempre?: boolean }
 ): Promise<void> {
+  // ——— Não bater no Storage à toa ———
+  //
+  // A esmagadora maioria das frases nunca teve áudio pré-sintetizado, e
+  // varrer um prefixo vazio custa uma ida à rede DENTRO da requisição do
+  // cuidador. Sem isto, editar uma frase que nunca foi sintetizada pagava o
+  // preço de uma faxina que não tinha o que limpar — e num ambiente sem
+  // credencial de Storage (o do E2E) isso pendurava a edição inteira.
+  //
+  // A exclusão varre de qualquer forma: ela é rara, é final, e é a última
+  // chance de alcançar um resíduo que tenha sobrado de uma limpeza anterior
+  // malsucedida.
+  if (!opcoes?.varreSempre && !dados?.audioStoragePath && !dados?.storagePath) return;
+
   await apagaPrefixo(prefixoDeAudioDaFrase(patientId, phraseId));
   const legado = dados?.storagePath;
   if (typeof legado === "string" && legado && caminhoDeFraseEhValido(legado, patientId)) {

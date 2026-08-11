@@ -257,18 +257,52 @@ export async function entregaMidia(entrega: EntregaDeMidia): Promise<Response> {
 // PREFIXO, e toda síntese varre o prefixo dela. Um objeto que escapou hoje sai
 // na próxima síntese daquela frase — a limpeza se conserta sozinha.
 
-/** Apaga um objeto. Devolve se conseguiu; nunca lança. */
+/**
+ * O prazo de qualquer limpeza. **Best-effort tem que ter relógio.**
+ *
+ * A limpeza acontece DENTRO da requisição do cuidador — é o que garante a
+ * ordem (a mídia sai antes do documento). Mas um Storage lento, sem
+ * credencial ou fora do ar transformaria "apagar um arquivo antigo" em "a
+ * edição da frase não responde", e aí o cuidador perde a operação por causa
+ * de uma faxina.
+ *
+ * Passado o prazo, seguimos em frente. O resíduo é o mesmo que qualquer outra
+ * falha de limpeza produz, e some pelo mesmo caminho: a varredura por prefixo
+ * da próxima síntese daquela frase.
+ */
+const PRAZO_DE_LIMPEZA_MS = 5_000;
+
+function comPrazo<T>(promessa: Promise<T>, valorSePassar: T): Promise<T> {
+  return Promise.race([
+    promessa,
+    new Promise<T>((resolve) => {
+      const id = setTimeout(() => resolve(valorSePassar), PRAZO_DE_LIMPEZA_MS);
+      (id as unknown as { unref?: () => void }).unref?.();
+    }),
+  ]);
+}
+
+/** Apaga um objeto. Devolve se conseguiu; nunca lança, nunca pendura. */
 export async function apagaObjeto(caminho: string): Promise<boolean> {
-  try {
-    await baldeDaHelo().file(caminho).delete({ ignoreNotFound: true });
-    return true;
-  } catch {
-    return false;
-  }
+  return comPrazo(
+    baldeDaHelo()
+      .file(caminho)
+      .delete({ ignoreNotFound: true })
+      .then(() => true)
+      .catch(() => false),
+    false
+  );
 }
 
 /** Apaga tudo sob um prefixo, exceto o que for explicitamente preservado. */
 export async function apagaPrefixo(
+  prefixo: string,
+  opcoes?: { exceto?: string }
+): Promise<{ apagados: number; falhou: boolean }> {
+  return comPrazo(varrePrefixo(prefixo, opcoes), { apagados: 0, falhou: true });
+}
+
+async function varrePrefixo(
   prefixo: string,
   opcoes?: { exceto?: string }
 ): Promise<{ apagados: number; falhou: boolean }> {
