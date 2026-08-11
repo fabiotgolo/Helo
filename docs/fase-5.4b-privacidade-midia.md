@@ -855,12 +855,66 @@ caminho que ele exercitasse.
 
 ## 33. Regressão, tsc, build, lint
 
-Preenchido em §34 do relatório de entrega. `tsc` limpo, `build` limpo, `lint` no
-baseline **55 erros / 6 warnings** — os dois warnings que a fase introduziu
-(imports não usados nos scripts novos) foram corrigidos.
+**Regressão Playwright completa: 282/282, 18 lotes, 0 falhos, 0 ignorados, sem
+retries — 62m13**, sobre o código final e a build de produção.
+
+`tsc` limpo. `build` limpo. `lint` no baseline **55 erros / 6 warnings** — os
+dois warnings que a fase introduziu (imports não usados nos scripts novos) foram
+corrigidos no mesmo dia em que apareceram.
 
 **Zero chamadas reais à ElevenLabs.** O servidor de suítes sobe pela guarda de
 `scripts/eleven-guard.mjs`, que imprime `provedor ElevenLabs: NEUTRALIZADO`.
+
+### O caminho até o verde, dito inteiro
+
+A suíte fechou **281/282 duas vezes seguidas**, sempre no mesmo teste
+(`offline-conflitos` §1), e o caminho até entender por quê tem três etapas que
+vale registrar — porque duas delas quase viraram a conclusão errada.
+
+**Primeira etapa: falhas em massa que não eram do produto.** Uma execução
+fechou com 7 de 12 falhas em `controles-do-paciente`, mais `voz-robustez` e
+`base`. O rastro mostrava a aplicação recebendo **401 — "Sua sessão expirou"** no
+meio dos testes, e a máquina estava em *load average* 25–29 para 12 núcleos. Com
+a máquina quieta, o mesmo lote fechou **12/12**. Não era o produto: a suíte não
+estava medindo nada sob aquela saturação.
+
+**Segunda etapa: uma falha minha, encontrada pela regressão.** Antes disso,
+*"editar uma frase salva"* estourou 90 s esperando o PATCH. A causa era a faxina
+de Storage rodando sem prazo dentro da requisição do cuidador — corrigida em
+`6dbeb79`, e descrita na §15. Essa era real, e teria pendurado um cuidador de
+verdade.
+
+**Terceira etapa: uma instabilidade anterior à fase, medida em vez de
+suposta.** Sobrou `offline-conflitos` §1, falhando duas regressões seguidas. A
+5.4B não toca uma linha de `lib/offline/`, `app/api/realtime-questions/`,
+`components/realtime-questions/` nem dos testes — mas isso não prova nada
+sozinho, então o lote foi executado seis vezes, metade em cada lado da fase:
+
+| servidor | verde | vermelho |
+| --- | --- | --- |
+| `next dev` (HMR), commit `29dbb32` — **antes** da 5.4B | 1 | 2 |
+| `next dev` (HMR), código da 5.4B | 2 | 1 |
+| **build de produção**, código da 5.4B | **3** | **0** |
+
+O screenshot da falha é uma **tela branca**, e o trace traz as três linhas que o
+próprio `run-e2e-batches.mjs` já documentava desde a 4.9:
+
+```
+[Fast Refresh] rebuilding
+[Fast Refresh] performing full reload
+Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+```
+
+O HMR do `next dev` decide sozinho recarregar a página; quando isso cai na
+janela em que o teste desligou a rede, a recarga não busca nada. A mitigação da
+época — dar um lote próprio à spec — reduziu a frequência e não tocou na causa:
+três vermelhos em seis, uma moeda jogada em toda regressão.
+
+O conserto (`d2f51f2`) é o que o `offline-app-shell` já fazia pelo mesmo motivo:
+rodar o lote contra a **build de produção**, onde não existe HMR. Não é
+afrouxar asserção nem aumentar prazo — é tirar do caminho o único processo que
+mexia na página sem ninguém pedir. Em produção um recarregamento sem rede é
+servido pelo app shell, que existe exatamente para isso.
 
 ---
 
@@ -917,6 +971,11 @@ mandaria o cuidador desistir de uma frase que está lá.
    continua sendo o A-10, e continua sendo da 5.4C.
 6. **O contrato do painel ElevenLabs continua não verificado**, e por isso
    `patientName`/`activePatientId` ficaram onde estavam.
+7. **A regressão é sensível à carga da máquina.** Com *load average* 2× o número
+   de núcleos, a suíte produz falhas espalhadas por specs sem relação entre si —
+   sessões expirando, elementos que não aparecem, timeouts de 90 s. Isso não é
+   uma limitação desta fase, mas é uma limitação de quem for ler o resultado
+   dela: um vermelho sob saturação não é evidência de nada.
 
 ---
 
