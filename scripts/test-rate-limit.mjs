@@ -389,8 +389,16 @@ async function main() {
       ids.every((id) => /^[a-zA-Z]+__[A-Za-z0-9_-]+__(-|\d+)__\d+$/.test(id)),
       `— ${ids[0]}`
     );
-    const daConversa = ids.find((id) => id.startsWith("conversa__"));
-    check("o balde da conversa existe", Boolean(daConversa), `— ${ids.join(", ")}`);
+    // O balde DA CUIDADORA A, nomeado. `find(startsWith("conversa__"))`
+    // escolhia um qualquer, e a essa altura já existem vários — o da B (§3)
+    // tem contagem 1. A ordem da listagem não é garantida, então a asserção
+    // "parou no teto" reprovava uma vez a cada três ou quatro execuções sem
+    // nada ter mudado no produto. Um seletor ambíguo não é flake: é uma
+    // pergunta mal feita.
+    const daConversa = ids.find(
+      (id) => id.startsWith("conversa__") && id.includes(a.usuario.id)
+    );
+    check("o balde da conversa da cuidadora A existe", Boolean(daConversa), `— ${ids.join(", ")}`);
     if (daConversa) {
       const janela = Number(daConversa.split("__").pop());
       const esperada = Math.floor(Date.now() / (5 * 60_000));

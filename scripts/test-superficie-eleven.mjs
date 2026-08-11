@@ -77,6 +77,29 @@ function fontesDoProduto() {
   return achados.map((c) => relative(".", c));
 }
 
+/**
+ * Cada chamada de `nome(` na fonte, com os argumentos inteiros.
+ *
+ * Por contagem de parênteses, não por expressão regular — a 5.4B registrou
+ * três falsos positivos antes de esta técnica virar a regra da casa.
+ */
+function chamadasDe(fonte, nome) {
+  const encontradas = [];
+  const inicio = new RegExp(`${nome.replace(".", "\\.")}\\(`, "g");
+  let m;
+  while ((m = inicio.exec(fonte)) != null) {
+    let profundidade = 1;
+    let i = m.index + m[0].length;
+    while (i < fonte.length && profundidade > 0) {
+      if (fonte[i] === "(") profundidade += 1;
+      else if (fonte[i] === ")") profundidade -= 1;
+      i += 1;
+    }
+    encontradas.push(fonte.slice(m.index, i));
+  }
+  return encontradas;
+}
+
 const FONTES = fontesDoProduto();
 
 // ——— 1. O censo da superfície ———
@@ -213,12 +236,37 @@ secao("4. nenhuma URL durável de Storage é emitida pelo produto");
 // ——— 5. Cache-Control nas rotas que carregam autorização ou fala ———
 secao("5. no-store onde a resposta não pode ser guardada");
 {
+  // A 5.4C trocou o header literal por `lib/cache-policy.ts`, e a razão está
+  // lá: a política precisava valer no ERRO também, e repeti-la em cada
+  // `Response.json` de recusa era repetir um esquecimento. Esta asserção passa
+  // a conferir que a rota usa a política — e quem confere o RESULTADO, no
+  // HTTP, com sucesso e recusa, é `test:cache:politica`, que é estritamente
+  // mais forte do que ler a fonte.
   for (const rota of [
     "app/api/tts/route.ts",
     "app/api/voice/grant/route.ts",
     "app/api/voice/dictation/route.ts",
+    "app/api/helo/conversation-token/route.ts",
+    "app/api/helo/client-tools/route.ts",
   ]) {
-    checa(`${rota} responde no-store`, /"Cache-Control": "no-store"/.test(codigoDe(rota)));
+    const codigo = codigoDe(rota);
+    checa(
+      `${rota} aplica a política de não-armazenamento`,
+      /"Cache-Control": "no-store"/.test(codigo) ||
+        /(jsonSemCache|comPoliticaSemCache)/.test(codigo)
+    );
+    // Um `Response.json` só é aceitável aqui quando carrega o header ele
+    // mesmo — é o caso do ditado, que define a política desde a 5.2A. Por
+    // contagem de parênteses: a chamada precisa ser extraída inteira, porque
+    // o header pode estar a três linhas de distância do nome da função.
+    const crus = chamadasDe(codigo, "Response.json").filter(
+      (chamada) => !/Cache-Control/.test(chamada)
+    );
+    checa(
+      `${rota} não devolve resposta sem política`,
+      crus.length === 0,
+      `— ${crus.map((c) => c.split("\n")[0]).join(" | ")}`
+    );
   }
   // A voz clonada pré-sintetizada segue a mesma régua da voz sintetizada na
   // hora: `private, no-store`. A música aceita revalidação obrigatória em vez
@@ -335,10 +383,43 @@ secao("7. o que a 5.4B fechou (e o que segue para a 5.4C)");
   // `rateLimited` (a CATEGORIA de falha do provedor, em eleven-fetch) não
   // conta: ela é o 429 que a ElevenLabs devolve, não um limite que o Helo
   // aplique. As fronteiras de palavra separam as duas coisas.
+  // ——— A-10, invertido pela 5.4C ———
+  //
+  // Esta linha dizia "nenhum limitador de taxa próprio existe no produto", e
+  // era o registro congelado do que a 5.4A tinha encontrado. A 5.4C construiu
+  // o limitador, e um teste que continuasse afirmando a ausência dele estaria
+  // guardando um fato que deixou de ser verdade — ele só continuava passando
+  // por acidente de nomenclatura (os nomes do limitador são portugueses).
+  //
+  // O que fica congelado agora é a COBERTURA: os endpoints que gastam dinheiro
+  // consomem limite antes de gastar.
   checa(
-    "A-10: nenhum limitador de taxa próprio existe no produto (5.4C)",
-    !FONTES.some((f) => /\b(rateLimit|rateLimiter|throttle|limitaTaxa)\b/i.test(codigoDe(f)))
+    "A-10: o limitador distribuído existe",
+    /runTransaction/.test(codigoDe("lib/rate-limit.ts")) &&
+      /COLECAO_DE_LIMITES = "rateLimits"/.test(codigoDe("lib/rate-limit.ts"))
   );
+  for (const rota of [
+    "app/api/tts/route.ts",
+    "app/api/voice/grant/route.ts",
+    "app/api/voice/dictation/route.ts",
+    "app/api/helo/conversation-token/route.ts",
+    "app/api/admin/voices/route.ts",
+  ]) {
+    checa(`A-10: ${rota} consome limite`, /consomeLimite\(/.test(codigoDe(rota)));
+  }
+  {
+    const funcao = codigoDe("functions/index.js");
+    checa(
+      "A-10: a composição de música consome limite antes de comprar composição",
+      funcao.indexOf('consomeLimite("musica"') > 0 &&
+        funcao.indexOf('consomeLimite("musica"') < funcao.indexOf("api.elevenlabs.io/v1/music")
+    );
+    checa(
+      "A-10: a síntese de frase consome limite antes de comprar TTS",
+      funcao.indexOf('consomeLimite("fraseAudio"') > 0 &&
+        funcao.indexOf('consomeLimite("fraseAudio"') < funcao.indexOf("v1/text-to-speech")
+    );
+  }
 }
 
 console.log(`\n${mau === 0 ? "✓" : "✗"} ${ok} passaram, ${mau} falharam`);

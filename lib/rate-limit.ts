@@ -300,13 +300,26 @@ export async function consomeLimite(
   // dentro do caminho de uma requisição do cuidador é uma requisição que pode
   // ficar pendurada. Se falhar, o balde velho fica — e a política de TTL, se
   // existir, o recolhe.
+  //
+  // O `try` em volta não é decoração, e ele custou uma reprovação para
+  // aparecer: `.delete()` estava protegido por `.catch()`, que só alcança a
+  // promessa REJEITADA. Um lançamento SÍNCRONO — o método ausente, uma forma
+  // inesperada do SDK — passava por fora e derrubava uma requisição que já
+  // tinha passado pelo limite e só precisava terminar. É a mesma lição que a
+  // 5.4B pagou com a faxina de Storage: uma limpeza best-effort que pode
+  // reprovar a operação não é best-effort.
   if (usadas === 1) {
     const anterior = idDaJanelaAnterior(id);
     if (anterior) {
-      await Promise.race([
-        db.collection(COLECAO_DE_LIMITES).doc(anterior).delete().catch(() => {}),
-        new Promise((resolve) => setTimeout(resolve, PRAZO_DE_LIMPEZA_MS)),
-      ]);
+      try {
+        await Promise.race([
+          db.collection(COLECAO_DE_LIMITES).doc(anterior).delete().catch(() => {}),
+          new Promise((resolve) => setTimeout(resolve, PRAZO_DE_LIMPEZA_MS)),
+        ]);
+      } catch {
+        // O balde velho fica. A política de TTL o recolhe, e a janela seguinte
+        // tenta de novo: a limpeza se conserta sozinha.
+      }
     }
   }
 

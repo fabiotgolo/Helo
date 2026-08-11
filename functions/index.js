@@ -196,15 +196,23 @@ async function consomeLimite(endpoint, userId, patientId, agoraMs = Date.now()) 
   // balde da janela anterior daquela mesma chave. Exclusão por id, com prazo —
   // a lição da 5.4B é que limpeza sem relógio dentro de uma requisição do
   // cuidador é uma requisição que pode ficar pendurada.
+  //
+  // O `try` em volta: `.catch()` só alcança a promessa rejeitada, e um
+  // lançamento SÍNCRONO passava por fora e derrubava uma requisição que já
+  // tinha atravessado o limite. Ver a nota em lib/rate-limit.ts.
   if (usadas === 1) {
     const partes = id.split("__");
     const indice = Number(partes[partes.length - 1]);
     if (Number.isFinite(indice) && indice > 0) {
       partes[partes.length - 1] = String(indice - 1);
-      await Promise.race([
-        db.collection(COLECAO_DE_LIMITES).doc(partes.join("__")).delete().catch(() => {}),
-        new Promise((resolve) => setTimeout(resolve, PRAZO_DE_LIMPEZA_DE_LIMITE_MS)),
-      ]);
+      try {
+        await Promise.race([
+          db.collection(COLECAO_DE_LIMITES).doc(partes.join("__")).delete().catch(() => {}),
+          new Promise((resolve) => setTimeout(resolve, PRAZO_DE_LIMPEZA_DE_LIMITE_MS)),
+        ]);
+      } catch {
+        // O balde velho fica; a janela seguinte tenta de novo.
+      }
     }
   }
 

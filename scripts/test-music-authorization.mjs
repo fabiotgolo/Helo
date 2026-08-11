@@ -75,12 +75,43 @@ function doc(colecao, id) {
   };
 }
 
+// ——— O balde do limitador (Fase 5.4C) ———
+//
+// O handler passou a consumir um limite de taxa depois de autorizar, e ele o
+// faz numa transação do Firestore. O dublê precisa modelar isso — não para
+// testar o limitador (quem faz isso é `test:rate:limite`, contra o emulador de
+// verdade), mas porque um dublê que não modela o que o código usa deixa de
+// medir o que esta suíte mede: a AUTORIZAÇÃO.
+//
+// A primeira execução depois da mudança mostrou o efeito com precisão: o
+// dublê não tinha `runTransaction` nem `Timestamp`, a chamada estourou um
+// TypeError, o limitador FALHOU FECHADO como projetado, e a suíte de
+// autorização passou a reprovar dizendo que o usuário autorizado não alcança
+// a ElevenLabs. O comportamento estava certo; o dublê é que estava incompleto.
+const baldes = new Map();
+
 const firestoreFalso = {
   collection: (nome) => ({
-    doc: (id) => ({ get: async () => doc(nome, id) }),
+    doc: (id) => ({
+      get: async () => doc(nome, id),
+      // A limpeza oportunista do limitador apaga o balde da janela anterior.
+      delete: async () => baldes.delete(`${nome}/${id}`),
+      _chave: `${nome}/${id}`,
+    }),
     get: async () => ({ docs: [], empty: true }),
     add: async () => ({ id: "novo" }),
   }),
+  async runTransaction(corpo) {
+    // Sequencial e em memória: basta para o handler seguir. A prova de
+    // concorrência real exige Firestore de verdade, e ela existe à parte.
+    return corpo({
+      get: async (ref) => {
+        const valor = baldes.get(ref._chave);
+        return { exists: valor !== undefined, data: () => valor };
+      },
+      set: (ref, valor) => baldes.set(ref._chave, valor),
+    });
+  },
 };
 
 // Chave FALSA, só para o handler seguir até o ponto da chamada externa. Sem
@@ -112,7 +143,13 @@ Module.prototype.require = function (id) {
       storage: () => ({ bucket: () => ({ file: () => ({ save: async () => {}, delete: async () => {} }) }) }),
     };
   }
-  if (id === "firebase-admin/firestore") return { getFirestore: () => firestoreFalso };
+  if (id === "firebase-admin/firestore") {
+    return {
+      getFirestore: () => firestoreFalso,
+      FieldValue: { delete: () => "«apagado»" },
+      Timestamp: { fromMillis: (ms) => ({ _ms: ms }) },
+    };
+  }
   if (id === "firebase-admin/storage") return { getDownloadURL: async () => "https://exemplo/audio.mp3" };
   if (id === "firebase-functions/v2/https") return { onRequest: (_opts, h) => h };
   if (id === "express") {
