@@ -260,8 +260,26 @@ const LOTES = [
     //
     // Não é o produto: em produção um recarregamento sem rede é servido pelo
     // app shell, que é exatamente para isso que ele existe. É o servidor de
-    // desenvolvimento. Medido: o teste sozinho passa, a spec inteira passa
-    // 13/13, e só falha quando divide o servidor com os outros cinco arquivos.
+    // desenvolvimento.
+    //
+    // ——— Por que o lote próprio não bastou (Fase 5.4B) ———
+    //
+    // A separação reduziu a frequência e não eliminou a causa: o HMR continua
+    // ligado, e continua decidindo recarregar. Medido em seis execuções do
+    // lote SOZINHO, metade em cada lado da 5.4B:
+    //
+    //   commit 29dbb32 (antes da fase):  1 verde, 2 vermelhos
+    //   commit ec70bc6 (código da fase): 2 verdes, 1 vermelho
+    //
+    // Três vermelhos em seis, com a mesma assinatura das três linhas acima e
+    // a mesma tela branca no screenshot. A instabilidade não é da fase — e não
+    // é do produto —, mas era uma moeda jogada em toda regressão.
+    //
+    // O conserto é o mesmo que o `offline-app-shell` já usava, e pelo mesmo
+    // motivo: rodar contra a build de produção, onde não existe HMR para
+    // recarregar nada. Não é afrouxar asserção nem aumentar prazo; é tirar do
+    // caminho o único processo que mexia na página sem ninguém pedir.
+    producao: true,
     arquivos: ["tests/e2e/offline-conflitos.spec.ts"],
   },
   {
