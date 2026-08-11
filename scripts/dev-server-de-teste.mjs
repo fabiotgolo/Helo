@@ -60,6 +60,23 @@ if (process.argv.includes("--ditado")) {
     argumento("provedor", "http://127.0.0.1:4599/v1/speech-to-text");
 }
 
+if (process.argv.includes("--storage")) {
+  // Para `test:midia:autorizacao` (Fase 5.4B): o servidor precisa LER objetos
+  // do Storage para entregar o áudio da frase. Sem esta variável o Admin SDK
+  // procuraria o bucket de produção — e a suíte, que grava no emulador, veria
+  // 404 em tudo e passaria por motivo errado.
+  //
+  // O emulador de Storage é o de `firebase.test.json` (porta 9199).
+  //
+  // `--storage` é uma CHAVE, não uma opção com valor: o endereço, quando
+  // precisa ser outro, vem em `--storage-host`. Ler o valor logo depois de
+  // `--storage` com o helper de opção fazia `STORAGE_EMULATOR_HOST` virar
+  // "--banco" quando os dois vinham juntos na linha — e o servidor então
+  // procurava os objetos num endereço que não existe, respondendo 404 a tudo.
+  declarado.STORAGE_EMULATOR_HOST = argumento("storage-host", "http://127.0.0.1:9199");
+  declarado.FIREBASE_STORAGE_BUCKET = argumento("balde", "helo-app-7fbf8.firebasestorage.app");
+}
+
 const ambiente = ambienteSemProvedorReal(process.env, declarado, "servidor de suítes HTTP");
 
 if (BANCO === "helo-db") {
@@ -71,6 +88,7 @@ if (BANCO === "helo-db") {
 
 console.log(
   `servidor de teste · porta ${PORTA} · emulador ${EMULADOR} · banco ${BANCO}\n` +
+    `storage: ${ambiente.STORAGE_EMULATOR_HOST ?? "produção (nenhum objeto será lido)"}\n` +
     `provedor ElevenLabs: ${ambiente[VARIAVEL_DA_CHAVE] ? "chave de teste declarada" : "NEUTRALIZADO"}`
 );
 

@@ -187,21 +187,26 @@ secao("3. ditado: retenção zero e desligado por omissão");
 }
 
 // ——— 4. URLs duráveis ———
-secao("4. URL durável de Storage só nas Cloud Functions");
+//
+// A 5.4B fechou o R-04 tirando `getDownloadURL` do produto inteiro. Ele não é
+// mais "só nas Functions": ele não existe. Um reaparecimento seria a volta da
+// URL pública por posse de token, e é isso que esta seção impede.
+secao("4. nenhuma URL durável de Storage é emitida pelo produto");
 {
-  const geram = FONTES.filter((f) => /getDownloadURL/.test(codigoDe(f)));
+  const geram = FONTES.filter((f) => /getDownloadURL|getSignedUrl|makePublic\(/.test(codigoDe(f)));
   checa(
-    "getDownloadURL só existe em functions/index.js",
-    geram.length === 1 && geram[0] === "functions/index.js",
-    `— também em ${geram.filter((f) => f !== "functions/index.js").join(", ")}`
+    "ninguém emite download URL, signed URL ou torna objeto público",
+    geram.length === 0,
+    `— em ${geram.join(", ")}`
   );
-  // O caminho de exclusão da frase é o único ponto que apaga o MP3 da voz
-  // clonada. Ele existe hoje; a 5.4B vai mexer no resto do ciclo de vida, e
-  // este é o pedaço que não pode desaparecer no caminho.
   const frases = codigoDe("lib/favorite-phrases.ts");
   checa(
     "excluir uma frase apaga o áudio dela no Storage",
-    /deleteFavoritePhrase[\s\S]*?getStorage\(\)\.bucket\(\)\.file\(storagePath\)\.delete/.test(frases)
+    /deleteFavoritePhrase[\s\S]*?descartaMidiaDaFrase/.test(frases)
+  );
+  checa(
+    "o tipo devolvido ao cliente não carrega endereço, só um booleano",
+    /hasAudio: boolean/.test(frases) && !/audioUrl:\s*string/.test(frases)
   );
 }
 
@@ -215,6 +220,19 @@ secao("5. no-store onde a resposta não pode ser guardada");
   ]) {
     checa(`${rota} responde no-store`, /"Cache-Control": "no-store"/.test(codigoDe(rota)));
   }
+  // A voz clonada pré-sintetizada segue a mesma régua da voz sintetizada na
+  // hora: `private, no-store`. A música aceita revalidação obrigatória em vez
+  // disso, e a diferença é sobre tamanho de arquivo, não sobre sigilo.
+  checa(
+    "o áudio da frase do paciente é private, no-store",
+    /cacheControl: "private, no-store"/.test(codigoDe("app/api/favorite-phrases/audio/route.ts"))
+  );
+  checa(
+    "a música é private e revalidada, nunca public",
+    /cacheControl: "private, max-age=0, must-revalidate"/.test(
+      codigoDe("app/api/patients/[patientId]/playlist/audio/route.ts")
+    )
+  );
 }
 
 // ——— 6. Os nomes que o painel pode chamar ———
@@ -264,27 +282,52 @@ secao("6. o inventário de client tools está congelado");
   checa("os aliases de parâmetro do actionId continuam num ponto só", Boolean(aliasesDeAcao));
 }
 
-// ——— 7. O que a auditoria mediu e a 5.4B vai mexer ———
+// ——— 7. O que a 5.4B fechou, e o que continua aberto ———
 //
-// Não é uma aprovação: é um marco. Se algum destes deixar de ser verdade, o
-// texto da 5.4A passou a descrever outro código, e o plano derivado dele
-// precisa ser refeito antes de executado.
-secao("7. os fatos que sustentam o plano da 5.4B/5.4C");
+// Metade desta seção mudou de sinal na 5.4B: o que era "o defeito ainda está
+// aqui, e é por isso que o plano existe" virou "o defeito saiu, e é por isso
+// que ele não pode voltar". A outra metade continua igual, porque pertence à
+// 5.4C.
+secao("7. o que a 5.4B fechou (e o que segue para a 5.4C)");
 {
   const funcoes = codigoDe("functions/index.js");
   checa(
-    "R-04: o áudio da frase ainda é persistido com URL de download",
-    /phrases_audio\/\$\{phraseId\}\.mp3/.test(funcoes) &&
-      /audioUrl = await getDownloadURL\(file\)/.test(funcoes)
+    "R-04: a Function grava caminho privado, não URL",
+    /caminhoDeAudioDaFrase\(patientId, phraseId, audioId\)/.test(funcoes) &&
+      !/getDownloadURL/.test(funcoes)
   );
   checa(
-    "R-07: o prompt da música ainda vai para o log do servidor",
-    /console\.log\("Received music payload:"/.test(funcoes)
+    "R-04b: o objeto novo nasce antes da troca, e some se a troca falhar",
+    /catch \(falhaNoDocumento\)[\s\S]{0,200}?file\.delete/.test(funcoes)
+  );
+  // A varredura exaustiva dos logs — que sabe distinguir `prompt.length` de
+  // `prompt` — vive em `test:midia:privada` §11, onde a contagem de parênteses
+  // delimita cada chamada. Aqui basta o marco: a linha que despejava o payload
+  // não existe mais, e o que ficou no lugar é medida.
+  checa(
+    "R-07a: o payload do pedido não vai mais para o log",
+    !/Received music payload/.test(funcoes) && /caracteresNoPrompt: prompt\.length/.test(funcoes)
   );
   checa(
-    "R-07: o corpo bruto da recusa do provedor ainda é registrado",
-    /response: responseText\.slice/.test(funcoes)
+    "R-07b: o corpo do provedor não é lido nem registrado",
+    !/elevenLabsResponse\.text\(\)/.test(funcoes) && /MUSIC_PROVIDER_REJECTED/.test(funcoes)
   );
+  checa(
+    "A-12: música nova nasce sob o paciente",
+    /caminhoDeMusica\(patientId, trackRef\.id\)/.test(funcoes) &&
+      !/`musics\/\$\{Date\.now\(\)\}/.test(funcoes)
+  );
+  checa(
+    "R-14: o resultado da tool de música não carrega endereço",
+    !/return \{[\s\S]{0,400}?audioUrl,/.test(codigoDe("components/helo-agent-provider.tsx"))
+  );
+  checa(
+    "storage.rules está versionado e ligado às duas configurações",
+    /"storage"/.test(readFileSync(resolve(RAIZ, "firebase.json"), "utf8")) &&
+      /"storage"/.test(readFileSync(resolve(RAIZ, "firebase.test.json"), "utf8"))
+  );
+
+  // ——— o que a 5.4B NÃO absorveu, de propósito ———
   checa(
     "R-12: o override de voz do Agent continua morto (o pedido sempre desabilita)",
     /requestToken\(true\)/.test(codigoDe("lib/voice/agent-session-lifecycle.ts"))
@@ -293,13 +336,8 @@ secao("7. os fatos que sustentam o plano da 5.4B/5.4C");
   // conta: ela é o 429 que a ElevenLabs devolve, não um limite que o Helo
   // aplique. As fronteiras de palavra separam as duas coisas.
   checa(
-    "A-10: nenhum limitador de taxa próprio existe no produto",
+    "A-10: nenhum limitador de taxa próprio existe no produto (5.4C)",
     !FONTES.some((f) => /\b(rateLimit|rateLimiter|throttle|limitaTaxa)\b/i.test(codigoDe(f)))
-  );
-  checa(
-    "o repositório continua sem storage.rules versionado",
-    !FONTES.includes("storage.rules") &&
-      !/\"storage\"/.test(readFileSync(resolve(RAIZ, "firebase.json"), "utf8"))
   );
 }
 
