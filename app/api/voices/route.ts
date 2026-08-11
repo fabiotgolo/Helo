@@ -1,4 +1,5 @@
 import { requireUser, requirePatientAccess } from "@/lib/auth";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
 import { hasPermission } from "@/lib/access-types";
 import {
   getDefaultPlatformVoice,
@@ -15,9 +16,15 @@ import {
 //
 // Com ?patientId= (exige vínculo), inclui o estado da voz DAQUELE paciente:
 // clone existe? qual a fonte escolhida? o usuário pode alterá-la?
+//
+// A-10b: é um GET, e a resposta com `?patientId=` carrega estado de voz de UMA
+// pessoa. Sem `Cache-Control` explícito, o Next 16 não emite nenhum (medido na
+// 5.4C), e um intermediário poderia guardá-la. Sucesso e recusa saem com
+// `no-store` — a recusa também conta algo: quem a recebe fica sabendo que
+// aquele paciente existe e que ele não o alcança.
 export async function GET(request: Request) {
   const auth = await requireUser(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const { user } = auth;
 
   const [voices, def] = await Promise.all([
@@ -47,7 +54,7 @@ export async function GET(request: Request) {
     // Vínculo ativo verificado no servidor — o estado de voz de um paciente
     // nunca sai para quem não o alcança.
     const patientAuth = await requirePatientAccess(request, patientId);
-    if (patientAuth instanceof Response) return patientAuth;
+    if (patientAuth instanceof Response) return comPoliticaSemCache(patientAuth);
     const state = await getPatientVoiceState(patientId);
     payload.patient = {
       patientId,
@@ -66,5 +73,5 @@ export async function GET(request: Request) {
     };
   }
 
-  return Response.json(payload);
+  return jsonSemCache(payload);
 }

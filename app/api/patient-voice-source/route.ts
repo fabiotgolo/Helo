@@ -8,6 +8,7 @@ import {
   getPatientVoiceState,
   getPlatformVoice,
 } from "@/lib/voice-catalog";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
 
 // Fonte da voz das FALAS DO PACIENTE (Emergência, mensagens confirmadas):
 //   "clone"    → a voz clonada DESTE paciente (precisa existir);
@@ -26,13 +27,13 @@ export async function POST(request: Request) {
   };
   const patientId = Number(body.patientId);
   if (!patientId) {
-    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+    return jsonSemCache({ error: "patientId obrigatório" }, { status: 400 });
   }
   // Autorização REAL no servidor: manipular o patientId no cliente não
   // concede acesso — o vínculo é verificado aqui. A permissão fina depende
   // de o paciente ter clone ou não (avaliada logo abaixo, já com o estado).
   const auth = await requirePatientAccess(request, patientId);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
 
   const state = await getPatientVoiceState(patientId);
 
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
     !state.hasClone ||
     hasPermission(auth.link, "selectPatientVoiceSource");
   if (!permitted) {
-    return Response.json(
+    return jsonSemCache(
       { error: "permissão necessária: escolher a voz das falas do paciente" },
       { status: 403 }
     );
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
   if (body.source === "clone") {
     // Nunca oferecer (nem aceitar) um clone inexistente.
     if (!state.hasClone) {
-      return Response.json(
+      return jsonSemCache(
         { error: "voz clonada não configurada para este paciente" },
         { status: 422 }
       );
@@ -63,14 +64,14 @@ export async function POST(request: Request) {
   } else if (body.source === "platform") {
     const chosen = body.platformVoiceId?.trim();
     if (!chosen) {
-      return Response.json(
+      return jsonSemCache(
         { error: "platformVoiceId obrigatório para fonte platform" },
         { status: 400 }
       );
     }
     const voice = await getPlatformVoice(chosen);
     if (!voice || !voice.enabled) {
-      return Response.json(
+      return jsonSemCache(
         { error: "voz inexistente ou não aprovada" },
         { status: 422 }
       );
@@ -78,7 +79,7 @@ export async function POST(request: Request) {
     updates[PATIENT_SETTING_KEYS.patientVoiceSource] = "platform";
     updates[PATIENT_SETTING_KEYS.patientVoicePlatformId] = chosen;
   } else {
-    return Response.json({ error: "source inválida" }, { status: 400 });
+    return jsonSemCache({ error: "source inválida" }, { status: 400 });
   }
 
   await setPatientSettings(patientId, updates);
@@ -101,5 +102,5 @@ export async function POST(request: Request) {
       audiosInvalidados: String(invalidadas),
     },
   });
-  return Response.json({ ok: true });
+  return jsonSemCache({ ok: true });
 }

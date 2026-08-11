@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
 import { resolveFavoritePhraseAudio } from "@/lib/favorite-phrases";
 import { entregaMidia } from "@/lib/midia-privada";
 
@@ -42,24 +43,24 @@ export async function GET(request: Request) {
   const phraseId = (url.searchParams.get("phraseId") ?? "").trim();
 
   if (!Number.isInteger(patientId) || patientId <= 0) {
-    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+    return jsonSemCache({ error: "patientId obrigatório" }, { status: 400 });
   }
   // Ids do Firestore são alfanuméricos. Recusar o resto aqui é barato e evita
   // que uma string estranha chegue a virar caminho de documento.
   if (!/^[A-Za-z0-9_-]{1,150}$/.test(phraseId)) {
-    return Response.json({ error: "phraseId obrigatório" }, { status: 400 });
+    return jsonSemCache({ error: "phraseId obrigatório" }, { status: 400 });
   }
 
   // Mesma régua da leitura da frase em si: ver as frases do paciente.
   const auth = await requirePatientAccess(request, patientId, "viewActivities");
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
 
   const caminho = await resolveFavoritePhraseAudio(patientId, phraseId);
   if (!caminho) {
     // Um só código para "a frase não existe", "ela não tem áudio" e "o caminho
     // guardado não pertence a este paciente". A distinção não interessa a quem
     // pergunta, e distinguir contaria o que existe do outro lado.
-    return Response.json({ error: "mídia não encontrada" }, { status: 404 });
+    return jsonSemCache({ error: "mídia não encontrada" }, { status: 404 });
   }
 
   return entregaMidia({

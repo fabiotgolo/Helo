@@ -1,4 +1,5 @@
 import { requirePatientAccess } from "@/lib/auth";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
 import { firestore } from "@/lib/firestore";
 import { caminhoDaFaixa } from "@/lib/playlist";
 import { entregaMidia } from "@/lib/midia-privada";
@@ -22,16 +23,16 @@ export async function GET(
   const { patientId: cru } = await params;
   const patientId = Number(cru);
   if (!Number.isInteger(patientId) || patientId <= 0) {
-    return Response.json({ error: "patientId inválido" }, { status: 400 });
+    return jsonSemCache({ error: "patientId inválido" }, { status: 400 });
   }
   const id = (new URL(request.url).searchParams.get("id") ?? "").trim();
   if (!/^[A-Za-z0-9_-]{1,150}$/.test(id)) {
-    return Response.json({ error: "id obrigatório" }, { status: 400 });
+    return jsonSemCache({ error: "id obrigatório" }, { status: 400 });
   }
 
   // Mesma régua da listagem da playlist.
   const auth = await requirePatientAccess(request, patientId, "viewMetrics");
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
 
   const doc = await firestore
     .collection("patients")
@@ -40,11 +41,11 @@ export async function GET(
     .doc(id)
     .get();
   if (!doc.exists) {
-    return Response.json({ error: "mídia não encontrada" }, { status: 404 });
+    return jsonSemCache({ error: "mídia não encontrada" }, { status: 404 });
   }
   const faixa = caminhoDaFaixa(patientId, doc.data() ?? {});
   if (!faixa) {
-    return Response.json({ error: "mídia não encontrada" }, { status: 404 });
+    return jsonSemCache({ error: "mídia não encontrada" }, { status: 404 });
   }
 
   return entregaMidia({

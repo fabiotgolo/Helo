@@ -4,6 +4,7 @@ import { getPatient, getPatientSetting, setPatientSettings } from "@/lib/store";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { validateElevenLabsVoice } from "@/lib/voice-catalog";
 import { invalidateFavoritePhraseAudio } from "@/lib/favorite-phrases";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
 
 // Voz CLONADA do paciente — atribuição EXCLUSIVA do Admin.
 // Nenhum outro papel (cuidador, profissional, familiar, paciente) informa
@@ -19,7 +20,7 @@ function mask(id: string): string {
 /** Atribuir ou substituir o clone do paciente. */
 export async function POST(request: Request) {
   const auth = await requireAdmin(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const body = (await request.json()) as {
     patientId?: number;
     elevenLabsVoiceId?: string;
@@ -28,18 +29,18 @@ export async function POST(request: Request) {
   const patientId = Number(body.patientId);
   const voiceId = body.elevenLabsVoiceId?.trim();
   if (!patientId || !voiceId) {
-    return Response.json(
+    return jsonSemCache(
       { error: "patientId e elevenLabsVoiceId são obrigatórios" },
       { status: 400 }
     );
   }
   const patient = await getPatient(patientId);
   if (!patient) {
-    return Response.json({ error: "paciente não encontrado" }, { status: 404 });
+    return jsonSemCache({ error: "paciente não encontrado" }, { status: 404 });
   }
   const validation = await validateElevenLabsVoice(voiceId);
   if (validation.status === "invalid") {
-    return Response.json(
+    return jsonSemCache(
       { error: "voiceId não encontrado na conta ElevenLabs" },
       { status: 422 }
     );
@@ -77,21 +78,21 @@ export async function POST(request: Request) {
       audiosInvalidados: String(invalidadas),
     },
   });
-  return Response.json({ ok: true, validation: validation.status });
+  return jsonSemCache({ ok: true, validation: validation.status });
 }
 
 /** Remover o vínculo do clone (o paciente volta ao catálogo aprovado). */
 export async function DELETE(request: Request) {
   const auth = await requireAdmin(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const { patientId: rawId } = (await request.json()) as { patientId?: number };
   const patientId = Number(rawId);
   if (!patientId) {
-    return Response.json({ error: "patientId obrigatório" }, { status: 400 });
+    return jsonSemCache({ error: "patientId obrigatório" }, { status: 400 });
   }
   const previous = await getPatientSetting(patientId, PATIENT_SETTING_KEYS.voiceId);
   if (!previous) {
-    return Response.json({ error: "paciente sem clone atribuído" }, { status: 404 });
+    return jsonSemCache({ error: "paciente sem clone atribuído" }, { status: 404 });
   }
   // Sem clone, a fonte "clone" deixa de existir: normaliza para o catálogo
   // (a resolução no servidor já cai na voz padrão aprovada).
@@ -112,5 +113,5 @@ export async function DELETE(request: Request) {
     entityId: String(patientId),
     metadata: { before: mask(previous), after: "—", audiosInvalidados: String(invalidadas) },
   });
-  return Response.json({ ok: true });
+  return jsonSemCache({ ok: true });
 }

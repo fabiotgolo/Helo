@@ -2,6 +2,7 @@ import { requireUser } from "@/lib/auth";
 import { logAudit, setUserHeloVoicePreference, setUserPlatformVoice } from "@/lib/access";
 import type { HeloVoicePreference } from "@/lib/access-types";
 import { getPlatformVoice } from "@/lib/voice-catalog";
+import { comPoliticaSemCache, jsonSemCache } from "@/lib/cache-policy";
 
 // Preferência de voz da PLATAFORMA do próprio usuário.
 // Escopo: SÓ a experiência dele — nunca altera a voz padrão global nem a
@@ -12,7 +13,7 @@ import { getPlatformVoice } from "@/lib/voice-catalog";
 
 export async function POST(request: Request) {
   const auth = await requireUser(request);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) return comPoliticaSemCache(auth);
   const { user } = auth;
   const { platformVoiceId, heloVoicePreference } = (await request.json()) as {
     platformVoiceId?: string | null;
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
   // catálogo histórico para manter a seleção simples e independente do paciente.
   if (heloVoicePreference !== undefined) {
     if (heloVoicePreference !== "female" && heloVoicePreference !== "male") {
-      return Response.json({ error: "preferência de voz inválida" }, { status: 400 });
+      return jsonSemCache({ error: "preferência de voz inválida" }, { status: 400 });
     }
     await setUserHeloVoicePreference(user.id, heloVoicePreference as HeloVoicePreference);
     await logAudit({
@@ -33,7 +34,7 @@ export async function POST(request: Request) {
       entityId: user.id,
       metadata: { before: user.heloVoicePreference ?? "female", after: heloVoicePreference },
     });
-    return Response.json({ ok: true, heloVoicePreference });
+    return jsonSemCache({ ok: true, heloVoicePreference });
   }
   // null/"" limpa a preferência — volta à voz padrão definida pelo Admin.
   const chosen = platformVoiceId?.trim() || null;
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
     // Só vozes ATIVAS do catálogo aprovado são elegíveis — um id manipulado
     // no cliente não passa daqui.
     if (!voice || !voice.enabled) {
-      return Response.json(
+      return jsonSemCache(
         { error: "voz inexistente ou não aprovada" },
         { status: 422 }
       );
@@ -60,5 +61,5 @@ export async function POST(request: Request) {
       after: chosen ?? "padrão",
     },
   });
-  return Response.json({ ok: true });
+  return jsonSemCache({ ok: true });
 }
