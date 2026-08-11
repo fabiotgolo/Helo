@@ -447,6 +447,25 @@ foi removido.
 
 ---
 
+## 13b. Matriz de hardening
+
+| Superfície | Auth | Patient access | Rate limit | Cache | Erro sanitizado | Log sanitizado | Timeout do provedor | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/tts` | `requireUser` | sim + **SpeechGrant** | 60/min | `no-store` | sim | sim | 15 s até cabeçalhos | **fechado** |
+| `/api/voice/grant` | cookie | sim | 90/min | `no-store` | sim | sim | — (não chama provedor) | **fechado** |
+| `/api/voice/dictation` | `requireUser`/cookie | sim (via header) | 20/min | `no-store` | sim | sim | 20 s | **fechado**, desligado em produção |
+| `/api/helo/conversation-token` | cookie | sim | 12/5min | `no-store` | sim | sim | 10 s total | **fechado** |
+| `/api/helo/client-tools` | cookie | sim, com permissão | — (por decisão) | `no-store` | sim | sim | — | **fechado** |
+| síntese de frase (Function) | cookie `__session` | sim + `createActivities` | 30/h por paciente | objeto `private, no-store` | sim | sim | 20 s | **fechado** |
+| áudio privado da frase | cookie | sim + `viewActivities` | — (só lê o que já existe) | `private, no-store` | sim | sim | — | **fechado** (5.4B) |
+| geração de música (Function) | cookie `__session` | sim + `createSession` | **6/h** | objeto `private, max-age=0` | sim | sim | **nenhum**, deliberado | **fechado** |
+| playback de música | cookie | sim + `viewMetrics` | — | `private, max-age=0, must-revalidate` | sim | sim | — | **fechado** (5.4B) |
+| `/webhook/generate_music` | cookie `__session` | sim | **herda** o da música | — (POST) | sim | sim | nenhum | **não verificado externamente** |
+| `/api/admin/voices` | `requireAdmin` | — | 60/min | `no-store` | sim | sim | 8 s | **fechado** |
+| `/api/admin/patient-voice` | `requireAdmin` | — | — (usa o de `voices` na validação) | `no-store` | sim | sim, com id mascarado | 8 s | **fechado** |
+
+---
+
 ## 14–18. Endpoints, um a um
 
 **`/api/helo/conversation-token`** — `no-store` acrescentado, limite de 12/5min,
