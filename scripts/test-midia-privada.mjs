@@ -208,6 +208,10 @@ secao("4. nenhuma rota aceita caminho vindo do navegador");
     /caminhoDaFaixa\(patientId, doc\.data\(\)/.test(musica)
   );
   checa(
+    "…e entrega do bucket que aquele documento indica",
+    /balde: faixa\.balde/.test(musica)
+  );
+  checa(
     "os dois ids são conferidos contra um formato antes de virar consulta",
     /\[A-Za-z0-9_-\]\{1,150\}/.test(frase) && /\[A-Za-z0-9_-\]\{1,150\}/.test(musica)
   );
@@ -398,7 +402,7 @@ secao("10. o legado continua tocando pela porta certa");
 {
   checa(
     "uma faixa antiga resolve pelo storagePath global",
-    caminhoDaFaixa(7, { storagePath: "musics/1700000000000-rock.mp3" }) ===
+    caminhoDaFaixa(7, { storagePath: "musics/1700000000000-rock.mp3" })?.caminho ===
       "musics/1700000000000-rock.mp3"
   );
   checa(
@@ -406,7 +410,20 @@ secao("10. o legado continua tocando pela porta certa");
     caminhoDaFaixa(7, {
       audioUrl:
         "https://firebasestorage.googleapis.com/v0/b/helo.appspot.com/o/musics%2F123.mp3?alt=media&token=abc",
-    }) === "musics/123.mp3"
+    })?.caminho === "musics/123.mp3"
+  );
+  // O bucket da URL legada não é decoração: um objeto gravado antes da
+  // migração de *.appspot.com vive nele, e não no bucket configurado hoje.
+  checa(
+    "…e leva junto o bucket que a URL legada nomeia",
+    caminhoDaFaixa(7, {
+      audioUrl:
+        "https://firebasestorage.googleapis.com/v0/b/helo.appspot.com/o/musics%2F123.mp3?alt=media&token=abc",
+    })?.balde === "helo.appspot.com"
+  );
+  checa(
+    "sem URL legada, o bucket é o configurado (não vem no retorno)",
+    caminhoDaFaixa(7, { storagePath: "patients/7/musics/x.mp3" })?.balde === undefined
   );
   checa(
     "uma URL apontando para fora do namespace de música é recusada",

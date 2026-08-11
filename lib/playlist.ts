@@ -109,13 +109,16 @@ export function caminhoNaUrlLegada(value: string): { bucket?: string; path: stri
 export function caminhoDaFaixa(
   patientId: number,
   value: FirebaseFirestore.DocumentData
-): string | null {
-  const candidato =
-    readString(value.storagePath) ||
-    caminhoNaUrlLegada(readString(value.audioUrl))?.path ||
-    "";
+): { caminho: string; balde?: string } | null {
+  const naUrl = caminhoNaUrlLegada(readString(value.audioUrl));
+  const candidato = readString(value.storagePath) || naUrl?.path || "";
   if (!candidato || !caminhoDeMusicaEhValido(candidato, patientId)) return null;
-  return candidato;
+  // O bucket vem da URL legada quando ela existe — e só de lá. Um objeto
+  // gravado antes da migração de `*.appspot.com` para `*.firebasestorage.app`
+  // vive no bucket que a URL nomeia, não no configurado hoje. Era o que a
+  // rota de exclusão já fazia antes desta fase, e perder isso faria a música
+  // antiga sumir da playlist sem que ninguém soubesse por quê.
+  return naUrl?.bucket ? { caminho: candidato, balde: naUrl.bucket } : { caminho: candidato };
 }
 
 export function toPlaylistTrack(id: string, value: FirebaseFirestore.DocumentData): PatientPlaylistTrack | null {

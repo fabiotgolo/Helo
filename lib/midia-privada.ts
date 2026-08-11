@@ -47,11 +47,18 @@ import { randomBytes } from "node:crypto";
  * configura esse padrão). Duas formas de responder à mesma pergunta é uma a
  * mais: agora é aqui, e é uma só.
  */
-export function baldeDaHelo() {
-  const nome =
+export function baldeDaHelo(nome?: string) {
+  // O nome explícito existe por um motivo só, e ele é histórico: uma URL
+  // pública gravada antes desta fase carrega dentro de si o bucket em que o
+  // objeto foi criado, e esse bucket pode não ser o configurado hoje (a
+  // migração do `*.appspot.com` para o `*.firebasestorage.app` aconteceu na
+  // vida deste projeto). Ignorar o bucket da URL legada faria a música antiga
+  // sumir da playlist — e faria a exclusão dela apagar nada, em silêncio.
+  const escolhido =
+    nome?.trim() ||
     process.env.FIREBASE_STORAGE_BUCKET?.trim() ||
     "helo-app-7fbf8.firebasestorage.app";
-  return getStorage().bucket(nome);
+  return getStorage().bucket(escolhido);
 }
 
 /** Identificador opaco de objeto. Não deriva de texto, nome nem relógio. */
@@ -174,6 +181,8 @@ export function interpretaRange(
 export interface EntregaDeMidia {
   /** Caminho JÁ validado contra o namespace do paciente. */
   caminho: string;
+  /** Bucket, quando o recurso é legado e a URL antiga nomeava outro. */
+  balde?: string;
   contentType: string;
   /** O cabeçalho `Range` da requisição, quando houver. */
   range: string | null;
@@ -196,7 +205,7 @@ export interface EntregaDeMidia {
  * funcionar, e a 5.4B não é uma mudança de experiência.
  */
 export async function entregaMidia(entrega: EntregaDeMidia): Promise<Response> {
-  const arquivo = baldeDaHelo().file(entrega.caminho);
+  const arquivo = baldeDaHelo(entrega.balde).file(entrega.caminho);
   let tamanho: number;
   try {
     const [meta] = await arquivo.getMetadata();
@@ -294,9 +303,9 @@ function comPrazo<T>(promessa: Promise<T>, valorSePassar: T): Promise<T> {
 }
 
 /** Apaga um objeto. Devolve se conseguiu; nunca lança, nunca pendura. */
-export async function apagaObjeto(caminho: string): Promise<boolean> {
+export async function apagaObjeto(caminho: string, balde?: string): Promise<boolean> {
   return comPrazo(
-    baldeDaHelo()
+    baldeDaHelo(balde)
       .file(caminho)
       .delete({ ignoreNotFound: true })
       .then(() => true)

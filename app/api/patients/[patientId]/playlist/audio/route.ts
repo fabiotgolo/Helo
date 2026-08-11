@@ -42,13 +42,14 @@ export async function GET(
   if (!doc.exists) {
     return Response.json({ error: "mídia não encontrada" }, { status: 404 });
   }
-  const caminho = caminhoDaFaixa(patientId, doc.data() ?? {});
-  if (!caminho) {
+  const faixa = caminhoDaFaixa(patientId, doc.data() ?? {});
+  if (!faixa) {
     return Response.json({ error: "mídia não encontrada" }, { status: 404 });
   }
 
   return entregaMidia({
-    caminho,
+    caminho: faixa.caminho,
+    balde: faixa.balde,
     contentType: "audio/mpeg",
     range: request.headers.get("range"),
     // `private` mantém a faixa fora de cache compartilhado; a revalidação

@@ -77,10 +77,10 @@ export async function DELETE(
   // arquivo que o cuidador ouve é o arquivo que a exclusão apaga, por
   // construção. A resolução do bucket também deixou de ser adivinhada aqui —
   // ela mora em `lib/midia-privada.ts`, num lugar só.
-  const caminho = caminhoDaFaixa(patientId, data);
-  if (!caminho) {
+  const faixa = caminhoDaFaixa(patientId, data);
+  if (!faixa) {
     console.warn("[PLAYLIST] faixa sem caminho de áudio resolvível", { songId: id });
-  } else if (!(await apagaObjeto(caminho))) {
+  } else if (!(await apagaObjeto(faixa.caminho, faixa.balde))) {
     // O documento do Firestore é a fonte de verdade da playlist. Um MP3
     // ausente ou uma falha transitória do Storage não pode impedir que o
     // cuidador remova uma faixa do histórico. O log leva o id da faixa e mais
