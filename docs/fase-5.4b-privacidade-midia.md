@@ -494,6 +494,19 @@ Ler o legado pela rota nova é deliberado: o documento já vive sob o paciente, 
 recusar só tiraria o áudio de quem tem direito a ele — **sem tirar nada de quem
 tem a URL antiga**.
 
+### O bucket também é legado
+
+A URL pública antiga carrega, dentro dela, o **bucket** em que o objeto foi
+criado — e ele pode não ser o configurado hoje: a migração de `*.appspot.com`
+para `*.firebasestorage.app` aconteceu na vida deste projeto, e a rota de
+exclusão da playlist já extraía esse bucket da URL por causa disso.
+
+Centralizar a resolução do bucket fez essa capacidade se perder por um
+momento, e o efeito teria sido silencioso: música antiga sumindo da playlist
+(404 na rota nova) e a exclusão dela apagando nada, sem erro e sem log.
+`caminhoDaFaixa` devolve caminho **e** bucket, e as duas rotas — a que entrega e
+a que apaga — usam o mesmo par.
+
 **O navegador não recebe mais nenhuma URL pública, nem para conteúdo legado.** O
 tipo `FavoritePhrase` não tem o campo, e `PatientPlaylistTrack` também não. Isso
 vale desde o primeiro instante, sem esperar migração.
@@ -763,11 +776,11 @@ Decisão adiada para a **5.4C**, depois do checklist do painel
 
 ## 32. Testes
 
-### Novos — 183 asserções
+### Novos — 189 asserções
 
 | Suíte | Asserções | O que ela responde |
 | --- | --- | --- |
-| `test:midia:privada` | **94** | estrutural, rodando o código de produção: nenhuma URL pública é emitida; o caminho carrega o paciente e não carrega conteúdo; um caminho estragado não vira leitura de outro lugar; nenhuma rota aceita caminho do navegador; a aritmética do `Range`; a ordem que impede o órfão; o prazo da limpeza; e o que a fase não podia tocar |
+| `test:midia:privada` | **97** | estrutural, rodando o código de produção: nenhuma URL pública é emitida; o caminho carrega o paciente e não carrega conteúdo; um caminho estragado não vira leitura de outro lugar; nenhuma rota aceita caminho do navegador; a aritmética do `Range`; a ordem que impede o órfão; o prazo da limpeza; e o que a fase não podia tocar |
 | `test:midia:autorizacao` | **35** | HTTP — a prova central do R-04 |
 | `test:storage:rules` | **17** | comportamento das regras contra o emulador |
 | `test:migracao:midia` | **40** | dry-run, apply, morte da URL legada, idempotência, guardas |
