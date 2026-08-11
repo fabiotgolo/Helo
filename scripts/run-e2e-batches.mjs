@@ -201,6 +201,19 @@ const LOTES = [
     // nenhuma chamada ao provedor acontece.
   },
   {
+    nome: "agent-async-stale",
+    titulo: "Efeito tardio depois que o contexto mudou: L1, L2 e L3 (5.3C)",
+    arquivos: ["tests/e2e/agent-async-stale.spec.ts"],
+    // Em modo DEV, como os dois lotes acima e pelo mesmo motivo: `__heloAgentTool`
+    // e `__heloAgentContext` só existem fora de produção, e é o dispatcher REAL
+    // que roda por trás deles.
+    //
+    // O determinismo aqui não vem de espera: a resposta do servidor é
+    // interceptada e SEGURADA até o teste soltá-la, com a troca de paciente no
+    // meio. Cada cenário tem o controle positivo ao lado — sem ele, uma
+    // correção que matasse as três funcionalidades também passaria.
+  },
+  {
     nome: "rascunho-persistencia",
     titulo: "O rascunho não se perde na saída: recarga, aba e troca de contexto",
     arquivos: ["tests/e2e/rascunho-persistencia.spec.ts"],

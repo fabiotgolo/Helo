@@ -13,6 +13,7 @@ import { ModalShell } from "@/components/modal-shell";
 import { useHeloDialog } from "@/components/helo-dialog";
 import { useHeloAgent } from "@/components/helo-agent-provider";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
+import { leaseDoPayload } from "@/lib/helo-agent-context";
 import { useHeloScreenContext } from "@/lib/helo-screen-context";
 import type { Gesture } from "@/lib/types";
 import { useHelo } from "@/lib/helo-state";
@@ -671,10 +672,7 @@ export function SessionPlayer({
     const gesturesOn = question || item.gesturesEnabled;
     const fromAgent = (payload?: Record<string, unknown>) => payload?.__source === "agent";
     /** O lease do contexto, quando quem pediu foi o Agent. */
-    const leaseDe = (payload?: Record<string, unknown>) =>
-      typeof payload?.__aindaVale === "function"
-        ? (payload.__aindaVale as () => boolean)
-        : undefined;
+    const leaseDe = leaseDoPayload;
     const pickRun = (optionId: string) => (payload?: Record<string, unknown>) => {
       const g = payload?.gesto;
       if (g !== "sim" && g !== "talvez" && g !== "nao") {

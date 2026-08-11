@@ -194,6 +194,44 @@ export function leaseAindaVale(lease: number): boolean {
  */
 export const CONTEXTO_EXPIRADO = "CONTEXT_EXPIRED" as const;
 
+// ——— A guarda de um efeito tardio (L1, L2, L3) ———
+//
+// O dispatcher protege até o COMEÇO do efeito. Um handler que espera por dentro
+// — criar a sessão, criar a execução da atividade — volta do `await` num mundo
+// que pode não ser mais o dele, e nesse ponto o dispatcher já saiu de cena.
+// Quem alcança essa janela é o próprio handler, e o que ele usa é isto.
+//
+// A guarda não é um mecanismo novo: é a MESMA geração, capturada no mesmo
+// instrumento. A única coisa que ela acrescenta é não obrigar cada handler a
+// escrever as duas linhas — e não obrigar os três a escrevê-las de formas
+// levemente diferentes, que é como um invariante deixa de valer num deles.
+
+/** O verificador que o dispatcher injetou, quando quem pediu foi o Agent. */
+export function leaseDoPayload(
+  payload?: Record<string, unknown>
+): (() => boolean) | undefined {
+  const dado = payload?.__aindaVale;
+  return typeof dado === "function" ? (dado as () => boolean) : undefined;
+}
+
+/**
+ * A guarda para conferir logo antes de um efeito posterior ao `await`.
+ *
+ * Chame no COMEÇO do handler, use no último instante. Quando o pedido veio do
+ * Agent, ela reaproveita o lease do dispatcher — o do instante em que a tool
+ * chegou, que é ainda mais antigo e portanto mais exigente. Quando veio do
+ * dedo de alguém, ela captura o lease de agora: a corrida é a mesma para os
+ * dois, porque quem a abre é o tempo de rede, não a origem do pedido.
+ */
+export function guardaDeContexto(
+  payload?: Record<string, unknown>
+): () => boolean {
+  const doDispatcher = leaseDoPayload(payload);
+  if (doDispatcher) return doDispatcher;
+  const lease = capturaLeaseDoAgent();
+  return () => leaseAindaVale(lease);
+}
+
 /** Só para os testes: zera entre cenários. A geração NUNCA volta atrás. */
 export function reiniciaContextoParaTeste(): void {
   encerraContextoDoAgent();

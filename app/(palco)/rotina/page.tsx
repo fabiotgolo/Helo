@@ -23,6 +23,7 @@ import {
 import { OverlayVeil } from "@/components/overlay-panel";
 import { useHeloAgent } from "@/components/helo-agent-provider";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
+import { guardaDeContexto } from "@/lib/helo-agent-context";
 import { useHeloScreenContext } from "@/lib/helo-screen-context";
 
 // Modo rotina — perguntas, não frases soltas. Cada card é uma PERGUNTA
@@ -80,20 +81,51 @@ export default function RotinaPage() {
     };
   }, []);
 
+  // ——— A sessão de rotina pertence a quem a abriu ———
+  //
+  // `sessionRef` é uma REFERÊNCIA: ela atravessa render, atravessa a troca de
+  // `ensureSession` e atravessava também a troca de paciente. O resultado era
+  // um segundo defeito, irmão do de L2 e de causa diferente: com o contexto
+  // JÁ VÁLIDO em B, `ensureSession()` devolvia na hora a sessão de A, e o
+  // registro seguinte casava a sessão de A com o paciente B. Nenhuma guarda de
+  // lease pega isso — não há espera onde o mundo mude; o mundo já mudou, e a
+  // lembrança é que ficou.
+  //
+  // Esquecer basta. A sessão de A, criada com autorização legítima, permanece
+  // como qualquer sessão aberta e não encerrada — o mesmo que já acontecia ao
+  // sair da tela sem `beforeunload`.
+  useEffect(() => {
+    sessionRef.current = null;
+    sessionPending.current = null;
+  }, [patientId]);
+
   // Abrir a pergunta de um card. A tela exibe a pergunta e o Agent Helo fala a
   // pergunta para o paciente; só a resposta SIM/TALVEZ/NÃO usa a voz do paciente.
   // Interrompe qualquer voz da plataforma em curso e zera a seleção anterior.
   const openQuestionByKey = useCallback(
-    (key: string) => {
+    (key: string, payload?: Record<string, unknown>) => {
       const question = ROUTINE_QUESTIONS_BY_KEY[key];
       if (!question) return;
       console.log("[HELO ROUTINE] question opened", question.key);
+      // ——— O contexto de agora, para conferir depois do await (L2, 5.3C) ———
+      //
+      // Abrir o card é imediato; o EVENTO só é gravado quando a sessão existe,
+      // e criá-la é um round-trip. `patientId` já está congelado no closure —
+      // se o cuidador trocar de paciente nesse meio, o registro tardio
+      // descreveria a tela de A com a autoridade de B.
+      const aindaVale = guardaDeContexto(payload);
       stop();
       lastSpokenQuestionKey.current = "";
       setOpenKey(key);
       setSelected(null);
       setFeedback(null);
       void ensureSession().then((sid) => {
+        if (!aindaVale()) {
+          // A sessão de rotina, se foi criada, permanece — ela nasceu
+          // autorizada. O que não acontece é o registro fora de hora.
+          console.warn("[HELO ROUTINE] contexto expirou antes do registro — nada foi gravado");
+          return;
+        }
         logEvent({
           sessionId: sid,
           patientId,
@@ -306,7 +338,7 @@ export default function RotinaPage() {
       label: q.question,
       type: "routineQuestion" as const,
       enabled: true,
-      run: () => openQuestionByKey(q.key),
+      run: (payload) => openQuestionByKey(q.key, payload),
       // Abrir o card NÃO fala nada — a voz do paciente só soa ao selecionar
       // SIM/TALVEZ/NÃO. Retorno técnico e não-narrável.
       toolSuccess: { screen: "routine_question", suppressAssistantNarration: true },

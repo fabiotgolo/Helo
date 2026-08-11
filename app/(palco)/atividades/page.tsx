@@ -20,6 +20,7 @@ import { PhrasesToListenModal } from "@/components/phrases-to-listen-modal";
 import type { FavoritePhrase } from "@/lib/favorite-phrases";
 import { buildEditLink, readSearchParams } from "@/lib/edit-link";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
+import { guardaDeContexto } from "@/lib/helo-agent-context";
 import {
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
@@ -108,12 +109,24 @@ export default function AtividadesPage() {
   }, [patientId]);
 
   const start = useCallback(
-    async (template: ActivityTemplate, initialItemId: string | null = null) => {
+    async (
+      template: ActivityTemplate,
+      initialItemId: string | null = null,
+      payload?: Record<string, unknown>
+    ) => {
       console.log("[HELO ACTIVITY] open requested");
       console.log("[HELO ACTIVITY] activity title", template.title);
       console.log("[HELO ACTIVITY] activity id", template.id);
       if (patientId == null || starting) return;
       console.log("[HELO ACTIVITY] activity found — opening session");
+      // ——— O contexto de agora, para conferir depois do await (L3, 5.3C) ———
+      //
+      // Esta é a janela mais séria das três. O efeito de `start` é ABRIR O
+      // PLAYER com a execução recém-criada, e o efeito de troca de paciente
+      // (acima) devolve a tela à lista. Os dois competem: o efeito de troca
+      // roda primeiro, a continuação antiga chega depois — e vence. O player
+      // de A abriria por cima da tela de B.
+      const aindaVale = guardaDeContexto(payload);
       setStarting(template.id);
       setStartError(null);
       try {
@@ -128,10 +141,22 @@ export default function AtividadesPage() {
         if (!r.ok || !d?.run) {
           throw new Error(d?.error ?? "não foi possível iniciar a sessão");
         }
+        if (!aindaVale()) {
+          // A execução de A foi criada com autorização legítima e permanece no
+          // servidor — vazia, como qualquer sessão aberta e não usada. O que
+          // não acontece é apresentá-la: o player não abre, e a tela de B
+          // continua sendo a tela de B.
+          console.warn("[HELO ACTIVITY] contexto expirou durante a criação da sessão — o player não abre");
+          return;
+        }
         setView({ kind: "sessao", run: d.run, initialItemId });
       } catch (e) {
+        // O erro descreve a tentativa de A. Mostrá-lo na tela de B seria o
+        // mesmo defeito com outra roupa.
+        if (!aindaVale()) return;
         setStartError((e as Error).message);
       } finally {
+        // Sempre: é só o estado do botão, e deixá-lo preso travaria a lista.
         setStarting(null);
       }
     },
@@ -242,7 +267,7 @@ export default function AtividadesPage() {
         type: "activity",
         enabled: Boolean(caps?.run) && starting == null,
         requiredPermission: "runActivities",
-        run: () => void start(t),
+        run: (payload) => void start(t, null, payload),
         toolSuccess: { screen: "activity_session", suppressAssistantNarration: true },
       });
       if (caps?.edit) {

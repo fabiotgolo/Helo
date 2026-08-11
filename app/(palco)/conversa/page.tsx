@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { flow, compose, START_NODE, type FlowNode, type Option } from "@/lib/flow";
 import { useRegisterHeloUIActions, type HeloUIAction } from "@/lib/helo-action-registry";
+import { guardaDeContexto } from "@/lib/helo-agent-context";
 import { GESTURES, type Gesture } from "@/lib/types";
 import { useGestures } from "@/lib/gestures";
 import { usePatient, usePatientItems } from "@/lib/patient";
@@ -489,7 +490,7 @@ export default function ConversaPage() {
 
   // ——— Controles do assistente ———
 
-  const begin = useCallback(async () => {
+  const begin = useCallback(async (payload?: Record<string, unknown>) => {
     if (!user) {
       redirectToLogin();
       return;
@@ -498,6 +499,13 @@ export default function ConversaPage() {
       setStartError("Nenhum paciente selecionado. Escolha um paciente no Dashboard.");
       return;
     }
+    // ——— O contexto de agora, para conferir depois do await (L1, 5.3C) ———
+    //
+    // `patientId` daqui em diante é uma cópia congelada no closure. Criar a
+    // sessão é um round-trip, e no meio dele o cuidador pode trocar de paciente
+    // ou sair da tela — e então tudo o que vem depois (o evento de pergunta
+    // apresentada, a fala) pertenceria a um mundo que não existe mais.
+    const aindaVale = guardaDeContexto(payload);
     setStartError(null);
     setStarting(true);
     // A identidade do operador é resolvida no servidor a partir do cookie de
@@ -506,6 +514,13 @@ export default function ConversaPage() {
     setStarting(false);
     if (id == null) {
       setStartError(error ?? "Não foi possível iniciar a conversa. Tente novamente.");
+      return;
+    }
+    if (!aindaVale()) {
+      // A sessão de A foi criada com autorização legítima e FICA: apagá-la
+      // seria inventar um rollback que o produto não tem. O que não acontece é
+      // a continuação — nada é gravado, nada é falado, nada é apresentado.
+      console.warn("[HELO CONVERSAR] contexto expirou durante a criação da sessão — nada é apresentado");
       return;
     }
     setSessionId(id);
@@ -619,7 +634,7 @@ export default function ConversaPage() {
         label: "Começar",
         type: "activity",
         enabled: ready && !starting,
-        run: () => void begin(),
+        run: (payload) => void begin(payload),
       }];
     }
     if (phase === "done") {
@@ -1010,9 +1025,11 @@ function Intro({
       )}
 
       <div className="flex flex-col items-center gap-3">
+        {/* `onBegin()` sem argumento: `begin` recebe o payload da tool, e o
+            objeto de evento do React não é um payload. */}
         <button
           type="button"
-          onClick={onBegin}
+          onClick={() => onBegin()}
           disabled={!ready || starting}
           className="rounded-full bg-accent px-10 py-4 text-lg font-medium text-on-accent transition-transform hover:scale-[1.02] hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
         >
