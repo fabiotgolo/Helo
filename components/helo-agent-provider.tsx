@@ -713,6 +713,12 @@ function HeloAgentSession({
       finishMusicPlayback("replaced");
     }
 
+    // O paciente é lido UMA vez, aqui, e é o mesmo do pedido e da reprodução.
+    // Uma composição leva minutos; ler o ref de novo depois do `await` daria a
+    // faixa de um paciente com o id de outro — é a lição da 5.3C aplicada ao
+    // caminho da música.
+    const pacienteDoPedido = patientIdRef.current;
+
     const abortController = new AbortController();
     musicGenerationAbortRef.current = abortController;
     setMusicPlayer({
@@ -734,7 +740,7 @@ function HeloAgentSession({
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
-          patientId: patientIdRef.current,
+          patientId: pacienteDoPedido,
           prompt,
           genre: genre || undefined,
           duration_seconds: durationSeconds,
@@ -751,7 +757,6 @@ function HeloAgentSession({
         error?: unknown;
       } | null;
       const trackId = typeof data?.trackId === "string" ? data.trackId : "";
-      const patientId = patientIdRef.current;
       const title =
         typeof data?.title === "string" && data.title.trim()
           ? data.title.trim()
@@ -759,7 +764,7 @@ function HeloAgentSession({
             ? `Música ${genre}`
             : "Música especial da Helo";
 
-      if (!response.ok || !trackId || patientId == null) {
+      if (!response.ok || !trackId || pacienteDoPedido == null) {
         // 401/403 têm causa própria e conserto próprio: não é falha do serviço
         // de música, é falta de acesso ao paciente. Dizer "não retornou a
         // música" mandaria o cuidador tentar de novo para sempre.
@@ -781,7 +786,7 @@ function HeloAgentSession({
       musicGenerationAbortRef.current = null;
       const outcome = await playMusicTrack({
         trackId,
-        patientId,
+        patientId: pacienteDoPedido,
         title,
         prompt,
         genre,
