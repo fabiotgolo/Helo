@@ -1,0 +1,71 @@
+rules_version = '2';
+
+// ——— Storage da Helo: nenhum cliente entra (Fase 5.4B) ———
+//
+// Estas regras estavam FORA do repositório até agora. A auditoria da 5.4A
+// registrou isso como "CONFIGURAÇÃO EXTERNA NÃO VERIFICADA": não havia como
+// revisar o que não existia no Git, e ninguém sabia dizer o que valia no
+// projeto publicado.
+//
+// ——— O que estas regras fazem, e o que elas NÃO fazem ———
+//
+// Elas fecham o acesso DIRETO do cliente ao bucket. Elas **não** são a
+// correção do R-04, e é importante não confundir as duas coisas: um Firebase
+// download URL (`getDownloadURL`) funciona por posse do token e **passa por
+// cima destas regras** por construção — é exatamente para isso que o token
+// existe. Endurecer as regras nunca teria fechado aquela porta.
+//
+// O que fechou o R-04 foi parar de emitir o token: o áudio da voz clonada do
+// paciente agora sai por `/api/favorite-phrases/audio`, e a música por
+// `/api/patients/{id}/playlist/audio` — duas rotas que perguntam quem é você e
+// se você alcança este paciente antes de entregar um byte. Estas regras são a
+// tranca do lado que sobrou.
+//
+// ——— Por que negar tudo não quebra nada ———
+//
+// Isto foi verificado antes de ser escrito, não presumido: o Helo **não tem o
+// SDK cliente do Firebase**. `package.json` traz `firebase-admin` e mais nada
+// da família — não existe uma linha no navegador capaz de chamar o Storage.
+// O acesso do cliente ao áudio era feito por URL com token, que agora não é
+// mais gerada.
+//
+// Quem escreve e lê os objetos é o Admin SDK, no servidor e nas Cloud
+// Functions. O Admin SDK **não passa por estas regras** — ele opera com a
+// conta de serviço do runtime. Fechar aqui, portanto, não tira nada de quem
+// tem direito: tira de quem tentaria entrar por fora.
+//
+// Se um dia o produto precisar de leitura direta pelo cliente em ALGUM
+// caminho, a regra é acrescentar aquele caminho explicitamente — nunca abrir
+// o `{allPaths=**}`.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Áudio da voz clonada do paciente e músicas da playlist dele. Nomeados
+    // aqui antes da regra geral, e não porque a regra geral não bastaria: é
+    // para que a proibição seja LEGÍVEL. Quem abrir este arquivo procurando
+    // "o áudio do paciente está protegido?" encontra a resposta escrita, em
+    // vez de ter que deduzi-la de um curinga.
+    match /patients/{patientId}/phrase-audio/{allPaths=**} {
+      allow read, write: if false;
+    }
+    match /patients/{patientId}/musics/{musicId} {
+      allow read, write: if false;
+    }
+    // Caminhos do schema anterior à 5.4B. Continuam existindo em ambientes que
+    // ainda não passaram pela migração, e continuam fechados.
+    match /patients/{patientId}/phrases_audio/{allPaths=**} {
+      allow read, write: if false;
+    }
+    match /musics/{musicId} {
+      allow read, write: if false;
+    }
+
+    // Tudo o mais. Não existe cliente que leia ou escreva neste bucket, e
+    // enquanto isso for verdade esta linha é a única que precisa existir — as
+    // de cima são documentação executável.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

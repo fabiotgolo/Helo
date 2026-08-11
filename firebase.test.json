@@ -8,19 +8,37 @@
     "",
     "  npm run emu:test                                          (terminal 1)",
     "  FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 npm run dev        (terminal 2)",
-    "  FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 npm run test:...   (terminal 3)"
+    "  FIRESTORE_EMULATOR_HOST=127.0.0.1:8090 npm run test:...   (terminal 3)",
+    "",
+    "Fase 5.4B: o emulador de STORAGE entrou aqui (porta 9199) para a suíte",
+    "`test:storage:rules`, que confere que nenhum cliente lê o áudio da voz",
+    "clonada do paciente direto do bucket. Junto vieram portas próprias de hub",
+    "(4410) e logging (4510): sem elas, uma segunda instância — a que sobe só o",
+    "Storage para a suíte — colidiria com a que já estiver rodando."
   ],
   "firestore": {
     "database": "helo-db",
     "rules": "firestore.rules"
   },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "emulators": {
     "firestore": {
       "port": 8090
     },
+    "storage": {
+      "port": 9199
+    },
     "ui": {
       "enabled": true,
       "port": 4090
+    },
+    "hub": {
+      "port": 4410
+    },
+    "logging": {
+      "port": 4510
     },
     "singleProjectMode": true
   }

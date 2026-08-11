@@ -16,6 +16,9 @@
     "database": "helo-db",
     "rules": "firestore.rules"
   },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "hosting": {
     "site": "heloapp",
     "public": "firebase-hosting-empty",
