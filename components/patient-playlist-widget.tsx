@@ -156,7 +156,13 @@ export function PatientPlaylistWidget({ patientId, patientName }: { patientId: n
               </div>
               <p className="mt-2 text-xs text-ink-mute">{formattedDate(track.createdAt)}</p>
               <audio controls preload="metadata" className="mt-3 w-full" aria-label={`Reproduzir ${track.title}`}>
-                <source src={track.audioUrl} type="audio/mpeg" />
+                {/* Fase 5.4B: era `track.audioUrl`, um Firebase download URL
+                    durável no HTML da página. Agora o áudio vem pela rota
+                    autenticada, pelo id da faixa. */}
+                <source
+                  src={`/api/patients/${patientId}/playlist/audio?id=${encodeURIComponent(track.id)}`}
+                  type="audio/mpeg"
+                />
                 Seu navegador não suporta a reprodução de áudio.
               </audio>
             </li>

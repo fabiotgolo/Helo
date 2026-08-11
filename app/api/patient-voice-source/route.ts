@@ -1,5 +1,6 @@
 import { requirePatientAccess } from "@/lib/auth";
 import { logAudit } from "@/lib/access";
+import { invalidateFavoritePhraseAudio } from "@/lib/favorite-phrases";
 import { hasPermission } from "@/lib/access-types";
 import { setPatientSettings } from "@/lib/store";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
@@ -81,6 +82,12 @@ export async function POST(request: Request) {
   }
 
   await setPatientSettings(patientId, updates);
+  // ——— Fase 5.4B ———
+  //
+  // Trocar a FONTE muda qual voz o servidor resolve para as falas deste
+  // paciente. O áudio já pré-sintetizado foi feito com a fonte anterior, e
+  // manter os dois seria manter duas respostas para "qual é a voz dele".
+  const invalidadas = await invalidateFavoritePhraseAudio(patientId);
   await logAudit({
     userId: auth.user.id,
     userName: auth.user.name,
@@ -91,6 +98,7 @@ export async function POST(request: Request) {
     metadata: {
       before: `${state.source}${state.platformVoiceId ? `:${state.platformVoiceId}` : ""}`,
       after: `${body.source}${body.source === "platform" ? `:${body.platformVoiceId}` : ""}`,
+      audiosInvalidados: String(invalidadas),
     },
   });
   return Response.json({ ok: true });

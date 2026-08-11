@@ -56,7 +56,19 @@ export function PhrasesToListenModal({
     setIsPlaying(true);
 
     try {
-      let source = phrase.audioUrl;
+      // ——— Fase 5.4B ———
+      //
+      // Antes: `phrase.audioUrl` era um Firebase download URL e ia direto para
+      // `new Audio(...)`. O navegador buscava a voz clonada do paciente no
+      // `firebasestorage.googleapis.com`, sem cookie, sem sessão, sem passar
+      // pela Helo — e qualquer pessoa com aquele endereço fazia o mesmo.
+      //
+      // Agora o servidor só diz SE existe áudio pronto. Onde ele está é
+      // assunto do servidor; o navegador pede pela rota autenticada, que
+      // confere sessão e vínculo antes de entregar um byte.
+      let source = phrase.hasAudio
+        ? `/api/favorite-phrases/audio?patientId=${patientId}&phraseId=${encodeURIComponent(phrase.id)}`
+        : "";
       if (!source) {
         // A frase é um recurso do paciente: o servidor a resolve por id e
         // devolve o texto junto com a autorização. Nada de texto livre aqui.

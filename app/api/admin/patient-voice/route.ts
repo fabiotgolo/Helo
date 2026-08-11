@@ -3,6 +3,7 @@ import { logAudit } from "@/lib/access";
 import { getPatient, getPatientSetting, setPatientSettings } from "@/lib/store";
 import { PATIENT_SETTING_KEYS } from "@/lib/defaults";
 import { validateElevenLabsVoice } from "@/lib/voice-catalog";
+import { invalidateFavoritePhraseAudio } from "@/lib/favorite-phrases";
 
 // Voz CLONADA do paciente — atribuição EXCLUSIVA do Admin.
 // Nenhum outro papel (cuidador, profissional, familiar, paciente) informa
@@ -49,6 +50,17 @@ export async function POST(request: Request) {
     [PATIENT_SETTING_KEYS.voiceCloneName]:
       body.displayName?.trim() || `Voz clonada de ${patient.name}`,
   });
+  // ——— Fase 5.4B ———
+  //
+  // A voz mudou; o que foi pré-sintetizado com a anterior deixa de valer. Sem
+  // isto, uma frase gravada com o clone antigo continuaria tocando para sempre
+  // como se fosse a voz atual da pessoa — e continuaria existindo no Storage
+  // depois de o clone ter sido substituído.
+  //
+  // A invalidação não regenera nada e não muda tela nenhuma: sem áudio pronto,
+  // a frase é sintetizada na hora pelo caminho do SpeechGrant, com a voz que
+  // vale agora.
+  const invalidadas = await invalidateFavoritePhraseAudio(patientId);
   await logAudit({
     userId: auth.user.id,
     userName: auth.user.name,
@@ -61,6 +73,8 @@ export async function POST(request: Request) {
       before: previous ? mask(previous) : "—",
       after: mask(voiceId),
       validated: validation.status,
+      // Quantidade, nunca o texto das frases.
+      audiosInvalidados: String(invalidadas),
     },
   });
   return Response.json({ ok: true, validation: validation.status });
@@ -86,6 +100,9 @@ export async function DELETE(request: Request) {
     [PATIENT_SETTING_KEYS.voiceCloneName]: "",
     [PATIENT_SETTING_KEYS.patientVoiceSource]: "platform",
   });
+  // Remover o clone é o caso mais forte: sem esta linha, o Helo apagaria o
+  // vínculo com a voz e continuaria guardando MP3s feitos com ela.
+  const invalidadas = await invalidateFavoritePhraseAudio(patientId);
   await logAudit({
     userId: auth.user.id,
     userName: auth.user.name,
@@ -93,7 +110,7 @@ export async function DELETE(request: Request) {
     action: "voice.clone.remove",
     entityType: "patientVoiceClone",
     entityId: String(patientId),
-    metadata: { before: mask(previous), after: "—" },
+    metadata: { before: mask(previous), after: "—", audiosInvalidados: String(invalidadas) },
   });
   return Response.json({ ok: true });
 }

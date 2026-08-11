@@ -613,15 +613,27 @@ function HeloAgentSession({
     };
   }, [endMusicSeek, seekMusicFromClientX]);
 
+  // ——— Fase 5.4B ———
+  //
+  // O player recebia `audioUrl`: um Firebase download URL que vinha da resposta
+  // de /generateMusic, ia para o `new Audio(...)`, para o log do navegador e —
+  // o pior — para dentro do resultado da tool, ou seja, de volta à ElevenLabs.
+  //
+  // Agora ele recebe o ID da faixa e monta o endereço INTERNO. O navegador toca
+  // pela rota autenticada; e como não existe mais URL nenhuma neste objeto, não
+  // existe URL para vazar no retorno da tool (R-14).
   const playMusicTrack = useCallback(async (track: {
-    audioUrl: string;
+    trackId: string;
+    patientId: number;
     title: string;
     prompt: string;
     genre: string;
     source: Exclude<MusicTrackSource, null>;
     period?: "manhã" | "tarde" | "noite";
   }) => {
-    const audio = new Audio(track.audioUrl);
+    const audio = new Audio(
+      `/api/patients/${track.patientId}/playlist/audio?id=${encodeURIComponent(track.trackId)}`
+    );
     audio.preload = "auto";
     generatedMusicRef.current = audio;
     const playbackFinished = new Promise<MusicToolOutcome>((resolve) => {
@@ -680,7 +692,9 @@ function HeloAgentSession({
       }
       throw caught;
     }
-    console.log("[HELO MUSIC] playback started", { source: track.source, audioUrl: track.audioUrl });
+    // O `audioUrl` saiu deste log junto com o resto: era a única linha do
+    // produto que imprimia uma URL durável de mídia do paciente no console.
+    console.log("[HELO MUSIC] playback started", { source: track.source });
     return await playbackFinished;
   }, [finishMusicPlayback]);
 
@@ -727,18 +741,17 @@ function HeloAgentSession({
         }),
         signal: abortController.signal,
       });
+      // A resposta deixou de trazer `audioUrl` (Fase 5.4B): ela traz o ID da
+      // faixa, que já está registrada na playlist do paciente. Os campos
+      // `audioUrl`/`audio_url` saíram da leitura de propósito — se um servidor
+      // antigo ainda os devolver, este cliente simplesmente não os enxerga.
       const data = (await response.json().catch(() => null)) as {
-        audioUrl?: unknown;
-        audio_url?: unknown;
+        trackId?: unknown;
         title?: unknown;
         error?: unknown;
       } | null;
-      const audioUrl =
-        typeof data?.audioUrl === "string"
-          ? data.audioUrl
-          : typeof data?.audio_url === "string"
-            ? data.audio_url
-            : "";
+      const trackId = typeof data?.trackId === "string" ? data.trackId : "";
+      const patientId = patientIdRef.current;
       const title =
         typeof data?.title === "string" && data.title.trim()
           ? data.title.trim()
@@ -746,7 +759,7 @@ function HeloAgentSession({
             ? `Música ${genre}`
             : "Música especial da Helo";
 
-      if (!response.ok || !audioUrl) {
+      if (!response.ok || !trackId || patientId == null) {
         // 401/403 têm causa própria e conserto próprio: não é falha do serviço
         // de música, é falta de acesso ao paciente. Dizer "não retornou a
         // música" mandaria o cuidador tentar de novo para sempre.
@@ -758,20 +771,33 @@ function HeloAgentSession({
               : typeof data?.error === "string"
                 ? data.error
                 : "O servidor não retornou a música gerada.";
-        throw new Error(reason);
+        // Marcado como NOSSO: só uma mensagem que a Helo escreveu pode ser
+        // narrada ao cuidador. Uma falha de rede ou do navegador vira a
+        // mensagem genérica lá embaixo, em vez de virar "Failed to fetch" na
+        // voz da Helo (e no histórico da conversa do lado do provedor).
+        throw Object.assign(new Error(reason), { heloMusic: true });
       }
 
       musicGenerationAbortRef.current = null;
       const outcome = await playMusicTrack({
-        audioUrl,
+        trackId,
+        patientId,
         title,
         prompt,
         genre,
         source: "generated",
       });
+      // ——— R-14 ———
+      //
+      // Este objeto é serializado e devolvido à ElevenLabs. Ele carregava
+      // `audioUrl` — um endereço durável e sem autenticação para um arquivo do
+      // paciente, que ficava na transcrição da conversa do lado do provedor,
+      // sem que o Agent tivesse o que fazer com ele.
+      //
+      // O que o Agent precisa saber é se deu certo e o que dizer a seguir.
+      // Nada aqui identifica ou alcança o arquivo.
       return {
         ok: outcome === "ended" || outcome === "ready",
-        audioUrl,
         title,
         outcome,
         message:
@@ -787,9 +813,10 @@ function HeloAgentSession({
         finishMusicPlayback("cancelled");
         return { ok: false, outcome: "cancelled", reason: "A geração da música foi cancelada." };
       }
-      const reason = caught instanceof Error && caught.message
-        ? caught.message
-        : "O navegador bloqueou a reprodução ou houve uma falha na rede.";
+      const reason =
+        caught instanceof Error && (caught as { heloMusic?: boolean }).heloMusic && caught.message
+          ? caught.message
+          : "O navegador bloqueou a reprodução ou houve uma falha na rede.";
       console.warn("[HELO MUSIC] music generation or playback failed", caught);
       finishMusicPlayback("failed", { error: reason });
       return {
@@ -819,7 +846,6 @@ function HeloAgentSession({
           title: string;
           prompt: string;
           genre: string;
-          audioUrl: string;
           period: "manhã" | "tarde" | "noite";
         }>;
         error?: string;
@@ -839,7 +865,8 @@ function HeloAgentSession({
       }
       if (generatedMusicRef.current || musicGenerationAbortRef.current) stopGeneratedMusic();
       const outcome = await playMusicTrack({
-        audioUrl: track.audioUrl,
+        trackId: track.id,
+        patientId: activePatientId,
         title: track.title,
         prompt: track.prompt,
         genre: track.genre,
@@ -854,7 +881,10 @@ function HeloAgentSession({
         outcome,
       };
     } catch (caught) {
-      const reason = caught instanceof Error ? caught.message : "Não foi possível buscar a playlist.";
+      // Mensagem nossa, sempre: o que cai aqui é falha de rede ou de leitura
+      // do corpo, e o texto delas não é escrito pela Helo — mas é narrado por
+      // ela e guardado na transcrição do provedor.
+      const reason = "Não foi possível buscar a playlist.";
       console.warn("[HELO MUSIC] existing music playback failed", caught);
       return { ok: false, found: false, reason };
     }

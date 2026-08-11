@@ -2,11 +2,70 @@ const { onRequest } = require("firebase-functions/v2/https");
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const { getDownloadURL } = require("firebase-admin/storage");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { randomBytes } = require("node:crypto");
 
 if (!admin.apps.length) {
   admin.initializeApp();
+}
+
+// ——— Mídia privada (Fase 5.4B) ———
+//
+// `getDownloadURL` SAIU deste arquivo, e essa é a mudança central da fase.
+// Ele produzia um Firebase download URL — um endereço com token embutido que
+// funciona sem sessão, sem vínculo com o paciente e sem prazo, porque o token
+// existe justamente para passar por cima das Storage Rules. Para a voz clonada
+// de um paciente isso era o R-04: o áudio ficava público por posse do link,
+// contornando inteiro o portão de SpeechGrant erguido na 5.1A.
+//
+// Agora a Function grava o objeto e guarda só o CAMINHO. Quem entrega os bytes
+// é uma rota autenticada do app Next, que confere sessão e vínculo antes de
+// ler. Um caminho, sozinho, não abre nada.
+//
+// Os construtores abaixo repetem o que vive em `lib/midia-privada.ts`. É a
+// mesma razão pela qual `patientAccess` é reimplementado aqui: as Functions não
+// compartilham código com o app Next. Os dois lados precisam concordar, e o
+// teste `test:midia:privada` confere que concordam.
+
+/** Identificador opaco de objeto — não deriva de texto, nome nem relógio. */
+function novoIdDeMidia() {
+  return randomBytes(12).toString("hex");
+}
+
+function prefixoDeAudioDaFrase(patientId, phraseId) {
+  return `patients/${patientId}/phrase-audio/${phraseId}/`;
+}
+
+function caminhoDeAudioDaFrase(patientId, phraseId, audioId) {
+  return `${prefixoDeAudioDaFrase(patientId, phraseId)}${audioId}.mp3`;
+}
+
+function caminhoDeMusica(patientId, musicId) {
+  return `patients/${patientId}/musics/${musicId}.mp3`;
+}
+
+/**
+ * Remove as gerações anteriores de uma frase, preservando a atual.
+ *
+ * BEST-EFFORT, e a palavra tem peso: uma falha aqui não pode derrubar a
+ * síntese que acabou de dar certo. O resíduo não precisa de fila nem de job —
+ * o caminho de cada frase é um prefixo, e toda síntese varre o prefixo dela.
+ * O que escapou hoje sai na próxima. A limpeza se conserta sozinha.
+ */
+async function varrePrefixoDaFrase(patientId, phraseId, preservar) {
+  try {
+    const [arquivos] = await admin
+      .storage()
+      .bucket()
+      .getFiles({ prefix: prefixoDeAudioDaFrase(patientId, phraseId) });
+    await Promise.all(
+      arquivos
+        .filter((a) => a.name !== preservar)
+        .map((a) => a.delete({ ignoreNotFound: true }).catch(() => {}))
+    );
+  } catch {
+    // Sem consequência para o recurso novo, que já está válido e referenciado.
+  }
 }
 
 const app = express();
@@ -133,14 +192,80 @@ async function synthesizePhraseAudioHandler(req, res) {
     }
     const buffer = Buffer.from(await eleven.arrayBuffer());
     if (!buffer.length) return res.status(502).json({ error: "O áudio gerado está vazio." });
-    const storagePath = `patients/${patientId}/phrases_audio/${phraseId}.mp3`;
+
+    // ——— A ordem, que é a garantia (R-04b) ———
+    //
+    // 1. o objeto NOVO nasce sob um id próprio, sem tocar no anterior;
+    // 2. só depois o documento passa a apontar para ele;
+    // 3. só depois as gerações antigas são varridas.
+    //
+    // Enquanto o passo 2 não acontece, a mídia anterior continua íntegra e
+    // referenciada: uma falha de rede no meio da síntese não deixa o paciente
+    // sem áudio. E se o passo 2 falhar, o objeto novo é removido na hora — ele
+    // é o único que ninguém mais alcança, e deixá-lo seria criar o órfão que
+    // esta fase existe para eliminar.
+    const audioId = novoIdDeMidia();
+    const storagePath = caminhoDeAudioDaFrase(patientId, phraseId, audioId);
     const file = admin.storage().bucket().file(storagePath);
-    await file.save(buffer, { resumable: false, metadata: { contentType: "audio/mpeg", cacheControl: "public, max-age=31536000, immutable" } });
-    const audioUrl = await getDownloadURL(file);
-    await phraseRef.set({ audioUrl, storagePath, usesClonedVoice: Boolean(clonedVoiceId), synthesizedAt: new Date().toISOString() }, { merge: true });
-    return res.status(200).json({ audioUrl });
+    await file.save(buffer, {
+      resumable: false,
+      metadata: {
+        contentType: "audio/mpeg",
+        // `private` e sem prazo longo: este objeto não é servido ao navegador
+        // pelo Storage. Quem o entrega é a rota autenticada do Next, e é ela
+        // que decide o cabeçalho que o navegador vê. Este aqui só impede que
+        // um intermediário guarde a cópia caso o objeto seja lido por outro
+        // caminho um dia.
+        cacheControl: "private, no-store",
+        // Metadata mínima e sem conteúdo: liga o objeto ao dono e diz o que
+        // ele é. Nunca o texto da frase, nunca o nome da pessoa, nunca o
+        // voiceId do clone.
+        metadata: {
+          heloResource: "patientPhraseAudio",
+          heloPatientId: String(patientId),
+          heloPhraseId: phraseId,
+        },
+      },
+    });
+
+    const anterior = phrase.data().audioStoragePath;
+    try {
+      await phraseRef.set(
+        {
+          audioStoragePath: storagePath,
+          audioId,
+          usesClonedVoice: Boolean(clonedVoiceId),
+          synthesizedAt: new Date().toISOString(),
+          // O schema antigo sai do documento no primeiro toque. Enquanto
+          // `audioUrl` existir ali, existe uma URL pública guardada — e o
+          // objetivo é que ela deixe de existir, não que seja ignorada.
+          audioUrl: FieldValue.delete(),
+          storagePath: FieldValue.delete(),
+        },
+        { merge: true }
+      );
+    } catch (falhaNoDocumento) {
+      await file.delete({ ignoreNotFound: true }).catch(() => {});
+      throw falhaNoDocumento;
+    }
+
+    await varrePrefixoDaFrase(patientId, phraseId, storagePath);
+    if (typeof anterior === "string" && anterior && anterior !== storagePath) {
+      // Gerações fora do prefixo atual (o caminho legado
+      // `phrases_audio/{phraseId}.mp3`) não são alcançadas pela varredura.
+      await admin.storage().bucket().file(anterior).delete({ ignoreNotFound: true }).catch(() => {});
+    }
+    const legado = phrase.data().storagePath;
+    if (typeof legado === "string" && legado && legado !== storagePath) {
+      await admin.storage().bucket().file(legado).delete({ ignoreNotFound: true }).catch(() => {});
+    }
+
+    // A resposta NÃO devolve URL nenhuma. O cliente já sabe onde pedir o áudio:
+    // pela rota autenticada, com o id da frase. Devolver um endereço aqui seria
+    // reabrir, na resposta, o que se acabou de fechar no banco.
+    return res.status(200).json({ ok: true });
   } catch (error) {
-    console.error("[HELO PHRASES] Falha na síntese", error);
+    console.error("[HELO PHRASES] Falha na síntese", { etapa: "síntese", nome: error?.name });
     return res.status(500).json({ error: "Falha interna ao preparar o áudio." });
   }
 }
@@ -197,7 +322,22 @@ async function generateMusicHandler(req, res) {
     const patientId = Number(req.body?.patientId);
     const apiKey = process.env.ELEVENLABS_API_KEY;
 
-    console.log("Received music payload:", { prompt: req.body?.prompt, genre: req.body?.genre, durationSeconds });
+    // ——— R-07a ———
+    //
+    // Aqui havia `console.log("Received music payload:", { prompt, genre, … })`
+    // — o pedido do cuidador, inteiro, no Cloud Logging. O prompt é criativo
+    // por natureza ("algo calmo para dormir"), mas é ditado em voz alta numa
+    // sessão clínica, sobre uma pessoa, e nada impede que saia como "uma
+    // música para a Maria, que está agitada desde a internação".
+    //
+    // O que sobra é o que diagnostica sem contar nada: houve pedido, deste
+    // tamanho, com esta duração. Nem o prompt, nem um recorte dele, nem um
+    // hash — recorte e hash continuam sendo o conteúdo, só que mais difícil.
+    console.log("[HELO MUSIC] pedido recebido", {
+      caracteresNoPrompt: prompt.length,
+      generoInformado: Boolean(genre),
+      durationSeconds,
+    });
 
     if (!prompt) {
       return res.status(400).json({ error: "O parâmetro 'prompt' é obrigatório." });
@@ -260,12 +400,23 @@ async function generateMusicHandler(req, res) {
     );
 
     if (!elevenLabsResponse.ok) {
-      const responseText = await elevenLabsResponse.text();
-      console.error("[HELO MUSIC] ElevenLabs recusou a composição.", {
-        status: elevenLabsResponse.status,
-        response: responseText.slice(0, 500),
+      // ——— R-07b ———
+      //
+      // Aqui havia `await elevenLabsResponse.text()` e os primeiros 500
+      // caracteres do corpo no log. Era a única ocorrência de corpo bruto do
+      // provedor em todo o produto — e o corpo de uma recusa da ElevenLabs ecoa
+      // o que foi enviado, ou seja, o prompt do cuidador de volta.
+      //
+      // Provedor, operação, status e um código nosso bastam para diagnosticar.
+      // O corpo não é lido: não adianta ler e não registrar, porque a próxima
+      // pessoa que passar por aqui vai registrar "só desta vez".
+      console.error("[HELO MUSIC] provedor recusou a composição", {
+        provider: "elevenlabs",
+        operation: "generateMusic",
+        httpStatus: elevenLabsResponse.status,
+        errorCode: "MUSIC_PROVIDER_REJECTED",
       });
-      return res.status(502).json({ error: "A ElevenLabs não conseguiu gerar a música." });
+      return res.status(502).json({ error: "A ElevenLabs não conseguiu gerar a música.", code: "MUSIC_GENERATION_FAILED" });
     }
 
     const audioBuffer = Buffer.from(await elevenLabsResponse.arrayBuffer());
@@ -274,62 +425,81 @@ async function generateMusicHandler(req, res) {
       return res.status(502).json({ error: "A música gerada não contém áudio." });
     }
 
+    // ——— A-12: a música passa a viver sob o paciente ———
+    //
+    // Era `musics/{Date.now()}-{genero}.mp3`: namespace global, sem vínculo
+    // nenhum com o paciente no caminho, nome derivado do relógio e do gênero
+    // pedido. O documento ficava sob o paciente e o arquivo, fora dele — duas
+    // verdades diferentes sobre a mesma faixa.
+    //
+    // Agora o id do documento nasce ANTES do arquivo e é o mesmo dos dois
+    // lados. O caminho carrega o vínculo, e o nome não conta nada: nem gênero,
+    // nem horário, nem uma letra do que foi pedido.
     const bucket = admin.storage().bucket();
-    const safeGenre = genre
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 32);
-    const fileName = `musics/${Date.now()}${safeGenre ? `-${safeGenre}` : ""}.mp3`;
+    const trackRef = getFirestore(admin.app(), FIRESTORE_DATABASE_ID)
+      .collection("patients")
+      .doc(String(patientId))
+      .collection("playlist")
+      .doc();
+    const fileName = caminhoDeMusica(patientId, trackRef.id);
     const file = bucket.file(fileName);
 
     await file.save(audioBuffer, {
       resumable: false,
       metadata: {
         contentType: "audio/mpeg",
-        cacheControl: "public, max-age=31536000, immutable",
+        // Sem URL pública, sem cache longo: quem entrega os bytes é a rota
+        // autenticada do Next, e é ela que decide o que o navegador guarda.
+        cacheControl: "private, max-age=0, must-revalidate",
         metadata: {
+          heloResource: "patientMusic",
+          heloPatientId: String(patientId),
           generatedBy: "helo",
-          genre: genre || "unspecified",
         },
       },
     });
 
-    const audioUrl = await getDownloadURL(file);
     const createdAt = new Date();
     const { dateKey, period } = playlistTime(createdAt);
     const title = musicTitle(prompt, genre) || "Música especial da Helo";
     try {
-      await getFirestore(admin.app(), FIRESTORE_DATABASE_ID)
-        .collection("patients")
-        .doc(String(patientId))
-        .collection("playlist")
-        .add({
-          title,
-          prompt,
-          genre,
-          audioUrl,
-          storagePath: fileName,
-          createdAt: createdAt.toISOString(),
-          dateKey,
-          period,
-        });
+      await trackRef.set({
+        title,
+        prompt,
+        genre,
+        // `audioUrl` não existe mais no schema novo. O documento guarda o
+        // CAMINHO — e um caminho, sozinho, não abre nada.
+        storagePath: fileName,
+        createdAt: createdAt.toISOString(),
+        dateKey,
+        period,
+      });
     } catch (firestoreError) {
       // Evita manter um MP3 órfão quando seu histórico não pôde ser salvo.
       await file.delete({ ignoreNotFound: true }).catch(() => {});
       throw firestoreError;
     }
+    // ——— R-14, na origem ———
+    //
+    // A resposta não devolve URL nenhuma. O navegador recebe o id da faixa e
+    // pede o áudio à rota autenticada. E como o resultado da tool é montado a
+    // partir DESTA resposta, não existe URL para vazar de volta à ElevenLabs.
     return res.status(200).json({
-      audioUrl,
+      trackId: trackRef.id,
       title,
       createdAt: createdAt.toISOString(),
       period,
     });
   } catch (error) {
-    console.error("[HELO MUSIC] Falha inesperada na geração da música.", error);
-    return res.status(500).json({ error: "Falha interna ao gerar a música." });
+    console.error("[HELO MUSIC] falha inesperada na geração", {
+      operation: "generateMusic",
+      errorCode: "MUSIC_GENERATION_FAILED",
+      nome: error?.name,
+    });
+    return res.status(500).json({
+      error: "Falha interna ao gerar a música.",
+      code: "MUSIC_GENERATION_FAILED",
+    });
   }
 }
 

@@ -2,44 +2,14 @@ import { requirePatientAccess } from "@/lib/auth";
 import { hasPermission } from "@/lib/access-types";
 import { logAudit } from "@/lib/access";
 import { firestore } from "@/lib/firestore";
-import { findPlaylistTracks, listPatientPlaylist } from "@/lib/playlist";
-import { getStorage } from "firebase-admin/storage";
+import { caminhoDaFaixa, findPlaylistTracks, listPatientPlaylist } from "@/lib/playlist";
+import { apagaObjeto } from "@/lib/midia-privada";
 
 function canManagePlaylist(auth: {
   user: { role: string };
   link: Parameters<typeof hasPermission>[0];
 }): boolean {
   return auth.user.role === "admin" || hasPermission(auth.link, "canDeletePlaylistSongs");
-}
-
-/** Obtém apenas caminhos da pasta de músicas do bucket desta aplicação. */
-type StorageTarget = { bucket?: string; path: string };
-
-function storageTargetFromUrl(value: string): StorageTarget | null {
-  try {
-    const url = new URL(value);
-    if (url.hostname === "firebasestorage.googleapis.com") {
-      const segments = url.pathname.split("/").filter(Boolean);
-      const bucketIndex = segments.indexOf("b");
-      const objectIndex = segments.indexOf("o");
-      const bucket = bucketIndex >= 0 ? segments[bucketIndex + 1] : "";
-      const path = objectIndex >= 0
-        ? decodeURIComponent(segments.slice(objectIndex + 1).join("/"))
-        : "";
-      return bucket && path.startsWith("musics/") ? { bucket, path } : null;
-    }
-    if (url.hostname === "storage.googleapis.com") {
-      const segments = url.pathname.split("/").filter(Boolean);
-      // URLs deste bucket têm o bucket como primeiro segmento.
-      const path = decodeURIComponent(segments.slice(1).join("/"));
-      return segments[0] && path.startsWith("musics/")
-        ? { bucket: segments[0], path }
-        : null;
-    }
-  } catch {
-    return null;
-  }
-  return null;
 }
 
 export async function GET(
@@ -103,43 +73,25 @@ export async function DELETE(
   if (!track.exists) return Response.json({ error: "música não encontrada" }, { status: 404 });
 
   const data = track.data() ?? {};
-  const storedPath = typeof data.storagePath === "string" ? data.storagePath.trim() : "";
-  const targetFromUrl = storageTargetFromUrl(typeof data.audioUrl === "string" ? data.audioUrl : "");
-  const storageTarget = storedPath.startsWith("musics/")
-    ? { path: storedPath, bucket: targetFromUrl?.bucket }
-    : targetFromUrl;
-
-  if (storageTarget) {
-    try {
-      // App Hosting não configura sempre um bucket padrão no Admin SDK. O
-      // bucket é extraído da URL pública gerada pela Function, garantindo que
-      // a exclusão atinja o mesmo arquivo — inclusive no bucket moderno
-      // *.firebasestorage.app.
-      const fallbackBucket = process.env.FIREBASE_STORAGE_BUCKET ?? "helo-app-7fbf8.firebasestorage.app";
-      await getStorage()
-        .bucket(storageTarget.bucket ?? fallbackBucket)
-        .file(storageTarget.path)
-        .delete({ ignoreNotFound: true });
-    } catch (error) {
-      // O documento do Firestore é a fonte de verdade da playlist. Um MP3
-      // ausente, regra de CORS ou falha transitória do Storage não pode
-      // impedir que o cuidador remova uma faixa do histórico.
-      console.warn(
-        "Storage audio file not found or already removed, proceeding with Firestore document deletion.",
-        { error, patientId, songId: id, storagePath: storageTarget.path }
-      );
-    }
-  } else {
-    console.warn(
-      "Storage audio file not found or already removed, proceeding with Firestore document deletion.",
-      { patientId, songId: id, reason: "caminho do áudio indisponível" }
-    );
+  // O caminho vem da MESMA função que a reprodução usa (`caminhoDaFaixa`): o
+  // arquivo que o cuidador ouve é o arquivo que a exclusão apaga, por
+  // construção. A resolução do bucket também deixou de ser adivinhada aqui —
+  // ela mora em `lib/midia-privada.ts`, num lugar só.
+  const caminho = caminhoDaFaixa(patientId, data);
+  if (!caminho) {
+    console.warn("[PLAYLIST] faixa sem caminho de áudio resolvível", { songId: id });
+  } else if (!(await apagaObjeto(caminho))) {
+    // O documento do Firestore é a fonte de verdade da playlist. Um MP3
+    // ausente ou uma falha transitória do Storage não pode impedir que o
+    // cuidador remova uma faixa do histórico. O log leva o id da faixa e mais
+    // nada: nem caminho, nem título, nem o erro do provedor.
+    console.warn("[PLAYLIST] áudio não removido do Storage", { songId: id });
   }
 
   try {
     await trackRef.delete();
-  } catch (error) {
-    console.error("Firestore track deletion failed:", error, { patientId, songId: id });
+  } catch {
+    console.error("[PLAYLIST] exclusão do documento falhou", { songId: id });
     return Response.json({ error: "não foi possível excluir a música" }, { status: 500 });
   }
 
