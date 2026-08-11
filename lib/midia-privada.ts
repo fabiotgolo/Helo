@@ -201,9 +201,20 @@ export async function entregaMidia(entrega: EntregaDeMidia): Promise<Response> {
   try {
     const [meta] = await arquivo.getMetadata();
     tamanho = Number(meta.size ?? 0);
-  } catch {
-    // Objeto ausente é 404 e mais nada: nem o caminho, nem o erro do Storage.
-    return Response.json({ error: "mídia não encontrada" }, { status: 404 });
+  } catch (caught) {
+    // Objeto ausente é 404 e mais nada — nem o caminho, nem o erro do Storage.
+    //
+    // Mas só o ausente. Uma falha de rede, uma credencial recusada ou um
+    // Storage fora do ar respondendo 404 mandaria quem opera procurar uma
+    // mídia que existe, e mandaria o cuidador desistir de uma frase que está
+    // lá. Transitório é 503, que diz "tente de novo" — a mesma distinção que
+    // `lib/voice/eleven-fetch.ts` faz para o provedor.
+    const codigo = (caught as { code?: unknown } | null)?.code;
+    if (codigo === 404) {
+      return Response.json({ error: "mídia não encontrada" }, { status: 404 });
+    }
+    console.error("[MIDIA] leitura do objeto falhou", { errorCode: "MEDIA_UNAVAILABLE" });
+    return Response.json({ error: "mídia indisponível" }, { status: 503 });
   }
   if (!Number.isFinite(tamanho) || tamanho <= 0) {
     return Response.json({ error: "mídia não encontrada" }, { status: 404 });
