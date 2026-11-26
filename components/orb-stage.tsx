@@ -10,14 +10,27 @@
 // três <button> circulares sobrepostos aos orbes, operáveis por mouse,
 // teclado e toque, que acompanham o layout com transições CSS.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { useHelo, HELO_MODES, MODE_ORDER, type HeloMode } from "@/lib/helo-state";
 import { Orb } from "@/components/ui";
 import { ORB_VERTEX, ORB_FRAGMENT, makeOrbUniforms } from "@/components/orb-shader";
+import { ORB_DOCK_ID } from "@/components/orb-dock";
+import { useFoco } from "@/lib/foco";
 
 type Rect = { x: number; y: number; d: number };
 type Layout = Record<HeloMode, Rect>;
+type DockRects = Partial<Record<HeloMode, Rect>>;
+
+/** Opções de composição do imersivo (dock no cabeçalho, foco, recuo do topo). */
+type ImmersiveOpts = {
+  /** Lugares medidos no OrbDock do cabeçalho, em coordenadas do palco. */
+  dock?: DockRects | null;
+  /** Modo foco: os recolhidos encolhem até sumir — só o protagonista fica. */
+  foco?: boolean;
+  /** Altura do cabeçalho que o palco cobre por cima (px). */
+  insetTop?: number;
+};
 
 /**
  * Variantes do palco:
@@ -83,12 +96,39 @@ function rowLayout(
   });
 }
 
-function computeLayout(w: number, h: number, active: HeloMode, variant: StageVariant): Layout {
+function computeLayout(
+  w: number,
+  h: number,
+  active: HeloMode,
+  variant: StageVariant,
+  opts: ImmersiveOpts = {}
+): Layout {
   const inactive = MODE_ORDER.filter((m) => m !== active);
   const mobile = w < 640;
   const lay = {} as Layout;
 
   if (variant === "imersivo") {
+    // O palco imersivo cobre também o cabeçalho (insetTop), para as esferas
+    // recolhidas poderem morar na linha da marca. O protagonista se compõe
+    // só na área de conteúdo, abaixo dele.
+    const top = opts.insetTop ?? 0;
+    const ch = Math.max(1, h - top);
+    const dock = opts.dock;
+    const docked = !!dock && inactive.every((m) => dock[m]);
+    if (opts.foco || docked) {
+      const D = mobile
+        ? Math.min(w * 0.58, ch * 0.34, 300)
+        : Math.min(Math.min(w, ch) * 0.88, 704);
+      lay[active] = { x: w * 0.5, y: top + (mobile ? ch * 0.36 : ch * 0.5), d: D };
+      if (docked && !opts.foco) {
+        for (const m of inactive) lay[m] = dock![m]!;
+      } else {
+        // Foco: os recolhidos encolhem no próprio lugar até desaparecer.
+        rowLayout(lay, inactive, w * 0.5, top + (mobile ? 44 : 54), mobile ? 52 : 68, mobile ? 32 : 44, w);
+        for (const m of inactive) lay[m] = { ...lay[m], d: 0 };
+      }
+      return lay;
+    }
     // O ativo ocupa o centro do palco, atrás do overlay de conteúdo; os
     // inativos repousam pequenos no topo, ainda alcançáveis para trocar
     // de experiência sem fechar nada.
@@ -98,18 +138,18 @@ function computeLayout(w: number, h: number, active: HeloMode, variant: StageVar
     // Em mobile, preserve espaço para o conteúdo e os controles abaixo do
     // orbe; no desktop ele mantém a escala protagonista original.
     const D = mobile
-      ? Math.min(w * 0.58, h * 0.34, 300)
-      : Math.min(Math.min(w, h) * 0.88, 704);
+      ? Math.min(w * 0.58, ch * 0.34, 300)
+      : Math.min(Math.min(w, ch) * 0.88, 704);
     const d = mobile ? 52 : 68;
     const y = mobile ? 44 : 54;
     const gap = mobile ? 32 : 44;
     // Centro deslocado levemente abaixo do meio: o painel de conteúdo é
     // centrado verticalmente numa área com respiro de topo (pt-20/24), então
     // ~0.52h alinha o centro da Orb ao centro do modal.
-    lay[active] = { x: w * 0.5, y: mobile ? h * 0.36 : h * 0.52, d: D };
+    lay[active] = { x: w * 0.5, y: top + (mobile ? ch * 0.36 : ch * 0.52), d: D };
     // Recolhidos: fila única, centralizada e com espaçamento igual — não
     // cercam o ativo (que fica grande e central, atrás do conteúdo).
-    rowLayout(lay, inactive, w * 0.5, y, d, gap, w);
+    rowLayout(lay, inactive, w * 0.5, top + y, d, gap, w);
     return lay;
   }
 
@@ -166,8 +206,13 @@ export default function OrbStage({
   className = "",
   variant = "aberto",
   directEntry = false,
+  insetTop = 0,
+  style,
 }: {
   className?: string;
+  /** Altura do cabeçalho coberta pelo palco (só no imersivo). */
+  insetTop?: number;
+  style?: React.CSSProperties;
   /** Composição do palco — ver StageVariant. */
   variant?: StageVariant;
   /**
@@ -199,7 +244,66 @@ export default function OrbStage({
   const amplitudeRef = useRef(getAmplitude);
   const meshesRef = useRef<Record<HeloMode, THREE.Mesh> | null>(null);
 
-  const layout = size ? computeLayout(size.w, size.h, activeMode, variant) : null;
+  const { foco } = useFoco();
+
+  // ——— Dock do cabeçalho ———
+  // Mede os lugares que o OrbDock reservou (um botão por modo recolhido) e os
+  // traduz para coordenadas do palco. Remede quando o modo, o tamanho, o
+  // recuo do topo ou o próprio dock mudam, e quando as fontes terminam de
+  // carregar (a largura da marca empurra o dock).
+  const [dock, setDock] = useState<DockRects | null>(null);
+  const measureDock = useCallback(() => {
+    const el = containerRef.current;
+    const dockEl = document.getElementById(ORB_DOCK_ID);
+    if (!el || !dockEl || variant !== "imersivo") {
+      setDock((prev) => (prev === null ? prev : null));
+      return;
+    }
+    const base = el.getBoundingClientRect();
+    const next: DockRects = {};
+    let any = false;
+    dockEl.querySelectorAll<HTMLElement>("[data-orb-slot]").forEach((slot) => {
+      const r = slot.getBoundingClientRect();
+      if (r.width === 0) return;
+      any = true;
+      next[slot.dataset.orbSlot as HeloMode] = {
+        x: r.left - base.left + r.width / 2,
+        y: r.top - base.top + r.height / 2,
+        d: r.width,
+      };
+    });
+    setDock((prev) => {
+      const value = any ? next : null;
+      return JSON.stringify(prev) === JSON.stringify(value) ? prev : value;
+    });
+  }, [variant]);
+
+  useLayoutEffect(() => {
+    measureDock();
+  }, [measureDock, activeMode, size, insetTop, foco]);
+
+  useEffect(() => {
+    const dockEl = document.getElementById(ORB_DOCK_ID);
+    const header = dockEl?.closest("header");
+    const observer = new ResizeObserver(() => measureDock());
+    if (dockEl) observer.observe(dockEl);
+    if (header) observer.observe(header);
+    window.addEventListener("resize", measureDock);
+    void document.fonts?.ready.then(() => measureDock());
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measureDock);
+    };
+  }, [measureDock, activeMode]);
+
+  const docked = variant === "imersivo" && !!dock;
+  const layout = size
+    ? computeLayout(size.w, size.h, activeMode, variant, {
+        dock,
+        foco: variant === "imersivo" && foco,
+        insetTop: variant === "imersivo" ? insetTop : 0,
+      })
+    : null;
 
   // Botões viajam com transição apenas quando o MODO troca (a coreografia).
   // Montagem e mudanças de TAMANHO (resize, medição tardia do contêiner)
@@ -428,6 +532,7 @@ export default function OrbStage({
       ref={containerRef}
       // Posicionamento (relative/absolute) vem de quem monta o palco
       className={`w-full ${className}`}
+      style={style}
       role="group"
       aria-label={`Modos do Helo: ${MODE_ORDER.map((m) => HELO_MODES[m].title).join(", ")}`}
     >
@@ -470,6 +575,9 @@ export default function OrbStage({
           const info = modes[mode];
           const isActive = mode === activeMode;
           const idle = variant !== "aberto" && isActive; // presença, não botão — nada a acionar
+          // Recolhidos no dock do cabeçalho (ou escondidos pelo foco): o botão
+          // real é o do OrbDock — aqui ficaria um alvo duplicado e invisível.
+          if (!isActive && variant === "imersivo" && (docked || foco)) return null;
           return (
             <button
               key={mode}

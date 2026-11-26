@@ -387,3 +387,55 @@ select:-webkit-autofill {
     padding: 0 !important;
   }
 }
+
+/*
+ * ——— Modo foco (tela cheia) das páginas de interatividade ———
+ * lib/foco.ts liga `data-foco` no <html>. Tudo marcado com .foco-oculto
+ * (cabeçalhos, menu inferior, dock de orbes, barras de ação) sai de cena, e o
+ * selo "Supported by" também. Só a pergunta e as respostas permanecem.
+ */
+:root[data-foco] .foco-oculto,
+:root[data-foco] .supported-by {
+  display: none !important;
+}
+
+/*
+ * ——— Escala do palco: pergunta e respostas ———
+ * A tipografia e os cartões de resposta crescem com a ALTURA disponível
+ * (vh) e com a largura (vw) — o menor dos dois manda, então três opções com
+ * seus SIM/TALVEZ/NÃO cabem numa tela de notebook sem rolar e ganham ainda
+ * mais presença num monitor grande. No modo foco, lib/foco-fit.ts amplia
+ * o bloco inteiro até quase a tela toda.
+ */
+:root {
+  --palco-pergunta: clamp(2.25rem, min(6.2vh, 5.2vw), 5.25rem);
+  --palco-opcao: clamp(2rem, min(5.6vh, 4.6vw), 4.75rem);
+  --palco-card-h: clamp(5.5rem, 13.5vh, 10.5rem);
+  --palco-emoji: clamp(2rem, 5.4vh, 3.75rem);
+  --palco-rotulo: clamp(1.05rem, 2.6vh, 1.75rem);
+}
+:root[data-foco] .foco-sem-limite {
+  /* No foco o bloco é medido e ampliado inteiro (lib/foco-fit.ts): sem
+   * teto de altura nem rolagem interna escondendo parte dele. */
+  max-height: none;
+  min-height: 0;
+  overflow: visible;
+}
+.palco-pergunta {
+  font-size: var(--palco-pergunta);
+  line-height: 1.08;
+}
+.palco-opcao {
+  font-size: var(--palco-opcao);
+  line-height: 1.08;
+}
+.palco-card {
+  min-height: var(--palco-card-h);
+}
+.palco-emoji {
+  font-size: var(--palco-emoji);
+  line-height: 1;
+}
+.palco-rotulo {
+  font-size: var(--palco-rotulo);
+}

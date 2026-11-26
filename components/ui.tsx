@@ -275,8 +275,17 @@ export function TopBar({
   showThemeDots = true,
   showAdmin = true,
   mobile = "full",
+  center,
+  actionsSlot,
 }: {
   right?: React.ReactNode;
+  /**
+   * Conteúdo logo após a marca, na mesma linha (palco: os orbes recolhidos
+   * das experiências). Quando presente, o cabeçalho alinha pelo topo.
+   */
+  center?: React.ReactNode;
+  /** Linha extra sob o menu superior, alinhada à direita (ações da página). */
+  actionsSlot?: React.ReactNode;
   /** Só a tela de login desliga — toda área autenticada mantém o Sair. */
   showLogout?: boolean;
   /** A própria página de feedback evita repetir o atalho. */
@@ -297,16 +306,21 @@ export function TopBar({
     <>
       {mobile !== "none" && (
         <>
-          <MobileHeader className="sm:hidden" />
-          <MobileTabBar className="sm:hidden" locked={mobile === "locked"} />
+          <MobileHeader className="foco-oculto sm:hidden" />
+          <MobileTabBar className="foco-oculto sm:hidden" locked={mobile === "locked"} />
         </>
       )}
       {/* relative z-30: mesma razão do cabeçalho mobile — o palco (irmão
           posterior) não pode cobrir a coluna de temas nem a navegação. */}
-      <header className="no-print relative z-30 hidden items-center justify-between gap-3 px-6 py-4 sm:flex sm:px-10">
+      <header
+        className={`no-print foco-oculto relative z-30 hidden justify-between gap-3 px-6 py-4 sm:flex sm:px-10 ${
+          center ? "items-start" : "items-center"
+        }`}
+      >
       {/* A marca ancora a coluna de temas logo abaixo dela. `relative` só
           para posicionar; a coluna é absoluta e não ocupa altura no header. */}
-      <div className="relative">
+      <div className={`flex shrink-0 gap-8 lg:gap-14 ${center ? "items-start" : "items-center"}`}>
+      <div className={`relative ${center ? "pt-2" : ""}`}>
         <Link href="/" className="flex items-center gap-2.5" aria-label="Helo — página inicial">
           <Orb palette="coral" className="h-6 w-6" />
           <span className="text-xl font-semibold tracking-tight">Helo</span>
@@ -327,8 +341,11 @@ export function TopBar({
           </div>
         )}
       </div>
+      {center}
+      </div>
       {/* flex-wrap: em telas estreitas os controles quebram de linha — o
           Sair nunca some por falta de espaço. */}
+      <div className="flex min-w-0 flex-col items-end gap-3">
       <nav className="flex flex-wrap items-center justify-end gap-2">
         <PatientSwitcher />
         {right}
@@ -336,6 +353,8 @@ export function TopBar({
         {showFeedback && <FeedbackLink />}
         {showLogout && <LogoutButton />}
       </nav>
+      {actionsSlot}
+      </div>
     </header>
     </>
   );

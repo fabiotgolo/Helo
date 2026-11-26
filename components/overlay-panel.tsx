@@ -19,6 +19,7 @@ export function OverlayPanel({
   label,
   variant = "padrao",
   className = "",
+  focoAlvo = false,
   children,
 }: {
   /** Nome da região para leitores de tela. */
@@ -30,6 +31,8 @@ export function OverlayPanel({
    */
   variant?: "padrao" | "imersivo";
   className?: string;
+  /** Bloco ampliado no modo tela cheia (ver lib/foco-fit.ts). */
+  focoAlvo?: boolean;
   children: React.ReactNode;
 }) {
   const skin =
@@ -39,6 +42,7 @@ export function OverlayPanel({
   return (
     <section
       aria-label={label}
+      data-foco-alvo={focoAlvo || undefined}
       className={`fade-rise pointer-events-auto mx-auto w-full max-w-3xl rounded-3xl border px-5 py-8 shadow-soft sm:px-8 ${skin} ${className}`}
     >
       {children}

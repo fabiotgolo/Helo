@@ -39,24 +39,35 @@ export function GestureOptionsBar({
    * neutro — as três opções com exatamente o mesmo peso visual.
    */
   tone?: "gestos" | "neutro";
-  /** apresentacao — alvos e tipografia ampliados para a tela do paciente. */
-  size?: "compacto" | "apresentacao";
+  /**
+   * apresentacao — alvos e tipografia ampliados para a tela do paciente.
+   * palco — cartões largos que escalam com a tela (vh/vw) e crescem ainda
+   * mais no modo foco; ver .palco-* em globals.css.
+   */
+  size?: "compacto" | "apresentacao" | "palco";
   className?: string;
 }) {
   const large = size === "apresentacao";
+  const palco = size === "palco";
   return (
     <div
       role="group"
       aria-label={ariaLabel}
       className={`mx-auto flex w-full flex-row items-stretch justify-center ${
-        large ? "max-w-5xl gap-3 sm:gap-5" : "max-w-4xl gap-2 sm:gap-3 lg:gap-4"
+        palco
+          ? "max-w-6xl gap-3 sm:gap-5 lg:gap-8"
+          : large
+            ? "max-w-5xl gap-3 sm:gap-5"
+            : "max-w-4xl gap-2 sm:gap-3 lg:gap-4"
       } ${className}`}
     >
       {options.map((option, index) => {
         const selected = selectedIndex === index;
         const skin =
           tone === "neutro" ? NEUTRAL_TONE : OPTION_TONES[index % OPTION_TONES.length];
-        const box = large
+        const box = palco
+          ? "palco-card max-w-[420px] rounded-3xl px-3 py-3 sm:px-6 lg:rounded-[2rem]"
+          : large
           ? "max-w-[280px] rounded-3xl px-4 py-6 sm:px-6 sm:py-8"
           : "max-w-[160px] rounded-xl px-3 py-2 sm:max-w-[180px] sm:px-3.5 sm:py-2.5 lg:max-w-[240px] lg:rounded-2xl lg:px-6 lg:py-4";
         return (
@@ -77,20 +88,28 @@ export function GestureOptionsBar({
             {selected && (
               <span
                 aria-hidden="true"
-                className={`absolute right-2 top-2 leading-none ${large ? "text-xl" : "text-sm"}`}
+                className={`absolute right-2 top-2 leading-none ${large || palco ? "text-xl" : "text-sm"}`}
               >
                 ✓
               </span>
             )}
             <span
               aria-hidden="true"
-              className={large ? "text-5xl leading-none sm:text-6xl" : "text-xl leading-none lg:text-3xl"}
+              className={
+                palco
+                  ? "palco-emoji"
+                  : large
+                    ? "text-5xl leading-none sm:text-6xl"
+                    : "text-xl leading-none lg:text-3xl"
+              }
             >
               {option.emoji}
             </span>
             <span
               className={`font-semibold uppercase tracking-wide ${
-                large
+                palco
+                  ? "palco-rotulo mt-2 lg:mt-3"
+                  : large
                   ? "mt-3 text-xl sm:text-2xl"
                   : "mt-1 text-xs sm:text-sm lg:mt-2 lg:text-base"
               }`}

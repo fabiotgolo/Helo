@@ -376,6 +376,7 @@ export default function RotinaPage() {
             key="pergunta"
             aria-live="polite"
             aria-label="Pergunta da rotina"
+            data-foco-alvo
             className="fade-rise pointer-events-auto mx-auto flex w-full max-w-3xl flex-col items-center gap-8 py-8"
           >
             {/* Voltar ao menu de perguntas — âncora clara, alinhada à esquerda. */}
@@ -464,6 +465,7 @@ export default function RotinaPage() {
           <section
             key="menu"
             aria-label="Rotina"
+            data-foco-alvo
             className="fade-rise pointer-events-auto mx-auto flex w-full max-w-4xl flex-col gap-8 py-8"
           >
             <div className="text-center">

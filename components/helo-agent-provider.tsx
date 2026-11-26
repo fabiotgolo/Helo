@@ -2223,6 +2223,7 @@ function HeloAgentSession({
       <OverlayPanel
         label="Conversa com a Helo"
         variant="imersivo"
+        focoAlvo
         className="relative z-10 min-w-0 max-w-xl max-sm:max-h-[calc(100dvh-8rem)] max-sm:overflow-y-auto max-sm:px-4 max-sm:py-5 max-sm:overscroll-contain"
       >
         <div className="flex flex-col items-center gap-5 text-center">

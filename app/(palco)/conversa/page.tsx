@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { flow, compose, START_NODE, type FlowNode, type Option } from "@/lib/flow";
@@ -25,6 +26,7 @@ import {
 import type { SpeakResult } from "@/lib/useSpeech";
 import { GestureOptionsBar } from "@/components/gesture-options-bar";
 import { OverlayPanel, OverlayVeil } from "@/components/overlay-panel";
+import { useHeaderActionsSlot } from "@/components/header-actions-slot";
 
 const LOTE = 3; // nunca mais de 3 opções na tela
 const GESTURE_ORDER: Gesture[] = ["sim", "talvez", "nao"];
@@ -823,6 +825,31 @@ function ConversaDoPaciente() {
   // reconstrói, porque nada da conversa existe ainda.
   useRegisterHeloUIActions(phase === "intro" ? acaoDeComecar : registryActions);
 
+  // Barra de ações: no desktop sobe para o cabeçalho (logo abaixo do menu
+  // superior, à direita); no mobile continua no fluxo, abaixo da conversa.
+  // Em ambos some no modo foco (classe foco-oculto do slot / da barra).
+  const headerSlot = useHeaderActionsSlot();
+  const actionBar =
+    phase !== "intro" && phase !== "done" ? (
+      <>
+        <Control onClick={repeat} disabled={speaking}>
+          🔊 Repetir
+        </Control>
+        <Control onClick={uncertain}>❓ Gesto incerto</Control>
+        <Control onClick={togglePause}>{paused ? "▶ Retomar" : "⏸ Pausar"}</Control>
+        <Control onClick={goBack} disabled={history.length === 0}>
+          ← Voltar
+        </Control>
+        <Link
+          href="/"
+          onClick={finish}
+          className="rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium text-ink-soft hover:border-ink-mute"
+        >
+          Encerrar sessão
+        </Link>
+      </>
+    ) : null;
+
   return (
     <div className="relative flex flex-1 flex-col">
       {/* Fase 6 — conversa ativa: um véu leve cobre o palco e a pergunta
@@ -830,7 +857,7 @@ function ConversaDoPaciente() {
           animado através da camada. Só o conteúdo troca (com fade) — o palco
           nunca desmonta. A intro mantém o painel translúcido da Fase 5. */}
       {phase !== "intro" && <OverlayVeil />}
-      <main className="relative flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-6">
+      <main className="relative flex w-full flex-1 flex-col items-center justify-center gap-4 px-4 pb-4 sm:px-20 lg:px-28">
         {phase === "intro" ? (
           <OverlayPanel label="Conversa guiada" variant="imersivo">
             <Intro
@@ -848,48 +875,50 @@ function ConversaDoPaciente() {
         <section
           key={`${phase}-${nodeId}-${batch}-${aiOptions ? "ai" : "curadas"}`}
           aria-label="Conversa guiada"
-          className="fade-rise pointer-events-auto mx-auto w-full max-w-3xl py-8"
+          data-foco-alvo
+          className="fade-rise pointer-events-auto mx-auto w-full max-w-6xl py-4 sm:py-6"
         >
         {phase === "node" && node.kind === "pergunta" && (
-          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-12">
-            <h1 className="text-center text-4xl font-medium tracking-tight sm:text-5xl">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-[clamp(2rem,7vh,5rem)]">
+            <h1 className="palco-pergunta text-balance text-center font-medium tracking-tight">
               {node.question}
             </h1>
             <GestureOptionsBar
               options={gestureOptions}
               onSelectOption={(option) => onQuestionGesture(option.id as Gesture)}
               disabled={paused}
+              size="palco"
             />
           </section>
         )}
 
         {phase === "node" && node.kind === "opcoes" && (
-          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-8">
-            <h1 className="text-center text-3xl font-medium tracking-tight text-ink-soft sm:text-4xl">
+          <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-[clamp(0.75rem,2.5vh,2rem)]">
+            <h1 className="palco-pergunta text-balance text-center font-medium tracking-tight text-ink-soft">
               {node.question}
             </h1>
             {aiLoading && (
               <p className="text-ink-mute animate-pulse">Formulando outras opções…</p>
             )}
-            <div className="flex w-full flex-col gap-6">
+            <div className="flex w-full flex-col gap-[clamp(0.5rem,2vh,1.75rem)]">
               {displayOptions.map((option, idx) => {
                 const marked = marks[idx];
                 return (
                   <div
                     key={`${nodeId}-${batch}-${aiOptions ? "ai" : "c"}-${idx}`}
-                    className={`flex flex-col items-center gap-3 rounded-3xl px-6 py-5 transition-opacity ${
+                    className={`flex flex-col items-center gap-[clamp(0.5rem,1.4vh,1rem)] rounded-3xl px-2 py-2 transition-opacity sm:px-6 ${
                       marked ? "opacity-35" : ""
                     }`}
                   >
                     <div className="flex flex-wrap items-center justify-center gap-3">
-                      <h2 className="text-center text-4xl font-medium tracking-tight sm:text-5xl">
+                      <h2 className="palco-opcao text-balance text-center font-medium tracking-tight">
                         {option.label}
                       </h2>
                       <button
                         type="button"
                         onClick={() => void speak(option.label)}
                         aria-label={`Ler em voz alta: ${option.label}`}
-                        className="rounded-full border border-line bg-card px-3 py-1.5 text-sm text-ink-soft hover:border-ink-mute"
+                        className="rounded-full border border-line bg-card px-4 py-2 text-base text-ink-soft hover:border-ink-mute lg:text-lg"
                       >
                         🔊
                       </button>
@@ -900,7 +929,7 @@ function ConversaDoPaciente() {
                       )}
                     </div>
                     {marked ? (
-                      <span className="text-lg" aria-label={`Resposta: ${gestures[marked].label}`}>
+                      <span className="palco-rotulo" aria-label={`Resposta: ${gestures[marked].label}`}>
                         {gestures[marked].emoji} {gestures[marked].label}
                       </span>
                     ) : (
@@ -909,6 +938,7 @@ function ConversaDoPaciente() {
                         onSelectOption={(option) => onOptionGesture(idx, option.id as Gesture)}
                         disabled={paused || aiLoading}
                         ariaLabel={`Gesto do paciente para: ${option.label}`}
+                        size="palco"
                       />
                     )}
                   </div>
@@ -930,10 +960,10 @@ function ConversaDoPaciente() {
               {confirm.step === 2 ? "Confirmação reforçada — assunto importante" : "Confirmar mensagem"}
               {confirm.fromAI && " · frase sugerida por IA"}
             </p>
-            <blockquote className="text-center text-4xl font-medium leading-snug tracking-tight sm:text-5xl">
+            <blockquote className="palco-pergunta text-balance text-center font-medium tracking-tight">
               “{confirm.phrase}”
             </blockquote>
-            <p className="text-lg text-ink-soft">
+            <p className="palco-rotulo text-ink-soft">
               {confirm.step === 2
                 ? "É exatamente isso que você quer dizer?"
                 : "Confirma esta mensagem?"}
@@ -942,6 +972,7 @@ function ConversaDoPaciente() {
               options={gestureOptions}
               onSelectOption={(option) => onConfirmGesture(option.id as Gesture)}
               disabled={paused}
+              size="palco"
             />
             <p className="text-sm text-ink-mute">
               {gestures.sim.emoji} confirmar · {gestures.talvez.emoji} reformular · {gestures.nao.emoji} descartar
@@ -951,10 +982,10 @@ function ConversaDoPaciente() {
 
         {phase === "done" && confirm && (
           <section aria-live="polite" className="mx-auto flex w-full flex-col items-center gap-8">
-            <blockquote className="text-center text-4xl font-medium leading-snug tracking-tight sm:text-5xl">
+            <blockquote className="palco-pergunta text-balance text-center font-medium tracking-tight">
               “{confirm.phrase}”
             </blockquote>
-            <p className="text-lg text-ink-soft">Mensagem comunicada e registrada.</p>
+            <p className="palco-rotulo text-ink-soft">Mensagem comunicada e registrada.</p>
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
@@ -989,25 +1020,14 @@ function ConversaDoPaciente() {
         </section>
         )}
 
-      {phase !== "intro" && phase !== "done" && (
-        <footer className="no-print pointer-events-auto flex flex-wrap items-center justify-center gap-2 px-6 py-4">
-          <Control onClick={repeat} disabled={speaking}>
-            🔊 Repetir
-          </Control>
-          <Control onClick={uncertain}>❓ Gesto incerto</Control>
-          <Control onClick={togglePause}>{paused ? "▶ Retomar" : "⏸ Pausar"}</Control>
-          <Control onClick={goBack} disabled={history.length === 0}>
-            ← Voltar
-          </Control>
-          <Link
-            href="/"
-            onClick={finish}
-            className="rounded-full border border-line bg-card px-5 py-2.5 text-sm font-medium text-ink-soft hover:border-ink-mute"
-          >
-            Encerrar sessão
-          </Link>
-        </footer>
-      )}
+      {actionBar &&
+        (headerSlot ? (
+          createPortal(actionBar, headerSlot)
+        ) : (
+          <footer className="no-print foco-oculto pointer-events-auto flex flex-wrap items-center justify-center gap-2 px-6 py-4">
+            {actionBar}
+          </footer>
+        ))}
       </main>
 
       {/* Pausa cobre só a área de conteúdo — os orbes seguem visíveis acima */}

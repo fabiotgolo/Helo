@@ -259,6 +259,7 @@ export default function EmergenciaPage() {
       <main className="relative flex w-full flex-1 flex-col items-center justify-center px-4 pb-6 sm:px-6">
         <section
           aria-label="Emergência"
+          data-foco-alvo
           className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-6 py-6"
         >
           <div className="text-center">
