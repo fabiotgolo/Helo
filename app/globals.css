@@ -244,6 +244,23 @@ body {
   display: block;
 }
 
+/* Desktop: o selo fica de pé no canto inferior esquerdo, girado 90° — lê-se
+ * de baixo para cima, "Supported by" à esquerda e o logo à direita. Assim ele
+ * ocupa uma faixa estreita da margem em vez de ~300px do rodapé.
+ * rotate(-90deg) translateY(100%) com origem no canto inferior esquerdo: o
+ * bloco gira sobre esse canto e sobe a partir dele, sem sair da tela. */
+@media (min-width: 640px) {
+  .supported-by {
+    transform-origin: left bottom;
+    transform: rotate(-90deg) translateY(100%);
+  }
+
+  .supported-by__label {
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+  }
+}
+
 @media (max-width: 639px) {
   .supported-by--desktop-only {
     display: none;
