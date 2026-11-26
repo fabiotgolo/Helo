@@ -398,6 +398,13 @@ function UserRow({
   const [confirming, setConfirming] = useState(false);
   const [name, setName] = useState(u.name);
   const [role, setRole] = useState<UserRole>(u.role);
+  // Nova senha (opcional): em branco mantém a atual.
+  const [newPassword, setNewPassword] = useState("");
+  const passwordTooShort = newPassword.length > 0 && newPassword.length < 8;
+  const closeEdit = () => {
+    setEditing(false);
+    setNewPassword("");
+  };
 
   const remove = async () => {
     setConfirming(false);
@@ -433,10 +440,23 @@ function UserRow({
           className="flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
+            if (passwordTooShort) return;
+            const changingPassword = newPassword.length > 0;
             void run(
-              api("/api/admin/users", "PATCH", { id: u.id, name, role }),
-              "Usuário atualizado."
-            ).then((ok) => ok && setEditing(false));
+              // Só o que mudou: trocar apenas a senha registra só
+              // "user.password.reset" na auditoria, sem um "user.update" vazio.
+              api("/api/admin/users", "PATCH", {
+                id: u.id,
+                ...(name !== u.name ? { name } : {}),
+                ...(role !== u.role ? { role } : {}),
+                ...(changingPassword ? { password: newPassword } : {}),
+              }),
+              changingPassword
+                ? isMe
+                  ? "Senha redefinida. Suas outras sessões foram encerradas."
+                  : `Senha de ${u.name} redefinida. As sessões abertas foram encerradas.`
+                : "Usuário atualizado."
+            ).then((ok) => ok && closeEdit());
           }}
         >
           <input className={input} value={name} onChange={(e) => setName(e.target.value)} aria-label="Nome" />
@@ -445,8 +465,29 @@ function UserRow({
               <option key={r} value={r}>{ROLE_LABELS[r]}</option>
             ))}
           </select>
-          <button type="submit" className={btnLight}>Salvar</button>
-          <button type="button" className={btnLight} onClick={() => setEditing(false)}>Cancelar</button>
+          <input
+            className={input}
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="Nova senha (opcional)"
+            aria-label="Nova senha (opcional — em branco mantém a atual)"
+            aria-invalid={passwordTooShort}
+            aria-describedby={passwordTooShort ? `senha-curta-${u.id}` : undefined}
+            minLength={8}
+            autoComplete="new-password"
+          />
+          <button type="submit" className={btnLight} disabled={passwordTooShort}>Salvar</button>
+          <button type="button" className={btnLight} onClick={closeEdit}>Cancelar</button>
+          {passwordTooShort ? (
+            <p id={`senha-curta-${u.id}`} role="alert" className="w-full text-sm text-nao">
+              A senha precisa ter pelo menos 8 caracteres.
+            </p>
+          ) : newPassword.length > 0 ? (
+            <p className="w-full text-sm text-ink-soft">
+              Ao salvar, {isMe ? "suas outras sessões serão encerradas" : `${u.name} precisará entrar de novo com a nova senha`}.
+            </p>
+          ) : null}
         </form>
       ) : (
         <div className="flex flex-wrap items-center gap-2">

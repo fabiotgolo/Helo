@@ -7,7 +7,7 @@ import {
   logAudit,
   updateUser,
 } from "@/lib/access";
-import { requireAdmin } from "@/lib/auth";
+import { readSessionToken, requireAdmin } from "@/lib/auth";
 import type { ProfessionalType, UserRole } from "@/lib/access-types";
 import { ROLE_LABELS } from "@/lib/access-types";
 
@@ -86,6 +86,17 @@ export async function PATCH(request: Request) {
     canSelectPlatformVoice?: boolean;
   };
   if (!body.id) return Response.json({ error: "id obrigatório" }, { status: 400 });
+  // Senha redefinida pelo Admin: mesma regra da criação. Vazia = não muda.
+  // Sem trim: espaços fazem parte da senha que a pessoa vai digitar.
+  if (body.password === "") delete body.password;
+  if (body.password !== undefined) {
+    if (typeof body.password !== "string" || body.password.length < 8) {
+      return Response.json({ error: "senha: mínimo 8 caracteres" }, { status: 400 });
+    }
+    if (body.password.length > 200) {
+      return Response.json({ error: "senha: máximo 200 caracteres" }, { status: 400 });
+    }
+  }
   const target = await getUserById(body.id);
   if (!target) return Response.json({ error: "usuário não encontrado" }, { status: 404 });
   // O Admin não rebaixa nem desativa a própria conta — evita perder o acesso.
@@ -98,7 +109,35 @@ export async function PATCH(request: Request) {
       { status: 400 }
     );
   }
-  await updateUser(body.id, body);
+  const isSelf = body.id === auth.user.id;
+  await updateUser(body.id, body, {
+    // Redefinir a própria senha não desloga o Admin desta tela; as demais
+    // sessões dele (outros aparelhos) encerram como as de qualquer usuário.
+    keepSessionToken: isSelf ? readSessionToken(request) : null,
+  });
+  const resetPassword = body.password !== undefined;
+  if (resetPassword) {
+    // Registro próprio — a senha nunca vai para a auditoria.
+    await logAudit({
+      userId: auth.user.id,
+      userName: auth.user.name,
+      action: "user.password.reset",
+      entityType: "user",
+      entityId: body.id,
+      metadata: {
+        name: target.name,
+        sessions: isSelf ? "outras sessões encerradas" : "sessões encerradas",
+      },
+    });
+  }
+  const otherChanges =
+    body.name !== undefined ||
+    body.email !== undefined ||
+    body.role !== undefined ||
+    body.professionalType !== undefined ||
+    body.status !== undefined ||
+    body.canSelectPlatformVoice !== undefined;
+  if (!otherChanges && resetPassword) return Response.json({ ok: true });
   await logAudit({
     userId: auth.user.id,
     userName: auth.user.name,

@@ -133,7 +133,14 @@ export async function updateUser(
     status?: "active" | "inactive";
     password?: string;
     canSelectPlatformVoice?: boolean;
-  }
+  },
+  opts: {
+    /**
+     * Sessão que sobrevive à troca de senha — a do próprio Admin quando ele
+     * redefine a PRÓPRIA senha (não se desloga no meio da tela).
+     */
+    keepSessionToken?: string | null;
+  } = {}
 ): Promise<void> {
   const data: Record<string, unknown> = { updatedAt: new Date().toISOString() };
   if (updates.name?.trim()) data.name = updates.name.trim();
@@ -148,6 +155,8 @@ export async function updateUser(
   await col.users().doc(id).set(data, { merge: true });
   // Conta desativada não mantém sessões vivas.
   if (updates.status === "inactive") await invalidateUserSessions(id);
+  // Senha redefinida: quem entrou com a senha antiga precisa entrar de novo.
+  else if (updates.password) await invalidateUserSessions(id, opts.keepSessionToken);
 }
 
 /** Exclusão de usuário: remove conta, sessões e vínculos. Pacientes ficam. */
@@ -237,11 +246,20 @@ export async function destroyAuthSession(token: string): Promise<void> {
   await col.authSessions().doc(token).delete();
 }
 
-export async function invalidateUserSessions(userId: string): Promise<void> {
+export async function invalidateUserSessions(
+  userId: string,
+  keepToken?: string | null
+): Promise<number> {
   const snap = await col.authSessions().where("userId", "==", userId).get();
   const batch = firestore.batch();
-  snap.docs.forEach((d) => batch.delete(d.ref));
+  let removed = 0;
+  snap.docs.forEach((d) => {
+    if (keepToken && d.id === keepToken) return;
+    batch.delete(d.ref);
+    removed++;
+  });
   await batch.commit();
+  return removed;
 }
 
 // ---------- Vínculos usuário ↔ paciente ----------
